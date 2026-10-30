@@ -30,15 +30,13 @@ public class ModulesController(ILogger<ModulesController> logger) : ControllerBa
         ("API", "Web control panel",
          "Serves this control panel and the web chat. Turning it off would leave no way to turn it back on.", true),
         ("Voice", "Voice",
-         "Speaks Ari's replies out loud using the active speech engine.", false),
-        ("VoiceSynthesis", "Voice training",
-         "Installs the speech engines and trains new voices from your recordings.", false),
+         "Speaks Ari's replies out loud, installs the speech engines and trains new voices from your recordings. Turns on the Talk mode in the chat.", false),
         ("Listener", "Listener",
          "Transcribes your microphone with Whisper so you can talk to Ari instead of typing.", false),
         ("Brain", "Brain",
          "Stores Ari's long-term memory as an Obsidian vault of notes she can search and add to.", false),
-        ("Discord", "Discord",
-         "Connects Ari to Discord so she can read and reply to messages and join voice channels.", false),
+        ("ImageGen", "Image generation",
+         "Draws images for Ari with Stable Diffusion through ComfyUI, which Ari installs and starts only while it is making one.", false),
         ("Calendar", "Calendar",
          "Ari's own calendar of events and reminders — events feed her context, reminders trigger a real message from her at their scheduled time.", false),
     ];
@@ -52,7 +50,7 @@ public class ModulesController(ILogger<ModulesController> logger) : ControllerBa
         "VoiceSynthesis" => Modules.VoiceSynthesis?.IsSetupComplete ?? false,
         "Listener"       => Modules.Listener       is not null,
         "Brain"          => Modules.Brain          is not null,
-        "Discord"        => Modules.Discord        is not null,
+        "ImageGen"       => Modules.ImageGen       is not null,
         "Calendar"       => Modules.Calendar       is not null,
         // Answering this request is itself proof the web panel is up.
         "API"            => true,
@@ -110,6 +108,13 @@ public class ModulesController(ILogger<ModulesController> logger) : ControllerBa
         }
 
         moduleNode["Enabled"] = req.Enabled;
+
+        // Voice is one switch for speaking and for training: the training half has no use on its own.
+        if (entry.Key.Equals("Voice", StringComparison.OrdinalIgnoreCase))
+        {
+            if (modules["VoiceSynthesis"] is not JsonObject t) { t = new JsonObject(); modules["VoiceSynthesis"] = t; }
+            t["Enabled"] = req.Enabled;
+        }
 
         try
         {

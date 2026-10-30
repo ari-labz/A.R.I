@@ -468,8 +468,35 @@ public static class Brain
 
     // Resolves by the FULL given name, not bare title — two notes in different folders sharing a
     // filename are not the same entity just because their titles collide.
+    /// <summary>A note never links to itself: its subject is understood from its title. A link to the note's own name or path in its own text
+    /// is turned back into plain words.</summary>
+    public static string StripSelfLinks(string content, string name)
+    {
+        string path = StripMdExtension(name).Trim();
+        string title = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+        return Regex.Replace(content, @"\[\[([^\]|]+?)(?:\|([^\]]*))?\]\]", m =>
+        {
+            string target = m.Groups[1].Value.Trim();
+            if (!target.Equals(path, StringComparison.OrdinalIgnoreCase) && !target.Equals(title, StringComparison.OrdinalIgnoreCase)) return m.Value;
+            return m.Groups[2].Success && m.Groups[2].Value.Length > 0 ? m.Groups[2].Value : target;
+        });
+    }
+
+    private static readonly Regex markdownLink = new(@"\[([^\]]+)\]\((?!https?:|mailto:|#)([^)]+)\)", RegexOptions.Compiled);
+
+    /// <summary>Notes link with [[wikilinks]] only. A markdown-style link to another note ([Leeds](Places/Leeds)) becomes [[Places/Leeds|Leeds]],
+    /// with %20 decoded and any .md dropped, so a model that mixes the two styles can't leave links the graph can't follow.</summary>
+    public static string NormaliseLinks(string content) => markdownLink.Replace(content, m =>
+    {
+        string target = Uri.UnescapeDataString(m.Groups[2].Value).Trim();
+        if (target.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) target = target[..^3];
+        string text = m.Groups[1].Value.Trim();
+        return text.Equals(target, StringComparison.OrdinalIgnoreCase) ? $"[[{target}]]" : $"[[{target}|{text}]]";
+    });
+
     private static void WriteNamed(string name, string content, IReadOnlyList<string> aliases, string? type = null, IReadOnlyList<string>? keywords = null, bool? isSensitive = null)
     {
+        content = StripSelfLinks(NormaliseLinks(content), name);
         Note? existing = GetNote(name);
         if (existing is not null)
         {

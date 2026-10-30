@@ -179,6 +179,67 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .cp-placeholder { color: var(--text-dim); font-size: 13px; padding: 6px 0; font-style: italic; }
 
 /* ── tab ─────────────────────────────────────────────── */
+.ig-mode { display:flex; gap:12px; padding:12px 14px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; cursor:pointer; }
+.ig-mode.on { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 6%, transparent); }
+.ig-mode-t { font-size:13.5px; font-weight:600; }
+.ig-mode-d { font-size:12.5px; color:var(--text-dim); margin-top:2px; }
+.ig-row { display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px; }
+.ig-row.act { border-color:var(--accent); }
+.ig-bar { height:5px; background:var(--border); border-radius:3px; overflow:hidden; margin-top:5px; }
+.ig-bar i { display:block; height:100%; background:var(--accent); }
+.ce { display:flex; height:380px; border:1px solid #3c3c3c; border-radius:8px; overflow:hidden; background:#1e1e1e; font:13px/20px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+.ce.over { outline:2px solid var(--accent); outline-offset:-2px; }
+.ce-gutter { background:#252526; color:#858585; text-align:right; padding:8px 10px 8px 12px; min-width:46px; overflow:hidden; user-select:none; white-space:pre; }
+.ce-gutter .err { color:#f48771; font-weight:700; }
+.ce-body { position:relative; flex:1; min-width:0; }
+.ce-hl, .ce-in { position:absolute; inset:0; margin:0; padding:8px 12px; font:inherit; white-space:pre; tab-size:4; box-sizing:border-box; }
+.ce-hl { overflow:hidden; pointer-events:none; color:#d4d4d4; }
+.ce-hl > div { min-width:100%; width:max-content; }
+.ce-in { overflow:auto; background:transparent; color:transparent; caret-color:#aeafad; border:0; outline:0; resize:none; }
+.ce-in::selection { background:#264f78; color:transparent; }
+.ce-ln { display:block; height:20px; }
+.ce-ln.cur { background:#2a2d2e; }
+.ce-ln.bad { background:rgba(244,135,113,.12); }
+.t-kw{color:#569cd6}.t-ctl{color:#c586c0}.t-str{color:#ce9178}.t-com{color:#6a9955;font-style:italic}.t-num{color:#b5cea8}.t-type{color:#4ec9b0}.t-fn{color:#dcdcaa}.t-var{color:#9cdcfe}.t-pp{color:#9b9b9b}
+.ce-diag { background:#1e1e1e; border:1px solid #3c3c3c; border-top:0; border-radius:0 0 8px 8px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#d4d4d4; max-height:130px; overflow:auto; }
+.ce-diag div { padding:3px 12px; cursor:pointer; } .ce-diag div:hover { background:#2a2d2e; }
+.ce-diag .e { color:#f48771; } .ce-diag .w { color:#cca700; }
+.tw { border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--user-bubble,var(--col-control-panel-line-1656-colour)); }
+.tw-top { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--border); }
+.tw-top #tl-filter { flex:1; min-width:180px; max-width:340px; font-size:12.5px; padding:5px 10px; }
+.tw-chip { font-size:12px; padding:3px 10px; border-radius:14px; border:1px solid var(--border); color:var(--text-dim); cursor:pointer; user-select:none; }
+.tw-chip.on { background:color-mix(in srgb, var(--accent) 14%, transparent); border-color:var(--accent); color:var(--text); }
+.tw-bulk { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:6px 12px; background:color-mix(in srgb, var(--accent) 12%, transparent); font-size:12.5px; }
+.tw-bulk button { font-size:12px; padding:2px 10px; }
+.tw-body { display:flex; min-height:0; }
+.tw-grid { flex:1; min-width:0; }
+.tw-gh, .tw-gr { display:grid; grid-template-columns:24px 190px minmax(0,1fr) 120px 76px 46px 46px 46px; align-items:center; gap:8px; padding:0 12px; }
+.tw-gh { height:30px; font-size:11.5px; font-weight:600; color:var(--text-dim); border-bottom:1px solid var(--border); position:sticky; top:0; }
+.tw-gh span.s { cursor:pointer; user-select:none; } .tw-gh span.s:hover { color:var(--text); }
+.tw-scroll { height:calc(100vh - 360px); min-height:380px; overflow-y:auto; position:relative; }
+.tw-gr { position:absolute; left:0; right:0; height:34px; border-bottom:1px solid var(--border); cursor:pointer; font-size:12.5px; }
+.tw-gr:hover { background:color-mix(in srgb, var(--text) 4%, transparent); }
+.tw-gr.sel { background:color-mix(in srgb, var(--accent) 12%, transparent); }
+.tw-gr.off { opacity:.55; }
+.tw-gr code { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tw-gr .ds, .tw-gr .gp { color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tw-src { font-size:11px; padding:1px 8px; border-radius:6px; width:fit-content; background:color-mix(in srgb, var(--text) 8%, transparent); color:var(--text-dim); }
+.tw-src.c { background:color-mix(in srgb, #3fb950 18%, transparent); color:var(--text); }
+.tw-src.b { background:color-mix(in srgb, #f85149 18%, transparent); color:var(--text); }
+.tw-ck { width:15px; height:15px; border:1.5px solid var(--border); border-radius:4px; display:inline-block; cursor:pointer; }
+.tw-ck.on { background:var(--accent); border-color:var(--accent); }
+.tw-side { width:400px; flex:none; border-left:1px solid var(--border); padding:14px; overflow-y:auto; max-height:calc(100vh - 300px); min-height:430px; }
+.tw-tabs { display:flex; gap:16px; border-bottom:1px solid var(--border); margin:10px 0 12px; font-size:12.5px; }
+.tw-tabs span { padding:4px 0; color:var(--text-dim); cursor:pointer; } .tw-tabs span.on { color:var(--text); border-bottom:2px solid var(--accent); }
+.tw-kv { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:5px 0; font-size:12.5px; color:var(--text-dim); }
+@media (max-width: 1150px) {
+  .tw-gh, .tw-gr { grid-template-columns:24px 170px 100px 72px 44px 44px 44px; }
+  .tw-gh > span:nth-child(3), .tw-gr > .ds { display:none; }
+  .tw-body { flex-direction:column; }
+  .tw-side { width:auto; border-left:0; border-top:1px solid var(--border); max-height:none; min-height:0; }
+  .tw-scroll { height:calc(100vh - 420px); min-height:300px; }
+}
+.tw-p { padding:6px 0; border-top:1px solid var(--border); font-size:12.5px; } .tw-p b { font-family:ui-monospace,Menlo,monospace; }
 .cp-tab { display: flex; flex-direction: column; }
 
 /* ── voice synthesis ─────────────────────────────────── */
@@ -448,6 +509,14 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .dbg-bubble.toolresult.err .dbg-bhead { background: var(--col-dbg-bubble-toolresult-err-dbg-bhead-colour); color: var(--col-dbg-bubble-toolresult-err-dbg-bhead-colour-2); }
 /* #167: no block caps its own height with an inner scrollbar — every block grows to fit its
    content, same as tool-call/tool-result/text blocks always have. */
+.dbg-recallprompt h4 { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 18px 0 6px; }
+.dbg-recallprompt h4:first-child { margin-top: 2px; }
+.dbg-recallprompt ul { columns: 2; column-gap: 32px; margin: 6px 0; padding-left: 18px; }
+.dbg-recallprompt li { break-inside: avoid; margin: 2px 0; }
+.dbg-recallprompt p { margin: 4px 0; }
+.dbg-rawtext { margin-top: 14px; font-size: 12px; color: var(--text-dim); }
+.dbg-rawtext summary { cursor: pointer; }
+.dbg-rawtext pre { white-space: pre-wrap; margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .dbg-prompt-body { padding: 10px 12px; }
 .dbg-args   { padding: 9px 12px; color: var(--col-dbg-args-colour); }
 .dbg-result { padding: 9px 12px; color: var(--col-dbg-result-colour); }
@@ -457,7 +526,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .dbg-cloud-head { padding: 7px 15px 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--col-dbg-cloud-head-colour); }
 .dbg-cloud-body { padding: 2px 15px 12px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: var(--col-dbg-cloud-body-colour); line-height: 1.55; }
 /* nested sub-thread (architect plan / per-task coder) */
-.dbg-subthread { border: 1px solid var(--col-dbg-subthread-colour); border-radius: 10px; margin: 2px 0; background: var(--col-dbg-subthread-colour-2); overflow: hidden; }
+.dbg-subthread { border: 1px solid var(--col-dbg-subthread-colour); border-radius: 10px; margin: 2px 0; background: var(--col-dbg-subthread-colour-2); overflow: hidden; flex: none; }
 .dbg-sub-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; background: var(--col-dbg-sub-head-colour); font-size: 11px; user-select: none; }
 .dbg-sub-head:hover { background: var(--col-dbg-sub-head-hover-colour); }
 .dbg-sub-caret { color: var(--col-dbg-sub-caret-colour); font-size: 10px; width: 10px; }
@@ -521,6 +590,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
         <div class="cp-nav-item top-level" data-tab="users">Users</div>
         <div class="cp-nav-item top-level" data-tab="settings">Settings</div>
+        <div class="cp-nav-item top-level" data-tab="plugins" id="nav-plugins">Plugins</div>
         <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
         <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
@@ -531,6 +601,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item" data-tab="models" data-group="llm">Models</div>
         <div class="cp-nav-item" data-tab="agents" data-group="llm">Agents</div>
         <div class="cp-nav-item" data-tab="pipelines" data-group="llm">Pipelines</div>
+        <div class="cp-nav-item" data-tab="tools" data-group="llm">Tools</div>
         <div class="cp-nav-item" data-tab="conventions" data-group="llm">Coding Conventions</div>
         <div class="cp-nav-item" data-tab="persona" data-group="llm">Persona</div>
         <div class="cp-nav-item" data-tab="feedback" data-group="llm">Response Feedback</div>
@@ -542,11 +613,8 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item" data-tab="dataset" data-group="voice" id="nav-dataset">Dataset Builder</div>
         <div class="cp-nav-group" id="nav-group-memory" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="brain" data-group="memory" id="nav-brain">Brain</div>
-        <div class="cp-nav-group" id="nav-group-integrations" data-group-id="integrations">Integrations<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="discord" data-group="integrations" id="nav-discord">Discord</div>
-        <div class="cp-nav-item" data-tab="github" data-group="integrations" id="nav-github">GitHub</div>
-        <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">Image Generation<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="imagegen-model" data-group="imagegen" id="nav-imagegen-model">Model</div>
+        <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">ImageGen<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="imagegen-model" data-group="imagegen" id="nav-imagegen-model">Models</div>
         <div class="cp-nav-item" data-tab="imagegen-settings" data-group="imagegen" id="nav-imagegen-settings">Settings</div>
       </div>
     </div>
@@ -561,6 +629,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     <div id="cp-header">
       <img id="cp-logo" src="/images/logo-header.png?v=2" alt="A·R·I" />
       <span id="cp-title">Overview</span>
+      <button id="cp-devmode" type="button" title="Dev Mode: Engram writes to a throwaway copy of the brain. Ctrl+Shift+D" style="margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.06em;padding:4px 10px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;">DEV MODE: OFF</button>
     </div>
 
     <!-- Servers tab -->
@@ -1107,6 +1176,39 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 
     </div>
 
+    <!-- Tools tab -->
+    <div id="tab-tools" class="cp-tab" style="display:none;flex:1;min-width:0;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Tools</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 14px;">
+          Everything Ari can use, built-in and your own. Switch a tool off and she can no longer see or use it. <b>Async</b> tools run in the background:
+          she carries on and is handed the result when it finishes. Click a tool to see how it works.
+        </p>
+        <div class="tw">
+          <div class="tw-top">
+            <input id="tl-filter" class="vs-input" type="text" placeholder="Search tools by name or what they do" autocomplete="off">
+            <span class="tw-chip on" data-src="all">All</span><span class="tw-chip" data-src="builtin">Built-in</span><span class="tw-chip" data-src="custom">Custom</span><span class="tw-chip" data-src="system">System</span><span class="tw-chip" data-src="pinned">Pinned</span><span class="tw-chip" data-src="async">Async</span><span class="tw-chip" data-src="off">Off</span>
+            <select id="tl-group-filter" class="vs-input" style="width:auto;font-size:12px;padding:3px 8px;"></select>
+            <span id="tl-count" style="font-size:12px;color:var(--text-dim);white-space:nowrap;"></span>
+            <span style="flex:1;"></span>
+            <select id="tl-new-template" class="vs-input" style="width:auto;font-size:12px;padding:3px 8px;"></select>
+            <button class="vs-btn-primary" id="tl-new-btn" type="button" style="font-size:12px;padding:5px 12px;">New tool</button>
+          </div>
+          <div id="tl-bulk" class="tw-bulk" style="display:none;"></div>
+          <div class="tw-body">
+            <div class="tw-grid">
+              <div class="tw-gh" id="tl-head"></div>
+              <div class="tw-scroll" id="tl-scroll"><div id="tl-inner" style="position:relative;"></div></div>
+            </div>
+            <div class="tw-side" id="tl-side" style="display:none;"></div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--text-dim);margin:10px 0 0;">
+          Drop a <code>.cs</code> or <code>.txt</code> file anywhere on this table to start a new custom tool from it. A saved custom tool is live straight away and runs with full access to this machine.
+        </p>
+      </div>
+    </div>
+
     <!-- Settings tab -->
     <div id="tab-settings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
 
@@ -1124,6 +1226,23 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
             <button id="pt-delete" type="button" class="vs-btn-outline" style="margin-top:10px;font-size:12px;padding:5px 12px;display:none;">Delete all saved conversations</button>
           </div>
           <div id="pt-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
+        </div>
+      </div>
+
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Memory and other people</div>
+        <div style="display:flex;align-items:flex-start;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,var(--col-control-panel-line-1656-colour));">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Let Engram remember conversations with other people</div>
+            <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">
+              Off by default: Engram only remembers your own conversations. Turn this on and it also remembers server channels, direct messages
+              with other people and guests' chats. Anything someone says there can become a note, so a guest's words end up in the brain,
+              and notes from a conversation with several people can attribute things to the wrong person. What ARI recalls for them is still
+              filtered. Applies immediately.
+            </div>
+            <div id="eo-status" style="font-size:12px;color:var(--text-dim);margin-top:8px;"></div>
+          </div>
+          <div id="eo-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
         </div>
       </div>
 
@@ -1176,8 +1295,8 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 <style id="pip-css">
 .agv-btn{border:1px solid var(--border);background:var(--main-bg);color:var(--text);border-radius:7px;padding:5px 12px;font-size:13px;cursor:pointer}
 .agv-btn:hover{border-color:var(--text-dim)}
-.pip-wrap{display:flex;gap:14px;align-items:flex-start}
-.pip-canvas{position:relative;flex:1;min-width:0;height:560px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background-color:var(--main-bg);background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);cursor:grab;user-select:none}
+.pip-wrap{position:relative}
+.pip-canvas{position:relative;flex:1;min-width:0;height:560px;min-height:420px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background-color:var(--main-bg);background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);cursor:grab;user-select:none}
 .pip-canvas.panning{cursor:grabbing}
 .pip-world{position:absolute;left:0;top:0;transform-origin:0 0}
 .pip-world svg{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
@@ -1201,7 +1320,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .pip-lab{position:absolute;top:-34px;left:-8px;white-space:nowrap;font-weight:700;font-size:12px;cursor:grab;color:var(--text)}
 .pip-lab small{display:block;font-weight:400;color:var(--text-dim)}
 .pip-term.end .pip-lab{left:auto;right:-8px;text-align:right}
-.pip-insp{width:270px;flex:none;border:1px solid var(--border);border-radius:12px;padding:14px;font-size:13px}
+.pip-insp{position:absolute;top:12px;right:12px;z-index:5;width:270px;max-height:calc(100% - 24px);overflow:auto;border:1px solid var(--border);border-radius:12px;padding:14px;font-size:13px;background:var(--main-bg);box-shadow:0 8px 28px rgba(0,0,0,.18)}
 .pip-insp label{display:block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);margin:12px 0 4px}
 .pip-menu{position:fixed;z-index:9999;min-width:200px;background:var(--main-bg);color:var(--text);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.3);padding:4px;font-size:13px}
 .pip-menu div{padding:6px 12px;border-radius:5px;cursor:pointer}.pip-menu div:hover{background:var(--user-bubble)}
@@ -1251,160 +1370,146 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
       </div>
     </div>
 
-    <div id="tab-discord" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section">
-        <div class="vs-section-title">Connection</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          A·R·I reads these when she starts, so changes need a restart to take effect.
+    <div id="tab-plugins" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <style>
+        .pl-card { background: var(--col-vs-section-colour); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+        .pl-head { display: flex; align-items: center; gap: 14px; }
+        .pl-ico { width: 40px; height: 40px; border-radius: 10px; background: var(--accent); color: var(--bg); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 17px; flex: none; }
+        .pl-name { font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
+        .pl-tag { font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 8px; border: 1px solid var(--border); color: var(--text-dim); }
+        .pl-status { font-size: 12px; color: var(--text-dim); margin: 3px 0 0; display: flex; align-items: center; gap: 6px; }
+        .pl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex: none; }
+        .pl-dot.running { background: #1d9e75; } .pl-dot.error { background: #d85a30; }
+        .pl-desc { font-size: 13px; color: var(--text-dim); margin: 12px 0 0; line-height: 1.5; }
+        .pl-switch { appearance: none; -webkit-appearance: none; width: 40px; height: 23px; border-radius: 12px; background: var(--border); position: relative; cursor: pointer; flex: none; transition: background .15s; margin: 0; }
+        .pl-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%; background: #fff; transition: left .15s; }
+        .pl-switch:checked { background: #1d6f80; } .pl-switch:checked::after { left: 20px; }
+        .pl-switch:disabled { opacity: .5; cursor: wait; }
+        .pl-fields { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+        .pl-field { margin-bottom: 16px; } .pl-field label { display: block; font-size: 12px; margin-bottom: 4px; }
+        .pl-help { font-size: 11px; color: var(--text-dim); margin: 4px 0 0; }
+        .pl-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+        .pl-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 4px 3px 10px; border-radius: 12px; border: 1px solid var(--border); }
+        .pl-chip button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; }
+        .pl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .pl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(300px, calc(50% - 6px)), 1fr)); gap: 12px; }
+        .pl-grid .pl-card { margin: 0; cursor: pointer; transition: border-color .12s; }
+        .pl-grid .pl-card:hover { border-color: var(--text-dim); }
+        .pl-ico img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
+        .pl-ico.big { width: 56px; height: 56px; font-size: 24px; border-radius: 14px; } .pl-ico.big img { border-radius: 14px; }
+        .pl-tabs { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; margin: 0 0 16px; }
+        .pl-tabs button { font: inherit; font-size: 13px; padding: 5px 16px; border: none; border-radius: 7px; background: none; color: var(--text-dim); cursor: pointer; }
+        .pl-tabs button.on { background: var(--col-vs-section-colour); color: var(--text); font-weight: 600; }
+        .pl-store .pl-intro { font-size: 13px; color: var(--text-dim); margin: 0 0 16px; max-width: 760px; line-height: 1.5; }
+        .pl-store .pl-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .pl-store .pl-count { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+        .pl-store .pl-h { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 24px 0 12px; }
+        .pl-store .pl-h::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+        .pl-store .pl-card { cursor: default; display: flex; flex-direction: column; padding: 20px; border-radius: 14px; transition: border-color .12s, box-shadow .12s, transform .12s; }
+        .pl-store .pl-card:hover { border-color: var(--text-dim); box-shadow: 0 4px 18px rgba(0,0,0,.07); transform: translateY(-1px); }
+        .pl-store .pl-ico { width: 56px; height: 56px; border-radius: 14px; font-size: 24px; overflow: hidden; } .pl-store .pl-ico img { border-radius: 0; }
+        .pl-store .pl-name { font-size: 17px; font-weight: 650; }
+        .pl-store .pl-meta { font-size: 12px; color: var(--text-dim); margin: 4px 0 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .pl-store .pl-desc { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 14px 0 0; flex: 1; line-height: 1.55; }
+        .pl-store .pl-getrow { display: flex; align-items: center; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+        .pl-store .pl-getrow .vs-btn-primary { padding: 7px 20px; }
+        .pl-store .pl-getrow .vs-btn-outline { padding: 7px 16px; font-size: 13px; }
+        .pl-store .pl-link { margin-left: auto; font-size: 12px; color: var(--text-dim); text-decoration: none; } .pl-store .pl-link:hover { color: var(--text); text-decoration: underline; }
+        .pl-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap; }
+        .pl-badge.feat { border-color: transparent; background: rgba(29,111,128,.12); color: #1d6f80; font-weight: 600; }
+        .pl-badge.ok { border-color: transparent; background: rgba(29,158,117,.12); color: #1d9e75; font-weight: 600; }
+        .pl-go { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border); background: none; color: var(--text); font-size: 20px; line-height: 1; cursor: pointer; flex: none; font-family: inherit; }
+        .pl-go:hover { border-color: var(--text-dim); }
+        .pl-section { margin-top: 22px; } .pl-section h3 { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px; }
+        .pl-code { display: flex; gap: 12px; align-items: flex-start; }
+        .pl-files { width: 210px; flex: none; display: flex; flex-direction: column; gap: 4px; }
+        .pl-file { text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 5px 8px; font-size: 12px; font-family: var(--font-mono, monospace); color: var(--text-dim); cursor: pointer; }
+        .pl-file.on { border-color: var(--border); color: var(--text); background: var(--col-vs-section-colour); }
+        .pl-src { flex: 1; min-width: 0; margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5; max-height: 560px; overflow: auto; white-space: pre; tab-size: 4; }
+      </style>
+      <div id="pl-grid-view">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+          <h2 style="margin:0;font-size:18px;font-weight:600;">Plugins</h2>
+          <div style="flex:1"></div>
+          <button type="button" id="pl-install" class="vs-btn-outline" title="Install a plugin from an .ari file (or drop one on this page)">Install…</button>
+          <input type="file" id="pl-file-input" accept=".ari,.zip" style="display:none">
+          <button type="button" id="pl-reload" class="vs-btn-outline" title="Look at the plugins folder again">Reload</button>
+          <input type="text" id="pl-search" class="vs-input" style="width:240px;" placeholder="Search plugins">
+        </div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 18px;">
+          A plugin connects Ari to something outside, keeps its own settings, and adds the tools she uses there. Open one to switch it on or off, change its settings and read its code.
         </p>
-
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:14px;cursor:pointer;">
-          <input type="checkbox" id="dc-enabled"> Enable Discord
-        </label>
-
-        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">Bot token</label>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-          <input type="password" id="dc-token" class="vs-input" style="flex:1;max-width:520px;" placeholder="Paste a bot token">
-          <button type="button" id="dc-token-show" class="vs-btn" style="font-size:11px;padding:5px 10px;border:1px solid var(--border,var(--col-control-panel-dc-token-show-colour));border-radius:6px;background:transparent;color:var(--text-dim);cursor:pointer;">Show</button>
-        </div>
-        <p id="dc-token-state" style="color:var(--text-dim);font-size:11px;margin:0 0 16px;"></p>
-
-        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">Master's Discord ID</label>
-        <input type="text" id="dc-master" class="vs-input" style="max-width:280px;margin-bottom:16px;" placeholder="e.g. 171691421407903744" inputmode="numeric">
-
-        <div id="dc-lists"></div>
-
-        <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
-          <button class="vs-btn-primary" id="dc-save" type="button">Save settings</button>
-          <span id="dc-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
-        <div id="dc-restart" style="display:none;margin-top:12px;padding:10px 12px;border:1px solid var(--col-control-panel-dc-restart-border);background:var(--col-control-panel-dc-restart-background);color:var(--col-control-panel-dc-restart-text);border-radius:8px;font-size:12px;">
-          Saved. Restart A·R·I for these changes to take effect.
-        </div>
+        <div class="pl-tabs"><button type="button" id="pl-t-installed" class="on">Installed</button><button type="button" id="pl-t-browse">Browse</button></div>
+        <div id="pl-list" class="pl-grid"></div>
+        <div id="pl-browse" class="pl-store" style="display:none;"></div>
+        <div id="pl-drop" style="display:none;position:fixed;inset:0;z-index:50;background:rgba(16,22,24,.6);color:#fff;align-items:center;justify-content:center;font-size:20px;pointer-events:none;">Drop an .ari file to install the plugin</div>
       </div>
-
-      <div class="vs-section">
-        <div class="vs-section-title">Delete recent messages</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          Delete every message A·R·I sent in the last 24 hours across all reachable channels
-          (server text channels and the Master's DM). This cannot be undone.
-        </p>
-        <div style="display:flex;align-items:center;gap:12px;">
-          <button class="vs-btn-primary" id="discord-delete-btn" type="button">Delete messages</button>
-          <span id="discord-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
-      </div>
-    </div>
-
-    <div id="tab-github" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section">
-        <div class="vs-section-title">Connection</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          ARI never sees a token you type — you approve a short code on GitHub's own site and she's connected.
-          This gives her the same repo access your GitHub account has, so only connect an account you're
-          comfortable with her using.
-        </p>
-
-        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">OAuth App Client ID</label>
-        <p style="color:var(--text-dim);font-size:11px;margin:0 0 6px;">
-          From a GitHub OAuth App with "Enable Device Flow" checked, created at
-          <a href="https://github.com/settings/developers" target="_blank" rel="noopener">github.com/settings/developers</a>.
-          Not secret — safe to leave saved.
-        </p>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;">
-          <input type="text" id="gh-client-id" class="vs-input" style="flex:1;max-width:420px;" placeholder="Iv1.xxxxxxxxxxxxxxxx" autocomplete="off">
-          <button class="vs-btn-primary" id="gh-client-id-save" type="button">Save</button>
-        </div>
-
-        <div id="gh-connected-box" style="display:none;margin-bottom:16px;">
-          <span style="font-size:13px;">Connected as <strong id="gh-login"></strong></span>
-          <button type="button" id="gh-disconnect" class="vs-btn" style="margin-left:12px;font-size:11px;padding:5px 10px;border:1px solid var(--border,var(--col-control-panel-gh-disconnect-colour));border-radius:6px;background:transparent;color:var(--text-dim);cursor:pointer;">Disconnect</button>
-        </div>
-
-        <div id="gh-connect-box" style="display:flex;align-items:center;gap:12px;">
-          <button class="vs-btn-primary" id="gh-connect-btn" type="button">Connect GitHub</button>
-          <span id="gh-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
-
-        <div id="gh-code-box" style="display:none;margin-top:16px;padding:14px 16px;border:1px solid var(--border,var(--col-control-panel-gh-code-box-colour));border-radius:10px;background:var(--user-bubble,var(--col-control-panel-gh-code-box-colour-2));max-width:420px;">
-          <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px;">
-            Go to <a id="gh-verify-link" href="#" target="_blank" rel="noopener"></a> and enter:
-          </div>
-          <div id="gh-user-code" style="font-size:24px;font-weight:700;letter-spacing:.08em;"></div>
-        </div>
-      </div>
-
-      <div class="vs-section">
-        <div class="vs-section-title">Commits made by A.R.I</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          How ARI signs every commit she makes — in projects and in the Brain — so you can tell hers from yours at a glance.
-          Works with or without a GitHub connection.
-        </p>
-        <div style="display:flex;align-items:center;gap:12px;">
-          <select id="gh-commit-as" class="vs-input" style="width:auto;">
-            <option value="Author">Author — A.R.I is the commit's author</option>
-            <option value="CoAuthor">Co-author — you're the author, A.R.I is credited as co-author</option>
-          </select>
-          <span id="gh-commit-as-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
+      <div id="pl-detail-view" style="display:none;">
+        <button type="button" id="pl-back" class="vs-btn-outline" style="margin-bottom:18px;">‹ Plugins</button>
+        <div id="pl-detail"></div>
       </div>
     </div>
 
-    <!-- Image Generation — Model tab -->
     <div id="tab-imagegen-model" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
-        <div class="vs-section-title">Status</div>
-        <div id="ig-status" style="font-size:13px;color:var(--text-dim);">Loading…</div>
+        <div class="vs-section-title">Models</div>
+        <p style="font-size:13px;color:var(--text-dim);margin:0 0 4px;">The checkpoint Ari draws with. Pick which one is active; it applies to the next image.</p>
+        <div id="ig-status" style="font-size:12.5px;color:var(--text-dim);margin-bottom:14px;">Loading…</div>
+        <div id="ig-installed" style="display:flex;flex-direction:column;gap:6px;"></div>
       </div>
-      <div class="vs-section">
-        <div class="vs-section-title">Active Checkpoint</div>
-        <p style="font-size:12px;color:var(--text-dim);margin:0 0 12px;">
-          Filename of the model inside ComfyUI's <code>models/checkpoints/</code> folder.
-          Place your <code>.safetensors</code> file there, then select it below.
-        </p>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
-          <select id="ig-checkpoint-select" class="vs-input" style="flex:1;">
-            <option value="">— select a checkpoint —</option>
-          </select>
-          <button class="vs-btn-primary" id="ig-refresh-models-btn" type="button" style="white-space:nowrap;">Refresh</button>
+      <div class="vs-section" id="ig-download-section" style="margin-top:28px;">
+        <div class="vs-section-title">Download</div>
+        <p style="font-size:13px;color:var(--text-dim);margin:0 0 10px;">Search Hugging Face, or paste a link to a <code>.safetensors</code> file. Only that file type is downloaded.</p>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <input type="text" id="ig-search" class="vs-input" style="flex:1;" placeholder="Search Hugging Face, or paste a link" autocomplete="off">
+          <button class="vs-btn-primary" id="ig-search-btn" type="button">Search</button>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;">
-          <input type="text" id="ig-checkpoint-custom" class="vs-input" placeholder="or type a filename manually" style="flex:1;" autocomplete="off" />
-        </div>
-        <div style="margin-top:12px;">
-          <button class="vs-btn-primary" id="ig-save-model-btn" type="button">Save</button>
-          <span id="ig-model-save-status" style="margin-left:10px;font-size:12px;color:var(--text-dim);"></span>
-        </div>
+        <div id="ig-progress" style="display:none;margin-bottom:10px;"></div>
+        <div id="ig-results" style="display:flex;flex-direction:column;gap:6px;"></div>
       </div>
     </div>
 
-    <!-- Image Generation — Settings tab -->
+    <!-- ImageGen — Settings tab -->
     <div id="tab-imagegen-settings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
-        <div class="vs-section-title">Module</div>
-        <label class="vs-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-          <input type="checkbox" id="ig-enabled" style="width:16px;height:16px;cursor:pointer;" />
-          <span style="font-size:13px;">Enable image generation</span>
-        </label>
-        <p style="font-size:12px;color:var(--text-dim);margin:8px 0 0;">
-          Requires a restart to take effect. ComfyUI is installed automatically on first enable.
-        </p>
-      </div>
-      <div class="vs-section">
-        <div class="vs-section-title">ComfyUI</div>
-        <div class="vs-form-grid">
+        <div class="vs-section-title">Server</div>
+        <p style="font-size:13px;color:var(--text-dim);margin:0 0 12px;">Where images get drawn. Turn the whole module on or off in Modules.</p>
+        <div id="ig-mode-managed" class="ig-mode"><div style="flex:1;"><div class="ig-mode-t">Run ComfyUI here</div><div class="ig-mode-d">Ari installs it and starts it only while she is drawing.</div></div></div>
+        <div id="ig-mode-remote" class="ig-mode">
+          <div style="flex:1;min-width:0;"><div class="ig-mode-t">Use an existing ComfyUI</div><div class="ig-mode-d">One that is already running, on this or another machine.</div>
+            <input type="text" id="ig-remote-url" class="vs-input" style="margin-top:8px;max-width:340px;" placeholder="http://spark:8188" autocomplete="off"></div>
+        </div>
+        <div id="ig-managed-fields" class="vs-form-grid" style="margin-top:12px;">
           <label class="vs-label">Install path
-            <input type="text" id="ig-comfyui-path" class="vs-input" placeholder="Leave blank for default (~/.comfyui)" autocomplete="off" />
+            <input type="text" id="ig-comfyui-path" class="vs-input" placeholder="Leave blank for the default" autocomplete="off" />
           </label>
           <label class="vs-label">Port
             <input type="number" id="ig-port" class="vs-input" value="8188" min="1024" max="65535" />
           </label>
-          <label class="vs-label">Idle shutdown (seconds)
+          <label class="vs-label">Stop after idle (seconds)
             <input type="number" id="ig-idle-seconds" class="vs-input" value="300" min="30" />
           </label>
         </div>
       </div>
-      <div style="margin-top:4px;">
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Drawing defaults</div>
+        <p style="font-size:13px;color:var(--text-dim);margin:0 0 12px;">Used for every image unless Ari asks for a different size or step count. They apply straight away.</p>
+        <div class="vs-form-grid">
+          <label class="vs-label">Sampler
+            <input type="text" id="ig-sampler" class="vs-input" list="ig-sampler-list" autocomplete="off">
+            <datalist id="ig-sampler-list"><option value="euler"><option value="euler_ancestral"><option value="dpmpp_2m"><option value="dpmpp_2m_sde"><option value="dpmpp_sde"><option value="ddim"><option value="uni_pc"></datalist>
+          </label>
+          <label class="vs-label">Scheduler
+            <input type="text" id="ig-scheduler" class="vs-input" list="ig-scheduler-list" autocomplete="off">
+            <datalist id="ig-scheduler-list"><option value="normal"><option value="karras"><option value="exponential"><option value="sgm_uniform"><option value="simple"><option value="beta"></datalist>
+          </label>
+          <label class="vs-label">CFG <input type="number" id="ig-cfg" class="vs-input" step="0.5" min="0" max="30"></label>
+          <label class="vs-label">Steps <input type="number" id="ig-steps" class="vs-input" min="1" max="150"></label>
+          <label class="vs-label">Width <input type="number" id="ig-width" class="vs-input" step="64" min="64" max="4096"></label>
+          <label class="vs-label">Height <input type="number" id="ig-height" class="vs-input" step="64" min="64" max="4096"></label>
+        </div>
+      </div>
+      <div style="margin-top:8px;">
         <button class="vs-btn-primary" id="ig-save-settings-btn" type="button">Save settings</button>
         <span id="ig-settings-save-status" style="margin-left:10px;font-size:12px;color:var(--text-dim);"></span>
       </div>
@@ -1495,7 +1600,29 @@ function cpPatchSettings(changes) {
 }
 // The server always answers a failure as { error: "..." }; this pulls out the words.
 async function cpErrorText(r) { try { return (await r.json()).error || r.statusText; } catch { return r.statusText; } }
-function cpEventSource(url) { return new EventSource(url); }
+// A browser allows only six connections to one host over plain HTTP, and every open stream (live log, thread watch, events) holds one for as long
+// as the page lives. Streams in a tab nobody is looking at would use them up and leave a page you open next stuck loading while ARI is busy.
+// So a stream gives its connection back when its tab is hidden and takes it again when the tab is shown. It looks like an EventSource to callers.
+const cpStreams = new Set();
+function cpEventSource(url) {
+    const h = { url, es: null, closed: false, onmessage: null, onerror: null, onopen: null };
+    h.open = () => {
+        if (h.closed || document.hidden || h.es) return;
+        h.es = new EventSource(url);
+        h.es.onmessage = e => h.onmessage && h.onmessage(e);
+        h.es.onerror   = e => h.onerror && h.onerror(e);
+        h.es.onopen    = e => h.onopen && h.onopen(e);
+    };
+    cpStreams.add(h); h.open();
+    return {
+        set onmessage(f) { h.onmessage = f; }, set onerror(f) { h.onerror = f; }, set onopen(f) { h.onopen = f; },
+        close() { h.closed = true; cpStreams.delete(h); if (h.es) { h.es.close(); h.es = null; } },
+        get readyState() { return h.closed ? 2 : h.es ? h.es.readyState : 0; },
+    };
+}
+document.addEventListener('visibilitychange', () => cpStreams.forEach(h => {
+    if (document.hidden) { if (h.es) { h.es.close(); h.es = null; } } else h.open();
+}));
 
 // ── tab switching ─────────────────────────────────────────
 window._ariUserName = 'User';
@@ -1503,15 +1630,12 @@ cpGetSettings().then(d => { if (d.userName) window._ariUserName = d.userName; })
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'), brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', brain: 'Brain', discord: 'Discord', github: 'GitHub', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'Image Generation — Model', 'imagegen-settings': 'Image Generation — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), plugins: document.getElementById('tab-plugins'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), tools: document.getElementById('tab-tools'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', tools: 'Tools', brain: 'Brain', plugins: 'Plugins',  llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'ImageGen — Models', 'imagegen-settings': 'ImageGen — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
 
 let srvPollTimer = null;
-// Declared here (not down in the GitHub section) because switchTab('overview') below calls stopGhPoll()
-// at load time — a `let` declared later would still be in its temporal dead zone at that point and throw,
-// which silently aborts every script statement after it, including every other tab's event listeners.
-let ghPollTimer = null;
-function stopGhPoll() { if (ghPollTimer) { clearInterval(ghPollTimer); ghPollTimer = null; } }
+// The streams below are declared further down the page, so they are only touched once the page has finished loading.
+let cpStreamsReady = false;
 function switchTab(name) {
     navItems.forEach(n => n.classList.toggle('active', n.dataset.tab === name));
     Object.entries(tabs).forEach(([k, el]) => { if (el) el.style.display = k === name ? '' : 'none'; });
@@ -1521,6 +1645,10 @@ function switchTab(name) {
     if (name === 'overview') requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
     if (name !== 'servers') { clearTimeout(srvPollTimer); srvPollTimer = null; }
     if (name !== 'debug') dbgCloseWatch();
+    if (cpStreamsReady) {
+        if (name === 'overview') openLog(); else closeLog();
+        if (name === 'debug') openDtiEvents(); else closeDtiEvents();
+    }
     if (name === 'customisation') { loadBranding(); loadCustomisation(); }
     if (name === 'conventions') loadConventions();
     if (name === 'persona') loadPersona();
@@ -1528,15 +1656,15 @@ function switchTab(name) {
     if (name === 'models') loadModels();
     if (name === 'brain') loadBrain();
     if (name === 'servers') loadServers();
+    if (name === 'pipelines' && !pipDirty) pipMode = 'list';   // the tab always opens on the list; Edit opens the editor
     if (name === 'agents' || name === 'pipelines') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
+    if (name === 'tools') loadTools();
     if (name === 'calendar') loadCalendar();
-    if (name === 'discord') loadDiscord();
-    if (name === 'github') loadGitHub();
-    if (name !== 'github') stopGhPoll();
+    if (name === 'plugins') { loadPlugins(); plSetMode('installed'); }
     if (name === 'debug') loadDebugThreads();
     if (name === 'users') loadUserManagement();
-    if (name === 'settings') { loadPersistedThreads(); loadLogging(); loadDreaming(); }
+    if (name === 'settings') { loadPersistedThreads(); loadLogging(); loadDreaming(); loadEngramOthers(); }
     if (name === 'modules') loadModules();
     if (name === 'voices') loadVoicesList();
     if (name === 'voice') vsRestoreTraining();
@@ -1713,11 +1841,10 @@ const modList = document.getElementById('mod-list');
 // modules — one module can gate several tabs (Voice Settings needs Voice; Voices needs either Voice
 // or VoiceSynthesis), so each nav item lists every module key that would make it visible.
 const NAV_ITEM_MODULES = {
-    'nav-voices':            ['Voice', 'VoiceSynthesis'],
+    'nav-voices':            ['Voice'],
     'nav-voicesettings':     ['Voice'],
-    'nav-voice':             ['VoiceSynthesis'],
-    'nav-dataset':           ['VoiceSynthesis'],
-    'nav-discord':           ['Discord'],
+    'nav-voice':             ['Voice'],
+    'nav-dataset':           ['Voice'],
     'nav-brain':             ['Brain'],
     'nav-calendar':          ['Calendar'],
     'nav-imagegen-model':    ['ImageGen'],
@@ -1725,7 +1852,6 @@ const NAV_ITEM_MODULES = {
 };
 const NAV_GROUP_ITEMS = {
     'nav-group-voice':        ['nav-voices', 'nav-voicesettings', 'nav-voice', 'nav-dataset'],
-    'nav-group-integrations': ['nav-discord', 'nav-github'],
     'nav-group-memory':       ['nav-brain'],
     'nav-group-imagegen':     ['nav-imagegen-model', 'nav-imagegen-settings'],
 };
@@ -1755,8 +1881,411 @@ async function applyModuleVisibility() {
 }
 applyModuleVisibility();
 
+// ── custom tools ──────────────────────────────────────────────────────────
+// C# scripts for the Tools tab: a list, and an editor with Visual Studio Dark+ colours. A dropped .cs/.txt file
+// fills the editor. Saving compiles on the server and the tool is live at once; errors come back with line numbers.
+const CS_KW = new Set('abstract as base bool break byte case catch char checked class const continue decimal default delegate do double else enum event explicit extern false finally fixed float for foreach goto if implicit in int interface internal is lock long namespace new null object operator out override params private protected public readonly ref return sbyte sealed short sizeof stackalloc static string struct switch this throw true try typeof uint ulong unchecked unsafe ushort using virtual void volatile while async await var record init get set yield when where global partial required nameof'.split(' '));
+const CS_CTL = new Set('if else for foreach while do switch case break continue return try catch finally throw yield goto await using lock'.split(' '));
+const CS_RX = /(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|(@\$?"(?:""|[^"])*"?|\$@"(?:""|[^"])*"?|\$?"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)|(^[ \t]*#[^\n]*)|(0[xX][0-9a-fA-F_]+|\b\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?[fFdDmMlLuU]*\b)|([A-Za-z_]\w*)/gm;
+
+// Returns one HTML string per line, with a span per token. A token that spans lines (a block comment, a verbatim
+// string) is split so every line is self-contained.
+function csHighlightLines(code) {
+    const lines = ['']; let last = 0;
+    const push = (text, cls) => {
+        text.split('\n').forEach((part, i) => {
+            if (i > 0) lines.push('');
+            if (part) lines[lines.length - 1] += cls ? `<span class="${cls}">${escHtml(part)}</span>` : escHtml(part);
+        });
+    };
+    let m; CS_RX.lastIndex = 0;
+    while ((m = CS_RX.exec(code))) {
+        push(code.slice(last, m.index), '');
+        const t = m[0]; let cls = '';
+        if (m[1]) cls = 't-com';
+        else if (m[2]) cls = 't-str';
+        else if (m[3]) cls = 't-pp';
+        else if (m[4]) cls = 't-num';
+        else {
+            const before = code.slice(0, m.index), prev = before.replace(/\s+$/, '').slice(-1);
+            const next = code.slice(m.index + t.length).match(/^\s*(\S?)/)[1];
+            const lineStart = /(^|\n)[ \t]*$/.test(before.replace(/\[\s*$/, ''));
+            if (CS_KW.has(t)) cls = CS_CTL.has(t) ? 't-ctl' : 't-kw';
+            else if (/\bnew\s+$/.test(before)) cls = 't-type';
+            else if (prev === '[' && lineStart) cls = 't-type';
+            else if (next === '(') cls = 't-fn';
+            else if (next === '=' && !code.startsWith('==', m.index + t.length + (code.slice(m.index + t.length).match(/^\s*/)[0].length))) cls = 't-var';
+            else if (/^[A-Z]/.test(t) && prev !== '.') cls = 't-type';
+            else cls = 't-var';
+        }
+        push(t, cls); last = m.index + t.length;
+    }
+    push(code.slice(last), '');
+    return lines;
+}
+
+// A code editor: a transparent textarea over a highlighted copy. Returns get/set/mark helpers.
+function ceCreate(host, { onDropFile, readOnly } = {}) {
+    host.innerHTML = '<div class="ce"><div class="ce-gutter"></div><div class="ce-body"><div class="ce-hl"><div></div></div><textarea class="ce-in" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea></div></div><div class="ce-diag" style="display:none;"></div>';
+    const wrap = host.querySelector('.ce'), gut = host.querySelector('.ce-gutter'), hl = host.querySelector('.ce-hl'), hlIn = hl.firstElementChild;
+    const ta = host.querySelector('.ce-in'), diag = host.querySelector('.ce-diag');
+    ta.readOnly = !!readOnly;
+    let marks = [];
+    const curLine = () => ta.value.slice(0, ta.selectionStart).split('\n').length - 1;
+    const render = () => {
+        const lines = csHighlightLines(ta.value), cur = curLine(), bad = new Set(marks.filter(d => d.severity === 'Error').map(d => d.line - 1));
+        hlIn.innerHTML = lines.map((h, i) => `<span class="ce-ln${i === cur ? ' cur' : ''}${bad.has(i) ? ' bad' : ''}">${h || '&#8203;'}</span>`).join('');
+        gut.innerHTML = lines.map((_, i) => bad.has(i) ? `<span class="err">${i + 1}</span>` : i + 1).join('\n');
+        sync();
+    };
+    const sync = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop; };
+    const edit = (start, end, text, caret) => { ta.setRangeText(text, start, end, 'end'); if (caret != null) ta.selectionStart = ta.selectionEnd = caret; render(); };
+    ta.addEventListener('input', render);
+    ta.addEventListener('scroll', sync);
+    ['keyup', 'click', 'select', 'focus'].forEach(ev => ta.addEventListener(ev, () => { const c = curLine(); hlIn.querySelectorAll('.ce-ln').forEach((el, i) => el.classList.toggle('cur', i === c)); }));
+    ta.addEventListener('keydown', e => {
+        if (e.key === 'Tab') { e.preventDefault(); edit(ta.selectionStart, ta.selectionEnd, '    '); }
+        else if (e.key === 'Enter') {                  // keep the previous line's indent, and add one after an opening brace
+            e.preventDefault();
+            const before = ta.value.slice(0, ta.selectionStart), line = before.slice(before.lastIndexOf('\n') + 1);
+            const indent = line.match(/^[ \t]*/)[0] + (/\{\s*$/.test(line) ? '    ' : '');
+            edit(ta.selectionStart, ta.selectionEnd, '\n' + indent);
+        }
+    });
+    wrap.addEventListener('dragover', e => { e.preventDefault(); wrap.classList.add('over'); });
+    wrap.addEventListener('dragleave', () => wrap.classList.remove('over'));
+    wrap.addEventListener('drop', async e => {
+        e.preventDefault(); e.stopPropagation(); wrap.classList.remove('over');
+        const f = e.dataTransfer.files[0]; if (f && onDropFile) onDropFile(f);
+    });
+    const api = {
+        get: () => ta.value,
+        set: text => { ta.value = text; marks = []; ta.scrollTop = ta.scrollLeft = 0; render(); },
+        focus: () => ta.focus(),
+        mark: list => {
+            marks = list || []; render();
+            diag.style.display = marks.length ? '' : 'none';
+            diag.innerHTML = marks.map(d => `<div class="${d.severity === 'Error' ? 'e' : 'w'}" data-line="${d.line}">${d.severity === 'Error' ? 'error' : 'warning'} ${escHtml(d.id)} · line ${d.line}:${d.column} · ${escHtml(d.message)}</div>`).join('');
+            diag.querySelectorAll('div').forEach(row => row.onclick = () => {
+                const ln = +row.dataset.line, pos = ta.value.split('\n').slice(0, ln - 1).join('\n').length + (ln > 1 ? 1 : 0);
+                ta.focus(); ta.setSelectionRange(pos, pos); ta.scrollTop = Math.max(0, (ln - 4) * 20); render();
+            });
+        },
+    };
+    api.set('');
+    return api;
+}
+
+const cleanFileName = n => { const b = (n || 'NewTool').replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 56) || 'NewTool'; return b + '.cs'; };
+
+// ── the Tools window ──────────────────────────────────────────────────────
+// One grid of every tool (built-in and custom), filtered in the browser and drawn a screenful at a time so a few
+// thousand rows stay smooth. Click a row to open it in the sidebar: overview, code, and a try-it box.
+const TL_ROW = 34;
+const tlById = id => document.getElementById(id);
+let tlRowsAll = [], tlGroups = [], tlTemplates = [], tlView = [];
+let tlSel = new Set(), tlOpen = null, tlTab = 'overview', tlDetail = null, tlNew = null, tlEd = null;
+let tlSort = { key: 'name', dir: 1 }, tlSrc = 'all', tlQ = '', tlGroupFilter = '';
+
+async function loadTools() {
+    try {
+        const [tr, cr] = await Promise.all([cpFetch('/api/v1/admin/tools'), cpFetch('/api/v1/admin/tools/custom')]);
+        if (!tr.ok) throw new Error((await tr.json().catch(() => ({}))).error || tr.statusText);
+        const t = await tr.json(), c = cr.ok ? await cr.json() : { tools: [], templates: [] };
+        const fileOf = new Map(c.tools.filter(x => x.name).map(x => [x.name, x.file]));
+        tlRowsAll = t.tools.map(x => ({ ...x, file: fileOf.get(x.name) || null }));
+        // A script that didn't compile has no tool name yet, but it still needs to be visible so it can be fixed.
+        for (const f of c.tools.filter(x => !x.compiled)) {
+            const err = f.diagnostics.find(d => d.severity === 'Error');
+            tlRowsAll.push({ name: f.file, description: err ? `Did not compile: ${err.message}` : 'Did not compile', group: '', source: 'custom', enabled: true, async: false, broken: true, file: f.file, diagnostics: f.diagnostics });
+        }
+        tlGroups = t.groups.map(g => g.name); tlTemplates = c.templates;
+        const ts = tlById('tl-new-template');
+        if (!ts.options.length) ts.innerHTML = tlTemplates.map((x, i) => `<option value="${i}">${escHtml(x.name)}</option>`).join('');
+        const gf = tlById('tl-group-filter'), keep = tlGroupFilter;
+        gf.innerHTML = '<option value="">All groups</option><option value="@none">(no group)</option>' + tlGroups.map(g => `<option value="${escHtml(g)}">${escHtml(g)}</option>`).join('');
+        gf.value = keep;
+        tlSel = new Set([...tlSel].filter(n => tlRowsAll.some(r => r.name === n)));
+        tlRender();
+        if (tlOpen && tlOpen !== '@new') { const r = tlRowsAll.find(x => x.name === tlOpen); if (r) tlLoadSide(tlOpen, true); else tlCloseSide(); }
+    } catch (e) {
+        tlById('tl-inner').innerHTML = `<div style="padding:16px;font-size:13px;color:var(--col-control-panel-line-1647-text);">Could not load tools: ${escHtml(e.message)}</div>`;
+    }
+}
+
+function tlFilterRows() {
+    const q = tlQ.toLowerCase();
+    let rows = tlRowsAll.filter(r =>
+        (!q || r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q) || (r.group || '').toLowerCase().includes(q)) &&
+        (tlSrc === 'all' || (tlSrc === 'builtin' && r.source === 'builtin') || (tlSrc === 'custom' && r.source === 'custom') || (tlSrc === 'system' && r.source === 'system') || (tlSrc === 'pinned' && r.pinned) || (tlSrc === 'async' && r.async) || (tlSrc === 'off' && !r.enabled)) &&
+        (!tlGroupFilter || (tlGroupFilter === '@none' ? !r.group : r.group === tlGroupFilter)));
+    const k = tlSort.key, d = tlSort.dir;
+    rows.sort((a, b) => {
+        const flag = k === 'enabled' || k === 'async' || k === 'pinned';
+        const av = flag ? (a[k] ? 0 : 1) : String(a[k] ?? '').toLowerCase(), bv = flag ? (b[k] ? 0 : 1) : String(b[k] ?? '').toLowerCase();
+        return (av < bv ? -1 : av > bv ? 1 : a.name.localeCompare(b.name)) * d;
+    });
+    return rows;
+}
+
+function tlRender() {
+    tlView = tlFilterRows();
+    tlById('tl-count').textContent = tlView.length === tlRowsAll.length ? `${tlRowsAll.length} tools` : `${tlView.length} of ${tlRowsAll.length}`;
+    document.querySelectorAll('.tw-chip').forEach(c => c.classList.toggle('on', c.dataset.src === tlSrc));
+    const allSel = tlView.length > 0 && tlView.every(r => tlSel.has(r.name));
+    const arrow = key => tlSort.key === key ? (tlSort.dir > 0 ? ' ▲' : ' ▼') : '';
+    tlById('tl-head').innerHTML = `<span class="tw-ck${allSel ? ' on' : ''}" id="tl-all" title="Select all shown"></span>
+        <span class="s" data-k="name">Name${arrow('name')}</span><span>Description</span><span class="s" data-k="group">Group${arrow('group')}</span>
+        <span class="s" data-k="source">Source${arrow('source')}</span><span class="s" data-k="pinned" title="Always loaded: Ari starts every conversation with it in hand">Pin${arrow('pinned')}</span><span class="s" data-k="async">Async${arrow('async')}</span><span class="s" data-k="enabled">On${arrow('enabled')}</span>`;
+    tlById('tl-all').onclick = () => { if (allSel) tlView.forEach(r => tlSel.delete(r.name)); else tlView.forEach(r => !r.broken && tlSel.add(r.name)); tlRender(); };
+    tlById('tl-head').querySelectorAll('.s').forEach(el => el.onclick = () => { const k = el.dataset.k; tlSort = { key: k, dir: tlSort.key === k ? -tlSort.dir : 1 }; tlRender(); });
+    tlRenderBulk();
+    tlDrawRows();
+}
+
+function tlDrawRows() {
+    const sc = tlById('tl-scroll'), inner = tlById('tl-inner');
+    const top = sc.scrollTop, h = sc.clientHeight || 400;
+    const start = Math.max(0, Math.floor(top / TL_ROW) - 8), end = Math.min(tlView.length, Math.ceil((top + h) / TL_ROW) + 8);
+    inner.style.height = tlView.length * TL_ROW + 'px';
+    inner.innerHTML = '';
+    if (!tlView.length) { inner.innerHTML = '<div style="padding:18px;font-size:13px;color:var(--text-dim);">No tools match.</div>'; return; }
+    const frag = document.createDocumentFragment();
+    for (let i = start; i < end; i++) frag.appendChild(tlRowEl(tlView[i], i));
+    inner.appendChild(frag);
+}
+
+function tlRowEl(r, i) {
+    const row = document.createElement('div');
+    row.className = 'tw-gr' + (tlOpen === r.name ? ' sel' : '') + (r.enabled ? '' : ' off');
+    row.style.top = i * TL_ROW + 'px';
+    const ck = document.createElement('span'); ck.className = 'tw-ck' + (tlSel.has(r.name) ? ' on' : '');
+    if (r.broken) ck.style.visibility = 'hidden';
+    ck.onclick = e => { e.stopPropagation(); if (tlSel.has(r.name)) tlSel.delete(r.name); else tlSel.add(r.name); tlRender(); };
+    const name = document.createElement('code'); name.textContent = r.name; name.title = r.name;
+    const ds = document.createElement('span'); ds.className = 'ds'; ds.textContent = r.description || ''; ds.title = r.description || '';
+    const gp = document.createElement('span'); gp.className = 'gp'; gp.textContent = r.group || '—';
+    const src = document.createElement('span'); src.className = 'tw-src' + (r.broken ? ' b' : r.source === 'custom' ? ' c' : ''); src.textContent = r.broken ? 'Error' : r.source === 'custom' ? 'Custom' : r.source === 'system' ? 'System' : 'Built-in';
+    row.append(ck, name, ds, gp, src);
+    for (const key of ['pinned', 'async', 'enabled']) {
+        if (r.broken || r.source === 'system') { const dash = document.createElement('span'); dash.style.cssText = 'color:var(--text-dim);font-size:11px;'; dash.textContent = r.source === 'system' && key !== 'async' ? 'always' : ''; if (key === 'enabled') dash.textContent = ''; row.appendChild(dash); continue; }
+        const t = buildToggle(r[key], on => tlPatch([r.name], { [key]: on }));
+        t.addEventListener('click', e => e.stopPropagation());
+        row.appendChild(t);
+    }
+    row.onclick = () => { tlTab = r.broken ? 'code' : 'overview'; tlLoadSide(r.name); };
+    return row;
+}
+
+tlById('tl-scroll').addEventListener('scroll', tlDrawRows);
+tlById('tl-filter').addEventListener('input', e => { tlQ = e.target.value.trim(); tlRender(); });
+tlById('tl-group-filter').addEventListener('change', e => { tlGroupFilter = e.target.value; tlRender(); });
+document.querySelectorAll('.tw-chip').forEach(c => c.addEventListener('click', () => { tlSrc = c.dataset.src; tlRender(); }));
+
+// Applies one change to some tools: updates the rows in place, with no reload unless the groups changed.
+async function tlPatch(names, patch) {
+    names = names.filter(n => tlRowsAll.some(r => r.name === n && !r.broken && r.source !== 'system'));
+    if (!names.length) return;
+    const r = await cpFetch('/api/v1/admin/tools', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names, patch }) });
+    if (!r.ok) { alert((await r.json().catch(() => ({}))).error || 'Could not save.'); return; }
+    if (patch.group !== undefined) { await loadTools(); return; }
+    for (const row of tlRowsAll) if (names.includes(row.name)) { if (patch.enabled !== undefined) row.enabled = patch.enabled; if (patch.async !== undefined) row.async = patch.async; if (patch.pinned !== undefined) row.pinned = patch.pinned; }
+    tlRender(); if (tlOpen && names.includes(tlOpen)) tlRenderSide();
+}
+
+function tlNewGroupName() {
+    return (prompt('Name for the new group (lowercase letters, numbers and _):') || '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+}
+function tlGroupSelect(current, onPick, firstLabel = '(no group)') {
+    const sel = document.createElement('select'); sel.className = 'vs-input'; sel.style.cssText = 'width:150px;font-size:12px;padding:3px 6px;';
+    const opts = [...new Set([...tlGroups, current].filter(Boolean))];
+    sel.innerHTML = `<option value="">${escHtml(firstLabel)}</option>` + opts.map(g => `<option value="${escHtml(g)}"${g === current ? ' selected' : ''}>${escHtml(g)}</option>`).join('') + '<option value="@new">New group…</option>';
+    sel.onchange = () => { let g = sel.value; if (g === '@new') { g = tlNewGroupName(); if (!g) { sel.value = current || ''; return; } } onPick(g); };
+    return sel;
+}
+
+function tlRenderBulk() {
+    const box = tlById('tl-bulk'), names = [...tlSel];
+    box.style.display = names.length ? '' : 'none';
+    if (!names.length) return;
+    box.innerHTML = `<b>${names.length} selected</b>`;
+    const btn = (label, fn) => { const b = document.createElement('button'); b.className = 'vs-btn-outline'; b.type = 'button'; b.textContent = label; b.onclick = fn; box.appendChild(b); };
+    btn('Turn on', () => tlPatch(names, { enabled: true })); btn('Turn off', () => tlPatch(names, { enabled: false }));
+    btn('Async on', () => tlPatch(names, { async: true })); btn('Async off', () => tlPatch(names, { async: false }));
+    btn('Pin', () => tlPatch(names, { pinned: true })); btn('Unpin', () => tlPatch(names, { pinned: false }));
+    box.appendChild(tlGroupSelect('', g => tlPatch(names, { group: g }), 'Move to group…'));
+    btn('Clear', () => { tlSel.clear(); tlRender(); });
+}
+
+// ── sidebar ──
+function tlCloseSide() { tlOpen = null; tlDetail = null; tlNew = null; tlEd = null; tlById('tl-side').style.display = 'none'; tlById('tl-side').innerHTML = ''; tlRender(); }
+
+async function tlLoadSide(name, keepTab) {
+    tlOpen = name; tlNew = null;
+    const row = tlRowsAll.find(r => r.name === name);
+    if (row?.broken) {
+        const r = await cpFetch('/api/v1/admin/tools/custom/' + encodeURIComponent(row.file));
+        tlDetail = { name: row.file, description: row.description, source: 'custom', parameters: [], code: r.ok ? (await r.json()).code : '', codeFile: row.file, editable: true, enabled: true, async: false, group: '', broken: true, diagnostics: row.diagnostics };
+    } else {
+        const r = await cpFetch(`/api/v1/admin/tools/${encodeURIComponent(name)}/detail`);
+        if (!r.ok) { tlCloseSide(); return; }
+        tlDetail = await r.json();
+        tlDetail.file = row?.file || null;
+    }
+    tlRender(); tlRenderSide();
+}
+
+function tlOpenNew(code, file, note) {
+    tlOpen = '@new'; tlDetail = null; tlNew = { code, file: file || 'NewTool.cs', note: note || '' }; tlTab = 'code';
+    tlRender(); tlRenderSide();
+}
+
+function tlRenderSide() {
+    const side = tlById('tl-side'); side.style.display = '';
+    const d = tlDetail, isNew = !!tlNew;
+    const title = isNew ? 'New tool' : d.name;
+    const tabs = isNew ? [['code', 'Code']] : [['overview', 'Overview'], ['code', 'Code']].concat(d.editable && !d.broken ? [['try', 'Try it']] : []);
+    if (!tabs.some(t => t[0] === tlTab)) tlTab = tabs[0][0];
+    side.innerHTML = `<div style="display:flex;align-items:flex-start;gap:8px;"><div style="flex:1;min-width:0;"><code style="font-size:14px;font-weight:700;word-break:break-all;">${escHtml(title)}</code>
+        ${isNew ? '' : `<div style="font-size:12.5px;color:var(--text-dim);margin-top:3px;line-height:1.4;">${escHtml(d.description || '')}</div>`}</div>
+        <button class="vs-btn-outline" id="tl-x" type="button" style="font-size:12px;padding:2px 9px;">✕</button></div>
+        <div class="tw-tabs">${tabs.map(t => `<span data-t="${t[0]}" class="${tlTab === t[0] ? 'on' : ''}">${t[1]}</span>`).join('')}</div><div id="tl-pane"></div>`;
+    tlById('tl-x').onclick = tlCloseSide;
+    side.querySelectorAll('.tw-tabs span').forEach(el => el.onclick = () => { tlTab = el.dataset.t; tlRenderSide(); });
+    const pane = tlById('tl-pane');
+    if (tlTab === 'overview') tlOverview(pane, d); else if (tlTab === 'code') tlCode(pane, d); else tlTry(pane, d);
+}
+
+function tlOverview(pane, d) {
+    const kv = (label, node) => { const el = document.createElement('div'); el.className = 'tw-kv'; el.innerHTML = `<span>${label}</span>`; if (typeof node === 'string') el.insertAdjacentHTML('beforeend', `<span style="color:var(--text);">${node}</span>`); else el.appendChild(node); pane.appendChild(el); };
+    kv('Source', (d.source === 'custom' ? 'Custom' : d.source === 'system' ? 'System' : 'Built-in') + ` · ${escHtml(d.codeFile || '')}`);
+    if (d.module) kv('Needs module', escHtml(d.module));
+    kv('Group', tlGroupSelect(d.group, g => tlPatch([d.name], { group: g })));
+    if (d.source === 'system') kv('Always loaded', 'Every conversation gets this tool itself');
+    else {
+        kv('On', buildToggle(d.enabled, on => tlPatch([d.name], { enabled: on })));
+        kv('Always loaded', buildToggle(d.pinned, on => tlPatch([d.name], { pinned: on })));
+        kv('Async', buildToggle(d.async, on => tlPatch([d.name], { async: on })));
+    }
+    if (d.name === 'shell' || d.name === 'run_code') {
+        const holder = document.createElement('div'); holder.className = 'tw-kv'; holder.innerHTML = '<span title="Off: Ari asks you before any command that is not read-only or on your allowed list. On: she runs everything.">Approve everything</span>';
+        const saveShell = (autoApprove, allow) => cpFetch('/api/v1/admin/tools/shell-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoApprove, allow }) });
+        cpFetch('/api/v1/admin/tools/shell-settings').then(r => r.json()).then(j => {
+            holder.appendChild(buildToggle(j.autoApprove, async on => {
+                if (on && !confirm('Let Ari run every command and program without asking you first?')) { tlRenderSide(); return; }
+                await saveShell(on, j.allow); j.autoApprove = on;
+            }));
+            if (d.name !== 'shell') return;
+            const box = document.createElement('div'); box.style.cssText = 'margin-top:10px;';
+            box.innerHTML = `<div style="font-size:12.5px;color:var(--text-dim);margin-bottom:4px;line-height:1.4;">Commands that never need your approval, one per line (for example <code>git commit</code> or <code>npm run build</code>). Read-only commands like <code>ls</code> and <code>git status</code> already run freely. A line matches a command that starts with it.</div>
+                <textarea id="tl-allow" class="vs-input" rows="5" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;" spellcheck="false">${escHtml((j.allow || []).join('\n'))}</textarea>
+                <button class="vs-btn-outline" id="tl-allow-save" type="button" style="margin-top:6px;font-size:12px;padding:3px 12px;">Save allowed commands</button> <span id="tl-allow-msg" style="font-size:12px;color:var(--text-dim);"></span>`;
+            pane.appendChild(box);
+            tlById('tl-allow-save').onclick = async () => {
+                const allow = tlById('tl-allow').value.split('\n').map(x => x.trim()).filter(Boolean);
+                await saveShell(j.autoApprove, allow); j.allow = allow; tlById('tl-allow-msg').textContent = 'Saved.';
+            };
+        });
+        pane.appendChild(holder);
+    }
+    const h = document.createElement('div'); h.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-dim);margin:14px 0 4px;letter-spacing:.04em;'; h.textContent = 'PARAMETERS'; pane.appendChild(h);
+    if (!d.parameters.length) pane.insertAdjacentHTML('beforeend', `<div style="font-size:12.5px;color:var(--text-dim);">${d.source === 'custom' ? 'This tool takes no parameters.' : 'Shown while the tool’s module or project is available. The Code tab has the full definition.'}</div>`);
+    for (const p of d.parameters)
+        pane.insertAdjacentHTML('beforeend', `<div class="tw-p"><b>${escHtml(p.name)}</b> <span style="color:var(--text-dim);">· ${escHtml(p.type)} · ${p.required ? 'required' : 'optional'}</span><div style="color:var(--text-dim);margin-top:2px;line-height:1.4;">${escHtml(p.description)}</div></div>`);
+}
+
+function tlCode(pane, d) {
+    const isNew = !!tlNew, editable = isNew || d.editable;
+    pane.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <input id="tl-file" class="vs-input" style="flex:1;min-width:130px;font-family:ui-monospace,Menlo,monospace;font-size:12px;" value="${escHtml(isNew ? tlNew.file : (d.codeFile || ''))}" ${isNew ? '' : 'readonly'} autocomplete="off">
+        ${editable ? '<button class="vs-btn-primary" id="tl-save" type="button" style="font-size:12px;padding:4px 12px;">Save</button>' : '<button class="vs-btn-outline" id="tl-fork" type="button" style="font-size:12px;padding:4px 12px;" title="Copy this into a custom tool you can edit">Fork to edit</button>'}
+        ${!isNew && d.editable ? '<button class="vs-btn-outline" id="tl-del" type="button" style="font-size:12px;padding:4px 10px;">Delete</button>' : ''}</div>
+        <div id="tl-ce"></div><div id="tl-status" style="font-size:12.5px;color:var(--text-dim);margin-top:8px;min-height:18px;line-height:1.4;">${escHtml(isNew ? tlNew.note : editable ? '' : 'Built-in tool source, for reference. Fork it to make your own version.')}</div>`;
+    const status = tlById('tl-status');
+    tlEd = ceCreate(tlById('tl-ce'), {
+        readOnly: !editable,
+        onDropFile: async f => {
+            if (!editable) return;
+            if (!/\.(cs|txt)$/i.test(f.name)) { status.textContent = 'Only .cs and .txt files can be dropped here.'; return; }
+            tlEd.set(await f.text()); if (isNew) tlById('tl-file').value = cleanFileName(f.name);
+            status.textContent = `Filled in from ${f.name}. Press Save to compile it.`;
+        },
+    });
+    tlEd.set(isNew ? tlNew.code : (d.code || '')); if (d.diagnostics) tlEd.mark(d.diagnostics);
+    if (!editable) {
+        tlById('tl-fork').onclick = async () => {
+            const r = await cpFetch(`/api/v1/admin/tools/${encodeURIComponent(d.name)}/fork`, { method: 'POST' });
+            if (!r.ok) { status.textContent = 'Could not make a copy.'; return; }
+            const f = await r.json();
+            tlOpenNew(f.code, f.file, `A copy of ${d.name}. Saving it replaces the built-in until you delete the copy. It starts as a stub, so write Run() before you save if you want the tool to keep working.`);
+        };
+        return;
+    }
+    tlById('tl-save').onclick = async () => {
+        const file = tlById('tl-file').value.trim(), btn = tlById('tl-save');
+        btn.disabled = true; status.textContent = 'Compiling…';
+        try {
+            const r = await cpFetch('/api/v1/admin/tools/custom/' + encodeURIComponent(file), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: tlEd.get() }) });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) { status.textContent = j.error || 'Could not save.'; return; }
+            tlEd.mark(j.diagnostics);
+            const errs = j.diagnostics.filter(x => x.severity === 'Error').length;
+            if (errs) { status.textContent = `Saved, but it didn't compile (${errs} error${errs === 1 ? '' : 's'}). ${j.compiled ? 'The last version that worked is still running.' : ''}`; await loadTools(); return; }
+            status.textContent = `Saved. ${j.name} is live.`;
+            tlNew = null; tlOpen = j.name; await loadTools();
+        } finally { btn.disabled = false; }
+    };
+    const del = tlById('tl-del');
+    if (del) del.onclick = async () => {
+        if (!confirm(`Delete ${d.codeFile}? The tool stops working at once.${d.broken ? '' : ' If it replaced a built-in, the built-in comes back.'}`)) return;
+        await cpFetch('/api/v1/admin/tools/custom/' + encodeURIComponent(d.codeFile), { method: 'DELETE' });
+        tlCloseSide(); loadTools();
+    };
+}
+
+function tlTry(pane, d) {
+    pane.innerHTML = `<div style="font-size:12.5px;color:var(--text-dim);margin-bottom:8px;line-height:1.4;">Call this tool once, as if Ari had. Write the arguments as JSON.</div>
+        <input id="tl-try-args" class="vs-input" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;" placeholder='${d.parameters.length ? '{"' + escHtml(d.parameters[0].name) + '": "value"}' : '{}'}' autocomplete="off">
+        <button class="vs-btn-primary" id="tl-try-btn" type="button" style="margin-top:8px;font-size:12px;padding:4px 14px;">Run</button>
+        <pre id="tl-try-out" style="margin:10px 0 0;padding:8px 10px;background:color-mix(in srgb,var(--text) 6%,transparent);border-radius:8px;font-size:12px;white-space:pre-wrap;display:none;"></pre>`;
+    tlById('tl-try-btn').onclick = async () => {
+        const out = tlById('tl-try-out'); out.style.display = ''; out.textContent = 'Running…';
+        const r = await cpFetch('/api/v1/admin/tools/custom/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: d.name, args: tlById('tl-try-args').value }) });
+        out.textContent = r.ok ? (await r.json()).result : 'The test call failed.';
+    };
+}
+
+tlById('tl-new-btn').addEventListener('click', () => { const t = tlTemplates[+tlById('tl-new-template').value]; tlOpenNew(t ? t.code : '', 'NewTool.cs'); });
+// Dropping a .cs or .txt file anywhere on the table starts a new tool from it.
+(() => {
+    const tw = document.querySelector('.tw');
+    tw.addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
+    tw.addEventListener('drop', async e => {
+        const f = e.dataTransfer.files[0]; if (!f) return; e.preventDefault();
+        if (!/\.(cs|txt)$/i.test(f.name)) { alert('Only .cs and .txt files can be dropped here.'); return; }
+        tlOpenNew(await f.text(), cleanFileName(f.name), `Filled in from ${f.name}. Press Save to compile it.`);
+    });
+})();
+
 // ── Persistent Threads ────────────────────────────────────
 function fmtBytes(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+
+async function loadEngramOthers() {
+    const slot = document.getElementById('eo-toggle'), status = document.getElementById('eo-status');
+    try {
+        const on = (await cpGetSettings()).engramOthers;
+        slot.innerHTML = '';
+        slot.appendChild(buildToggle(on, async enabled => {
+            status.textContent = 'Saving…';
+            try {
+                const r = await cpPatchSettings({ engramOthers: enabled });
+                if (!r.ok) throw new Error();
+                status.textContent = enabled ? 'On: other people\'s conversations are remembered.' : 'Off: only your own conversations are remembered.';
+            } catch { status.textContent = 'Could not save.'; loadEngramOthers(); }
+        }));
+        status.textContent = on ? 'On: other people\'s conversations are remembered.' : '';
+    } catch { status.textContent = 'Could not load.'; }
+}
 
 async function loadPersistedThreads() {
     const status = document.getElementById('pt-status'), del = document.getElementById('pt-delete'), slot = document.getElementById('pt-toggle');
@@ -2816,284 +3345,423 @@ document.getElementById('brain-backup-btn').addEventListener('click', async () =
 });
 document.getElementById('brain-refresh-btn').addEventListener('click', () => { brainStatus().textContent = ''; loadBrain(); });
 
-// ── discord integration ───────────────────────────────────
-document.getElementById('discord-delete-btn').addEventListener('click', async (e) => {
-    if (!confirm("Delete all messages A·R·I sent in the last 24 hours? This cannot be undone.")) return;
-    const btn = e.currentTarget;
-    const s = document.getElementById('discord-status');
-    btn.disabled = true; s.textContent = 'Deleting…';
-    try {
-        const r = await cpFetch('/api/v1/admin/integrations/discord/deleteRecent', { method: 'POST' });
-        const d = await r.json();
-        s.textContent = d.message || (r.ok ? 'Done.' : 'Failed.');
-    } catch { s.textContent = 'Delete failed.'; }
-    finally { btn.disabled = false; }
-});
+// ── plugins ───────────────────────────────────────────────
+// A plugin describes its own settings, actions and source; this page only draws them. IDs stay strings end to end: Discord snowflakes exceed 2^53.
+var plState = [];
+var plView = null;       // null = the card grid; otherwise a plugin id, or 'github'
 
-// ── discord settings ──────────────────────────────────────
-// IDs are kept as strings end to end: Discord snowflakes exceed 2^53 and Number() mangles them.
-const DC_LISTS = [
-    { key: 'whitelistedUserIds', title: 'Whitelisted users',  hint: 'User IDs A·R·I will respond to.',            ph: 'User ID' },
-    { key: 'watchedChannelIds',  title: 'Watched channels',   hint: 'Channel IDs she reads and can reply in.',    ph: 'Channel ID' },
-    { key: 'allowedGuildIds',    title: 'Allowed guilds',     hint: 'Servers she is permitted to operate in.',    ph: 'Guild ID' },
-];
-var dcState = null;
+function plEl(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+}
 
-async function loadDiscord() {
-    const host = document.getElementById('dc-lists');
+async function loadPlugins() {
+    plView = null;
+    const host = document.getElementById('pl-list');
     try {
-        const r = await cpFetch('/api/v1/admin/integrations/discord');
+        const r = await cpFetch('/api/v1/admin/plugins');
         if (!r.ok) throw new Error();
-        dcState = await r.json();
+        plState = (await r.json()).plugins;
     } catch {
-        host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load Discord settings.</span>';
+        host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load plugins.</span>';
         return;
     }
-    document.getElementById('dc-enabled').checked = !!dcState.enabled;
-    document.getElementById('dc-master').value = dcState.masterDiscordId && dcState.masterDiscordId !== '0' ? dcState.masterDiscordId : '';
-    document.getElementById('dc-token').value = '';
-    document.getElementById('dc-token-state').textContent = dcState.tokenConfigured
-        ? 'A token is saved. Leave blank to keep it, or paste a new one to replace it.'
-        : 'No token saved — Discord will not start without one.';
+    plRender();
+}
 
+function plAll() { return plState; }
+
+function plSetView(v) { plView = v; plRender(); document.getElementById('tab-plugins').scrollTop = 0; }
+
+function plRender() {
+    const grid = plView === null;
+    document.getElementById('pl-grid-view').style.display = grid ? '' : 'none';
+    document.getElementById('pl-detail-view').style.display = grid ? 'none' : '';
+    if (grid) return plGrid();
+    const p = plAll().find(x => x.id === plView);
+    if (!p) return plSetView(null);
+    const box = document.getElementById('pl-detail'); box.innerHTML = '';
+    plDetail(p, box);
+}
+
+function plGrid() {
+    const q = document.getElementById('pl-search').value.trim().toLowerCase();
+    const host = document.getElementById('pl-list');
     host.innerHTML = '';
-    DC_LISTS.forEach(spec => host.appendChild(dcBuildList(spec, dcState[spec.key] || [])));
-    document.getElementById('dc-restart').style.display = 'none';
-}
-
-function dcBuildList(spec, ids) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-bottom:18px;';
-    wrap.dataset.dcList = spec.key;
-
-    const t = document.createElement('div');
-    t.style.cssText = 'font-size:12px;font-weight:600;margin-bottom:2px;';
-    t.textContent = spec.title;
-    const h = document.createElement('div');
-    h.style.cssText = 'font-size:11px;color:var(--text-dim);margin-bottom:6px;';
-    h.textContent = spec.hint;
-
-    const chips = document.createElement('div');
-    chips.className = 'dc-chips';
-    chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;';
-
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:6px;';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'vs-input';
-    input.style.cssText = 'max-width:280px;';
-    input.placeholder = spec.ph;
-    input.inputMode = 'numeric';
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'vs-btn';
-    add.style.cssText = 'font-size:11px;padding:4px 12px;border:1px solid var(--border,var(--col-control-panel-line-2718-colour));border-radius:6px;background:transparent;color:var(--text,var(--col-control-panel-line-2718-colour-2));cursor:pointer;';
-    add.textContent = 'Add';
-
-    function addId() {
-        const v = input.value.trim();
-        if (!v) return;
-        if (!/^\d+$/.test(v)) { input.style.borderColor = 'var(--col-control-panel-line-2724-border)'; return; }
-        input.style.borderColor = '';
-        if (!dcIds(wrap).includes(v)) chips.appendChild(dcChip(v));
-        input.value = '';
-    }
-    add.addEventListener('click', addId);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addId(); } });
-
-    row.append(input, add);
-    (ids || []).forEach(id => chips.appendChild(dcChip(id)));
-    wrap.append(t, h, chips, row);
-    return wrap;
-}
-
-function dcChip(id) {
-    const c = document.createElement('span');
-    c.className = 'dc-chip';
-    c.dataset.id = id;
-    c.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;border:1px solid var(--border,var(--col-control-panel-line-2742-colour));border-radius:999px;';
-
-    const label = document.createElement('span');
-    label.textContent = id;
-
-    const x = document.createElement('button');
-    x.type = 'button';
-    x.title = 'Remove';
-    x.style.cssText = 'background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;line-height:1;padding:0;';
-    x.textContent = '×';
-    x.addEventListener('click', () => c.remove());
-
-    c.append(label, x);
-    return c;
-}
-
-function dcIds(wrap) {
-    return Array.from(wrap.querySelectorAll('.dc-chip')).map(c => c.dataset.id);
-}
-
-document.getElementById('dc-token-show').addEventListener('click', e => {
-    const t = document.getElementById('dc-token');
-    const showing = t.type === 'text';
-    t.type = showing ? 'password' : 'text';
-    e.currentTarget.textContent = showing ? 'Show' : 'Hide';
-});
-
-document.getElementById('dc-save').addEventListener('click', async e => {
-    const btn = e.currentTarget;
-    const s = document.getElementById('dc-status');
-    const body = {
-        enabled: document.getElementById('dc-enabled').checked,
-        // Blank means "keep the saved token" — the panel never holds it, so it cannot round-trip it.
-        token:   document.getElementById('dc-token').value.trim(),
-        masterDiscordId: document.getElementById('dc-master').value.trim(),
-    };
-    DC_LISTS.forEach(spec => {
-        const wrap = document.querySelector(`[data-dc-list="${spec.key}"]`);
-        body[spec.key] = wrap ? dcIds(wrap) : [];
+    const shown = plAll().filter(p => !q || (p.name + ' ' + p.description).toLowerCase().includes(q));
+    if (shown.length === 0) { const n = plEl('p', '', q ? 'No plugin matches that.' : 'No plugins are installed.'); n.style.cssText = 'font-size:13px;color:var(--text-dim);'; host.appendChild(n); return; }
+    shown.forEach(p => {
+        const card = plEl('div', 'pl-card');
+        const row = plEl('div', 'pl-head');
+        row.appendChild(plIcon(p));
+        const mid = plEl('div'); mid.style.cssText = 'flex:1;min-width:0;';
+        mid.appendChild(plEl('p', 'pl-name', p.name));
+        const st = plEl('p', 'pl-status'); st.appendChild(plEl('span', 'pl-dot ' + p.state)); st.appendChild(plEl('span', '', p.status || ''));
+        mid.appendChild(st); row.appendChild(mid);
+        const go = plEl('button', 'pl-go', '›'); go.type = 'button'; go.setAttribute('aria-label', 'Open ' + p.name);
+        row.appendChild(go); card.appendChild(row);
+        card.addEventListener('click', () => plSetView(p.id));
+        host.appendChild(card);
     });
-
-    btn.disabled = true; s.textContent = 'Saving…';
-    try {
-        const r = await cpFetch('/api/v1/admin/integrations/discord', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) { s.textContent = d.error || 'Save failed.'; return; }
-        s.textContent = '';
-        document.getElementById('dc-restart').style.display = '';
-        document.getElementById('dc-token').value = '';
-        document.getElementById('dc-token-state').textContent =
-            'A token is saved. Leave blank to keep it, or paste a new one to replace it.';
-    } catch { s.textContent = 'Save failed.'; }
-    finally { btn.disabled = false; }
+}
+document.getElementById('pl-search').addEventListener('input', () => plMode === 'browse' ? plBrowse() : plGrid());
+document.getElementById('pl-back').addEventListener('click', () => plSetView(null));
+document.getElementById('pl-reload').addEventListener('click', async e => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Reloading…';
+    try { await cpFetch('/api/v1/admin/plugins/reload', { method: 'POST' }); await loadPlugins(); } catch { }
+    b.disabled = false; b.textContent = 'Reload';
 });
 
-// ── github integration ─────────────────────────────────────
-// ghPollTimer / stopGhPoll are declared up near srvPollTimer — see the comment there.
+// ── The store: plugins from the catalogs, searchable, with the featured ones first ──
+let plMode = 'installed', plCat = null, plCatBusy = false;
+function plSetMode(m) {
+    plMode = m;
+    document.getElementById('pl-t-installed').classList.toggle('on', m === 'installed');
+    document.getElementById('pl-t-browse').classList.toggle('on', m === 'browse');
+    document.getElementById('pl-list').style.display = m === 'installed' ? '' : 'none';
+    document.getElementById('pl-browse').style.display = m === 'browse' ? '' : 'none';
+    document.getElementById('pl-reload').style.display = m === 'installed' ? '' : 'none';
+    if (m === 'browse') plLoadCatalog(false); else plGrid();
+}
+document.getElementById('pl-t-installed').addEventListener('click', () => plSetMode('installed'));
+document.getElementById('pl-t-browse').addEventListener('click', () => plSetMode('browse'));
 
-async function loadGitHub() {
-    stopGhPoll();
-    document.getElementById('gh-code-box').style.display = 'none';
-    ghSetStatus('', false);
+async function plLoadCatalog(refresh) {
+    if (plCatBusy) return;
+    plCatBusy = true;
+    const host = document.getElementById('pl-browse');
+    if (!plCat) host.textContent = 'Loading the catalog…';
     try {
-        const r = await cpFetch('/api/v1/admin/integrations/github');
+        const r = await cpFetch('/api/v1/admin/plugins/catalog' + (refresh ? '?refresh=true' : ''));
         if (!r.ok) throw new Error();
-        const d = await r.json();
-        document.getElementById('gh-client-id').value = d.clientId || '';
-        document.getElementById('gh-connected-box').style.display = d.connected ? '' : 'none';
-        document.getElementById('gh-connect-box').style.display = d.connected ? 'none' : 'flex';
-        document.getElementById('gh-login').textContent = d.login || '';
-        document.getElementById('gh-commit-as').value = d.commitAs || 'Author';
-    } catch {
-        ghSetStatus('Failed to load GitHub settings.', true);
-    }
+        plCat = await r.json();
+    } catch { host.textContent = 'Couldn\'t load the catalog.'; plCatBusy = false; return; }
+    plCatBusy = false;
+    plBrowse();
 }
 
-// Saves on change — takes effect on ARI's next commit, no restart.
-document.getElementById('gh-commit-as').addEventListener('change', async e => {
-    const status = document.getElementById('gh-commit-as-status');
-    status.textContent = 'Saving…';
-    try {
-        const r = await cpFetch('/api/v1/admin/integrations/github', {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ commitAs: e.currentTarget.value }),
+function plStoreCard(c) {
+    const card = plEl('div', 'pl-card');
+    const row = plEl('div', 'pl-head');
+    const ico = plEl('div', 'pl-ico');
+    if (c.hasIcon) { const i = document.createElement('img'); i.alt = ''; i.src = '/api/v1/admin/plugins/catalog/' + encodeURIComponent(c.id) + '/icon'; ico.appendChild(i); } else ico.textContent = c.name.charAt(0).toUpperCase();
+    row.appendChild(ico);
+    const mid = plEl('div'); mid.style.cssText = 'flex:1;min-width:0;';
+    const nm = plEl('p', 'pl-name', c.name);
+    if (c.featured) nm.appendChild(plEl('span', 'pl-badge feat', '★ Featured'));
+    mid.appendChild(nm);
+    const meta = plEl('p', 'pl-meta');
+    if (c.author) meta.appendChild(plEl('span', '', c.author));
+    meta.appendChild(plEl('span', 'pl-badge', 'v' + c.latest));
+    if (c.installed) meta.appendChild(plEl('span', 'pl-badge ok', c.installedVersion ? 'Installed v' + c.installedVersion : 'Installed'));
+    mid.appendChild(meta);
+    row.appendChild(mid); card.appendChild(row);
+    card.appendChild(plEl('p', 'pl-desc', c.description));
+
+    const act = plEl('div', 'pl-getrow');
+    const label = c.updateAvailable ? 'Update to v' + c.latest : 'Install';
+    if (!c.installed || c.updateAvailable) {
+        const btn = plEl('button', 'vs-btn-primary', label); btn.type = 'button';
+        btn.addEventListener('click', async () => {
+            if (!confirm((c.updateAvailable ? 'Update ' : 'Install ') + c.name + ' v' + c.latest + '?\n\nA plugin is code that runs on this machine with full access to ARI. It arrives switched off, and you can read its code before you turn it on.')) return;
+            btn.disabled = true; btn.textContent = 'Installing…';
+            try {
+                const r = await cpFetch('/api/v1/admin/plugins/catalog/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: c.id }) });
+                if (!r.ok) { alert(await cpErrorText(r)); btn.disabled = false; btn.textContent = label; return; }
+                plState = (await r.json()).plugins;
+                await plLoadCatalog(true);
+            } catch { alert('The install failed.'); btn.disabled = false; btn.textContent = label; }
         });
-        status.textContent = r.ok ? 'Saved.' : 'Save failed.';
-    } catch { status.textContent = 'Save failed.'; }
-});
-
-function ghSetStatus(text, isError) {
-    const s = document.getElementById('gh-status');
-    s.textContent = text;
-    s.style.color = isError ? cv('--col-control-panel-line-2838-text') : 'var(--text-dim)';
-    s.style.fontWeight = isError ? '600' : 'normal';
+        act.appendChild(btn);
+    }
+    if (c.installed) { const open = plEl('button', 'vs-btn-outline', 'Open settings'); open.type = 'button'; open.addEventListener('click', () => { plSetMode('installed'); plSetView(c.id); }); act.appendChild(open); }
+    if (c.repo) { const a = plEl('a', 'pl-link', 'Source ↗'); a.href = c.repo; a.target = '_blank'; a.rel = 'noopener'; act.appendChild(a); }
+    card.appendChild(act);
+    return card;
 }
 
-async function ghSaveClientId(clientId) {
-    const r = await cpFetch('/api/v1/admin/integrations/github', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId }),
+function plBrowse() {
+    const host = document.getElementById('pl-browse');
+    if (!plCat) return;
+    host.innerHTML = '';
+    host.appendChild(plEl('p', 'pl-intro', 'Plugins from the official A.R.I Plugins catalogue and any catalogues you add. Each download is checked against a checksum before it is installed, and every plugin arrives switched off.'));
+    const bar = plEl('div', 'pl-bar');
+    const refresh = plEl('button', 'vs-btn-outline', 'Refresh'); refresh.type = 'button';
+    refresh.addEventListener('click', () => { refresh.disabled = true; plLoadCatalog(true); });
+    const cats = plEl('button', 'vs-btn-outline', 'Catalogs…'); cats.type = 'button';
+    cats.addEventListener('click', async () => {
+        const now = plCat.sources.slice(1).join('\n');
+        const text = prompt('Extra catalogs, one address per line (the official one is always included):', now);
+        if (text === null) return;
+        const r = await cpFetch('/api/v1/admin/plugins/catalog/sources', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ extra: text.split('\n') }) });
+        if (!r.ok) { alert(await cpErrorText(r)); return; }
+        plLoadCatalog(true);
+    });
+    bar.appendChild(refresh); bar.appendChild(cats);
+    host.appendChild(bar);
+    plCat.errors.forEach(e => { const n = plEl('p', 'pl-help', e); n.style.color = '#d85a30'; host.appendChild(n); });
+
+    const q = document.getElementById('pl-search').value.trim().toLowerCase();
+    const list = plCat.plugins.filter(c => !q || (c.name + ' ' + c.description + ' ' + (c.author || '')).toLowerCase().includes(q));
+    bar.appendChild(plEl('span', 'pl-count', list.length + (list.length === 1 ? ' plugin' : ' plugins')));
+    if (!list.length) { const n = plEl('p', '', q ? 'No plugin matches that.' : 'The catalog has no plugins yet.'); n.style.cssText = 'font-size:13px;color:var(--text-dim);'; host.appendChild(n); return; }
+    const section = (title, items) => {
+        if (!items.length) return;
+        if (title) host.appendChild(plEl('div', 'pl-h', title));
+        const g = plEl('div', 'pl-grid'); items.forEach(c => g.appendChild(plStoreCard(c))); host.appendChild(g);
+    };
+    if (q) section('', list);
+    else { section('★ Featured', list.filter(c => c.featured)); section(list.some(c => c.featured) ? 'All plugins' : '', list.filter(c => !c.featured)); }
+}
+
+// Installing from an .ari file: the button, or a file dropped anywhere on the Plugins page.
+async function plInstallFile(file) {
+    if (!file) return;
+    if (!/\.(ari|zip)$/i.test(file.name)) { alert('That isn\'t an .ari file.'); return; }
+    if (!confirm('Install ' + file.name + '?\n\nA plugin is code that runs on this machine with full access to ARI. Only install ones you trust. It arrives switched off, and you can read its code before you turn it on.')) return;
+    try {
+        const r = await cpFetch('/api/v1/admin/plugins/install', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+        if (!r.ok) { alert(await cpErrorText(r)); return; }
+        const j = await r.json();
+        await loadPlugins();
+        plSetView(j.id);
+    } catch { alert('The install failed.'); }
+}
+document.getElementById('pl-install').addEventListener('click', () => document.getElementById('pl-file-input').click());
+document.getElementById('pl-file-input').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; plInstallFile(f); });
+(() => {
+    // Dropping an .ari file anywhere in the control panel installs it. The full-screen hint only shows on the Plugins tab, because while
+    // a file is being dragged its name can't be read yet.
+    const tab = () => document.getElementById('tab-plugins'), drop = () => document.getElementById('pl-drop');
+    const files = e => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+    const onPlugins = () => tab() && tab().offsetParent !== null;
+    let depth = 0;
+    document.addEventListener('dragenter', e => { if (files(e) && onPlugins()) { depth++; drop().style.display = 'flex'; } });
+    document.addEventListener('dragleave', e => { if (files(e) && onPlugins() && --depth <= 0) { depth = 0; drop().style.display = 'none'; } });
+    document.addEventListener('dragover', e => { if (files(e) && onPlugins()) e.preventDefault(); });
+    document.addEventListener('drop', e => {
+        depth = 0; drop().style.display = 'none';
+        const pkg = e.dataTransfer && [...e.dataTransfer.files].find(f => /\.ari$/i.test(f.name));
+        if (!pkg) return;                       // any other file: leave it to whatever else is on the page
+        e.preventDefault();
+        if (!onPlugins() && typeof switchTab === 'function') switchTab('plugins');
+        plInstallFile(pkg);
+    });
+})();
+
+// The plugin's own picture, or a letter tile when it hasn't got one.
+function plIcon(p, big) {
+    const t = plEl('div', 'pl-ico' + (big ? ' big' : ''));
+    if (p.hasIcon) { const i = document.createElement('img'); i.alt = ''; i.src = '/api/v1/admin/plugins/' + encodeURIComponent(p.id) + '/icon'; t.appendChild(i); }
+    else t.textContent = p.name.charAt(0).toUpperCase();
+    return t;
+}
+
+function plHeader(p, withSwitch) {
+    const head = plEl('div', 'pl-head');
+    head.appendChild(plIcon(p, true));
+    const mid = plEl('div'); mid.style.cssText = 'flex:1;min-width:0;';
+    const name = plEl('p', 'pl-name', p.name); name.style.fontSize = '20px'; name.appendChild(plEl('span', 'pl-tag', p.author));
+    mid.appendChild(name);
+    const st = plEl('p', 'pl-status'); st.appendChild(plEl('span', 'pl-dot ' + p.state)); st.appendChild(plEl('span', '', p.status || ''));
+    mid.appendChild(st);
+    mid.appendChild(plEl('p', 'pl-desc', p.description));
+    head.appendChild(mid);
+    if (withSwitch) head.appendChild(withSwitch);
+    return head;
+}
+
+function plReplace(updated) {
+    const i = plState.findIndex(p => p.id === updated.id);
+    if (i >= 0) plState[i] = updated;
+    plRender();
+}
+
+async function plPatch(id, body) {
+    const r = await cpFetch('/api/v1/admin/plugins/' + encodeURIComponent(id) + '/settings', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const d = await r.json().catch(() => ({}));
-    return { ok: r.ok, error: d.error };
+    return { ok: r.ok, data: d };
 }
 
-document.getElementById('gh-client-id-save').addEventListener('click', async e => {
-    const btn = e.currentTarget;
-    const clientId = document.getElementById('gh-client-id').value.trim();
-    if (!clientId) { ghSetStatus('Enter a Client ID first.', true); return; }
-    btn.disabled = true; ghSetStatus('Saving…', false);
-    try {
-        const { ok, error } = await ghSaveClientId(clientId);
-        ghSetStatus(ok ? 'Saved.' : (error || 'Save failed.'), !ok);
-    } catch { ghSetStatus('Save failed.', true); }
-    finally { btn.disabled = false; }
-});
+function plDetail(p, box) {
+    const sw = plEl('input', 'pl-switch'); sw.type = 'checkbox'; sw.checked = !!p.enabled; sw.title = p.enabled ? 'Switch off' : 'Switch on';
+    sw.addEventListener('change', async () => {
+        sw.disabled = true;
+        try {
+            const { ok, data } = await plPatch(p.id, { enabled: sw.checked });
+            if (!ok) { alert(data.error || 'That failed.'); sw.checked = !sw.checked; sw.disabled = false; return; }
+            plReplace(data.plugin);
+        } catch { sw.checked = !sw.checked; sw.disabled = false; }
+    });
+    const card = plEl('div', 'pl-card'); card.style.padding = '20px 22px';
+    card.appendChild(plHeader(p, sw));
+    box.appendChild(card);
 
-// Connect always saves whatever's currently in the field first, so pasting an ID and clicking
-// Connect works in one step — it doesn't silently depend on a separate Save click having happened.
-document.getElementById('gh-connect-btn').addEventListener('click', async e => {
-    const btn = e.currentTarget;
-    const clientId = document.getElementById('gh-client-id').value.trim();
-    if (!clientId) { ghSetStatus('Enter a Client ID first.', true); return; }
-    btn.disabled = true; ghSetStatus('Saving Client ID…', false);
-    try {
-        const { ok, error } = await ghSaveClientId(clientId);
-        if (!ok) { ghSetStatus(error || 'Failed to save Client ID.', true); return; }
-
-        ghSetStatus('Starting…', false);
-        const r = await cpFetch('/api/v1/admin/integrations/github/connection', { method: 'POST' });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) { ghSetStatus(d.error || 'Failed to start.', true); return; }
-        ghSetStatus('', false);
-        const link = document.getElementById('gh-verify-link');
-        link.href = d.verificationUri; link.textContent = d.verificationUri;
-        document.getElementById('gh-user-code').textContent = d.userCode;
-        document.getElementById('gh-code-box').style.display = '';
-        stopGhPoll();
-        ghPollTimer = setInterval(pollGhConnect, 3000);
-    } catch { ghSetStatus('Failed to start.', true); }
-    finally { btn.disabled = false; }
-});
-
-async function pollGhConnect() {
-    let d;
-    try {
-        const r = await cpFetch('/api/v1/admin/integrations/github/connection');
-        if (!r.ok) return;
-        d = await r.json();
-    } catch { return; }
-
-    if (d.state === 'connected') {
-        stopGhPoll();
-        await loadGitHub();
-    } else if (d.state === 'expired') {
-        stopGhPoll();
-        document.getElementById('gh-code-box').style.display = 'none';
-        ghSetStatus('Code expired — click Connect to try again.', true);
-    } else if (d.state === 'denied') {
-        stopGhPoll();
-        document.getElementById('gh-code-box').style.display = 'none';
-        ghSetStatus('Authorization was denied.', true);
-    } else if (d.state === 'error') {
-        stopGhPoll();
-        document.getElementById('gh-code-box').style.display = 'none';
-        ghSetStatus(d.error || 'Something went wrong.', true);
+    if (p.actions.length) {
+        const sec = plEl('div', 'pl-section'); sec.appendChild(plEl('h3', '', 'Actions'));
+        const row = plEl('div', 'pl-row');
+        const msg = plEl('span'); msg.style.cssText = 'font-size:12px;color:var(--text-dim);';
+        p.actions.forEach(a => {
+            const b = plEl('button', 'vs-btn-outline', a.label); b.type = 'button'; b.title = a.help;
+            b.addEventListener('click', async () => {
+                if (a.confirm && !confirm(a.help + '\n\nContinue?')) return;
+                b.disabled = true; msg.textContent = 'Working…';
+                try {
+                    const r = await cpFetch('/api/v1/admin/plugins/' + encodeURIComponent(p.id) + '/actions/' + encodeURIComponent(a.key), { method: 'POST' });
+                    const d = await r.json().catch(() => ({}));
+                    msg.textContent = d.message || d.error || (r.ok ? 'Done.' : 'That failed.');
+                } catch { msg.textContent = 'That failed.'; }
+                finally { b.disabled = false; }
+            });
+            row.appendChild(b);
+        });
+        row.appendChild(msg); sec.appendChild(row); box.appendChild(sec);
     }
+
+    if (p.settings.length) {
+        const sec = plEl('div', 'pl-section'); sec.appendChild(plEl('h3', '', 'Settings'));
+        const wrap = plFields(p); wrap.style.cssText = 'margin:0;padding:0;border:none;';
+        sec.appendChild(wrap); box.appendChild(sec);
+    }
+
+    if ((p.tools || []).length) {
+        const tsec = plEl('div', 'pl-section'); tsec.appendChild(plEl('h3', '', 'Tools this plugin adds'));
+        const list = plEl('div'); list.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+        p.tools.forEach(t => {
+            const row = plEl('div'); row.style.cssText = 'font-size:13px;';
+            const n = plEl('code', '', t.name); n.style.cssText = 'font-family:var(--font-mono,monospace);font-size:12px;margin-right:8px;';
+            row.appendChild(n); row.appendChild(plEl('span', '', t.description)); row.lastChild.style.color = 'var(--text-dim)';
+            list.appendChild(row);
+        });
+        tsec.appendChild(list);
+        tsec.appendChild(plEl('p', 'pl-help', p.enabled ? 'These are in Ari\'s tool list while this plugin is on.' : 'Switched off: Ari doesn\'t have these tools until the plugin is on.'));
+        box.appendChild(tsec);
+    }
+
+    if (p.removable) {
+        if (p.exportable) {
+            const xsec = plEl('div', 'pl-section'); xsec.appendChild(plEl('h3', '', 'Share'));
+            const ex = plEl('a', 'vs-btn-outline', 'Export as .ari file'); ex.href = '/api/v1/admin/plugins/' + encodeURIComponent(p.id) + '/package'; ex.download = p.id + '.ari'; ex.style.textDecoration = 'none';
+            xsec.appendChild(ex);
+            xsec.appendChild(plEl('p', 'pl-help', 'One file with the plugin\'s code and picture, and none of your settings or tokens. Drop it on another ARI\'s Plugins page to install it there.'));
+            box.appendChild(xsec);
+        }
+        const rsec = plEl('div', 'pl-section'); rsec.appendChild(plEl('h3', '', 'Remove'));
+        const rm = plEl('button', 'vs-btn-outline', 'Remove this plugin'); rm.type = 'button';
+        rm.addEventListener('click', async () => {
+            if (!confirm('Remove ' + p.name + '? Its tools go from Ari\'s list and its folder is deleted.')) return;
+            rm.disabled = true;
+            try {
+                const r = await cpFetch('/api/v1/admin/plugins/' + encodeURIComponent(p.id), { method: 'DELETE' });
+                if (r.ok) { plState = plState.filter(x => x.id !== p.id); plSetView(null); return; }
+                alert((await r.json().catch(() => ({}))).error || 'That failed.');
+            } catch { alert('That failed.'); }
+            rm.disabled = false;
+        });
+        rsec.appendChild(rm); box.appendChild(rsec);
+    }
+
+    const sec = plEl('div', 'pl-section'); sec.appendChild(plEl('h3', '', 'Code'));
+    if (!p.source.length) {
+        const n = plEl('p', '', 'This plugin doesn\'t include its source.'); n.style.cssText = 'font-size:13px;color:var(--text-dim);margin:0;'; sec.appendChild(n);
+    } else {
+        const wrap = plEl('div', 'pl-code'), files = plEl('div', 'pl-files'), pre = plEl('pre', 'pl-src', 'Loading…');
+        const show = async name => {
+            files.querySelectorAll('.pl-file').forEach(b => b.classList.toggle('on', b.dataset.name === name));
+            pre.textContent = 'Loading…';
+            try {
+                const r = await cpFetch('/api/v1/admin/plugins/' + encodeURIComponent(p.id) + '/source?file=' + encodeURIComponent(name));
+                pre.textContent = r.ok ? await r.text() : 'Couldn\'t load that file.';
+            } catch { pre.textContent = 'Couldn\'t load that file.'; }
+        };
+        p.source.forEach(f => {
+            const b = plEl('button', 'pl-file', f.name); b.type = 'button'; b.dataset.name = f.name; b.title = f.lines + ' lines';
+            b.addEventListener('click', () => show(f.name)); files.appendChild(b);
+        });
+        wrap.appendChild(files); wrap.appendChild(pre); sec.appendChild(wrap);
+        sec.appendChild(plEl('p', 'pl-help', 'Read-only. This is the code that is running.'));
+        show((p.source.find(f => f.name === 'DiscordPlugin.cs') || p.source[0]).name);
+    }
+    box.appendChild(sec);
 }
 
-document.getElementById('gh-disconnect').addEventListener('click', async e => {
-    if (!confirm("Disconnect ARI's GitHub account? She will lose access to private repos until reconnected.")) return;
-    const btn = e.currentTarget;
-    btn.disabled = true;
-    try {
-        await cpFetch('/api/v1/admin/integrations/github/connection', { method: 'DELETE' });
-        await loadGitHub();
-    } finally { btn.disabled = false; }
-});
+function plFields(p) {
+    const box = plEl('div', 'pl-fields');
+    const readers = {};
+
+    p.settings.forEach(s => {
+        const f = plEl('div', 'pl-field');
+        f.appendChild(plEl('label', '', s.label));
+        const value = p.values[s.key];
+
+        if (s.type === 'idlist') {
+            let ids = (value || []).slice();
+            const chips = plEl('div', 'pl-chips');
+            const draw = () => {
+                chips.innerHTML = '';
+                ids.forEach(id => {
+                    const c = plEl('span', 'pl-chip', id);
+                    const x = plEl('button', '', '×'); x.type = 'button'; x.title = 'Remove';
+                    x.addEventListener('click', () => { ids = ids.filter(i => i !== id); draw(); });
+                    c.appendChild(x); chips.appendChild(c);
+                });
+            };
+            draw(); f.appendChild(chips);
+            const row = plEl('div', 'pl-row');
+            const inp = plEl('input', 'vs-input'); inp.type = 'text'; inp.inputMode = 'numeric'; inp.placeholder = s.placeholder || 'ID'; inp.style.cssText = 'width:240px;';
+            const add = plEl('button', 'vs-btn-outline', 'Add'); add.type = 'button';
+            const commit = () => {
+                const v = inp.value.trim();
+                if (!v) return;
+                if (!/^\d+$/.test(v)) { inp.style.borderColor = '#d85a30'; return; }
+                inp.style.borderColor = '';
+                if (!ids.includes(v)) ids.push(v);
+                inp.value = ''; draw();
+            };
+            add.addEventListener('click', commit);
+            inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+            row.appendChild(inp); row.appendChild(add); f.appendChild(row);
+            readers[s.key] = () => { commit(); return ids; };
+        } else {
+            const inp = plEl('input', 'vs-input');
+            inp.style.cssText = 'width:100%;max-width:420px;';
+            if (s.type === 'secret') { inp.type = 'password'; inp.autocomplete = 'off'; inp.placeholder = value ? 'Saved. Leave blank to keep it.' : (s.placeholder || ''); }
+            else { inp.type = 'text'; inp.value = value || ''; inp.placeholder = s.placeholder || ''; }
+            f.appendChild(inp);
+            readers[s.key] = () => inp.value.trim();
+        }
+        if (s.help) f.appendChild(plEl('p', 'pl-help', s.help));
+        box.appendChild(f);
+    });
+
+    const row = plEl('div', 'pl-row');
+    const save = plEl('button', 'vs-btn-primary', 'Save settings'); save.type = 'button';
+    const msg = plEl('span'); msg.style.cssText = 'font-size:12px;color:var(--text-dim);';
+    save.addEventListener('click', async () => {
+        const body = {};
+        p.settings.forEach(s => {
+            const v = readers[s.key]();
+            if (s.type === 'secret' && !v) return;     // blank keeps the saved secret
+            body[s.key] = v;
+        });
+        save.disabled = true; msg.textContent = 'Saving…';
+        try {
+            const { ok, data } = await plPatch(p.id, body);
+            if (!ok) { msg.textContent = data.error || 'Save failed.'; return; }
+            plReplace(data.plugin);
+            // plReplace redraws the card, so say how it went through the fresh status line instead.
+            if (data.startError) alert(p.name + ' saved, but it did not start: ' + data.startError);
+        } catch { msg.textContent = 'Save failed.'; }
+        finally { save.disabled = false; }
+    });
+    row.appendChild(save); row.appendChild(msg);
+    box.appendChild(row);
+    return box;
+}
 
 async function restoreBackup(file, count) {
     if (!confirm(`Restore ${count} note(s) from\n${file}?\n\nThis recreates missing notes and overwrites present ones to the snapshot. It does not delete anything.`)) return;
@@ -3521,12 +4189,19 @@ function appendLogLine(text) {
     if (!logUserScrolled) logLines.scrollTop = logLines.scrollHeight;
     else scrollHint.classList.add('visible');
 }
-(function connectLog() {
-    const es = cpEventSource('/api/v1/admin/system/log');
+// The live log only streams while the Overview page is showing, so no other page holds a connection for it.
+let logEs = null;
+const logWanted = () => document.getElementById('cp-grid-wrap')?.style.display !== 'none';
+function openLog() {
+    if (logEs) return;
+    const es = logEs = cpEventSource('/api/v1/admin/system/log');
     es.onopen    = () => { logStatus.textContent = 'live'; logStatus.classList.add('live'); };
-    es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); setTimeout(connectLog, 3000); es.close(); };
+    es.onerror   = () => { logStatus.textContent = 'reconnecting…'; logStatus.classList.remove('live'); es.close(); logEs = null; setTimeout(() => { if (logWanted()) openLog(); }, 3000); };
     es.onmessage = e  => appendLogLine(e.data.replace(/↵/g, '\n'));
-})();
+}
+function closeLog() { if (logEs) { logEs.close(); logEs = null; logStatus.textContent = 'paused'; logStatus.classList.remove('live'); } }
+openLog();
+setTimeout(() => { cpStreamsReady = true; }, 0);
 
 // ── RAM line chart ────────────────────────────────────────
 const RAM_HISTORY = 1800;
@@ -3977,8 +4652,7 @@ const AG_TREE = [
                    ['transcript', 'the conversation so far']] },
     ]},
     { name: 'Coder',      prompts: [], phases: true },
-    { name: 'MemoryAgent', abstract: true, shared: 'MemoryAgent', children: [
-        { name: 'Engram', prompts: [
+    { name: 'Engram', prompts: [
             { key: 'ExtractSystem', label: 'Extract: system prompt',
               hint: 'step one: lists every entity worth remembering, with the real lines it came from', tokens: [] },
             { key: 'ExtractTask',   label: 'Extract: task',
@@ -3997,29 +4671,6 @@ const AG_TREE = [
               hint: 'the question that gate is asked',
               tokens: [['transcript', 'the conversation being judged']] },
         ]},
-        { name: 'Refactor',  prompts: [
-            { key: 'Task', label: 'Task', hint: 'the turn sent on each scheduled run', tokens: [] },
-        ]},
-    ]},
-];
-
-const AG_SHARED = {
-    MemoryAgent: [
-        { key: 'GraphRulebook', label: 'Graph rulebook',
-          hint: "appended to each child's system prompt — the one taxonomy/hub/dedup rulebook", tokens: [] },
-        { key: 'EpochPrompt',  label: 'Epoch prompt',
-          hint: 'sent after each look at the graph',
-          tokens: [['seedTitle', 'the note at the centre of this neighbourhood'],
-                   ['skeleton', "the neighbourhood's notes and their links"],
-                   ['task', "the child agent's own task text, inserted here"]] },
-    ],
-};
-
-const AG_BUDGET_TOKENS = [
-    ['thinkingTokens', 'thinking tokens allowed before the chain of thought is cut off mid-sentence'],
-    ['replyTokens',    'tokens allowed for the reply itself before it is truncated'],
-    ['contextTokens',  'total context the agent may use before older turns are dropped'],
-    ['toolBudget',     'tool calls allowed in one turn before the loop is stopped'],
 ];
 
 var agData = null;
@@ -4228,9 +4879,8 @@ const AG_INFO = [
     ['Coder',     'Code mode: reads and edits files and runs commands inside a project.'],
     ['Context',   'Keeps a running summary of each conversation and gives threads their titles.'],
     ['Awareness', 'Decides whether she should reply in group chats such as Discord.'],
-    ['Memory',    'Recalls relevant notes from the brain while a conversation is going.'],
+    ['Recall',    'Recalls what the conversation needs from the brain: it is given the names of notes that might matter, opens them with tools, follows their links, and writes the memory block Dialogue reads. It keeps its own sub-thread under each chat.'],
     ['Engram',    'Writes new memories after conversations (reflection). Off makes the brain read-only.'],
-    ['Refactor',  'Tidies the memory graph in the background on a schedule.'],
     ['Subagent',  'Runs the side tasks she starts with spawn_agent.'],
 ];
 
@@ -4287,7 +4937,7 @@ function agRenderAgents() {
 
 function agRestartNote(id) {
     const n = agEl('div', 'display:none;margin-top:12px;padding:10px 12px;border:1px solid var(--col-control-panel-line-4058-border);background:var(--col-control-panel-line-4058-background);color:var(--col-control-panel-line-4058-text);border-radius:8px;font-size:12px;',
-        'Saved. Restart A·R·I for these changes to take effect.');
+        'Saved. Custom agents apply straight away; changes to a built-in agent need A·R·I restarted.');
     n.id = id; return n;
 }
 
@@ -4322,10 +4972,12 @@ function prRenderList() {
         list.append(it);
     };
     const group = t => { const g = agEl('div', '', t); g.className = 'pr-group'; list.append(g); };
-    group('Shared');
-    item('shared:budgets', 'Budgets block');
-    item('shared:memory', 'Memory graph rules');
-    group('Agents');
+    const ordered = agOrdered();
+    // Everything ARI runs from its own code, then the agents you make yourself.
+    const isOwn = a => a.custom && !a.system;
+    group('System Agents');
+    ordered.filter(a => !isOwn(a) && a.name !== 'Memory').forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
+    group('Your agents');
     const add = agEl('div', 'color:var(--text-dim);'); add.className = 'pr-item'; add.append(agEl('span', '', '+ New agent'));
     add.onclick = async () => {
         const name = (prompt('Name for the new agent?') || '').trim(); if (!name) return;
@@ -4337,32 +4989,35 @@ function prRenderList() {
         const n = document.getElementById('pr-restart'); if (n) n.style.display = '';
     };
     list.append(add);
-    agOrdered().forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
+    ordered.filter(isOwn).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
 }
 
 function prRenderEditor() {
     const ed = document.getElementById('pr-editor'); ed.innerHTML = '';
     const title = (t, sub) => { ed.append(agEl('h2', 'font-size:20px;font-weight:700;margin:0 0 4px;', t)); ed.append(agEl('p', 'font-size:13px;color:var(--text-dim);margin:0 0 22px;line-height:1.5;', sub)); };
-    if (prSelected === 'shared:budgets') {
-        title('Budgets block', "Appended to the bottom of every agent's prompt.");
-        prField(ed, 'Template', 'A line whose token is 0 is dropped; if all four are 0 the block is omitted. The numbers come from each agent\'s own settings. It always sits at the bottom of the system prompt: the values change every turn, and everything above must stay identical or the llama-server cache re-prefills.',
-                AG_BUDGET_TOKENS, agData.shared.budgets.Block, v => agData.shared.budgets.Block = v);
-    } else if (prSelected === 'shared:memory') {
-        title('Memory graph rules', 'Shared by Engram, Refactor and Curiosity: the rulebook and the per-pass prompt they all use.');
-        (AG_SHARED.MemoryAgent || []).forEach(p => prField(ed, p.label, p.hint, p.tokens, agData.shared.memoryAgent[p.key], v => agData.shared.memoryAgent[p.key] = v));
-    } else {
+    {
         const name = prSelected.slice(6), agent = (agData.agents || []).find(a => a.name === name), spec = agSpec(name);
         if (!agent) { ed.textContent = 'Not found.'; return; }
-        title(name, agent.custom ? (agent.description || 'A custom agent. Wire it into a pipeline on the Pipelines page.') : (AG_INFO.find(x => x[0] === name) || [])[1] || '');
+        title(name, (AG_INFO.find(x => x[0] === name) || [])[1] || (agent.custom ? (agent.description || 'A custom agent. Wire it into a pipeline on the Pipelines page.') : ''));
         const hdr = agEl('div', 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:-8px 0 24px;');
         hdr.append(buildToggle(agent.enabled !== false, on => { agent.enabled = on; agDirty(); prRenderList(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Runs on'), agBindingPickers(agent));
-        if (agent.custom) {
+        if (agent.custom && !agent.system) {
+            hdr.append(buildToggle(!!agent.readOnly, on => { agent.readOnly = on; agDirty(); }), agEl('span', 'font-size:13px;color:var(--text-dim);', 'Read-only (can look things up, can\'t change anything)'));
             const del = agEl('button', 'margin-left:auto;', 'Delete agent'); del.className = 'agv-btn'; del.type = 'button';
             del.onclick = async () => { if (!confirm('Delete ' + name + '? Pipelines using it will stop being valid.')) return; const r = await cpFetch('/api/v1/admin/agents/' + encodeURIComponent(name), { method: 'DELETE' }); if (!r.ok) { alert('Could not delete it.'); return; } agIsDirty = false; agData = null; prSelected = 'agent:Dialogue'; await loadAgents(); };
             hdr.append(del);
         }
         ed.append(hdr);
         prField(ed, 'Agent prompt', 'The system prompt this agent starts every conversation with.', agent.custom ? [['message', "the user's latest message (always available)"], ['history', 'the conversation so far — wire START into this port in a pipeline'], ['anything_else', 'any other {name} becomes an input port you can wire another agent into']] : (spec.systemTokens || []), agent.agentPrompt, v => agent.agentPrompt = v);
+        if (agent.custom) { const row = agEl('div', 'margin:0 0 18px;'); row.append(agEl('label', 'display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;', 'Tools it starts with'));
+            const inp = document.createElement('input'); inp.type = 'text'; inp.className = 'vs-input'; inp.style.cssText = 'width:100%;max-width:520px;box-sizing:border-box;'; inp.placeholder = 'e.g. memory_tools'; inp.value = (agent.preloadedTools || []).join(', ');
+            inp.oninput = () => { agent.preloadedTools = inp.value.split(',').map(x => x.trim()).filter(Boolean); agDirty(); };
+            row.append(inp, agEl('div', 'font-size:12px;color:var(--text-dim);margin-top:4px;', 'Tool groups loaded from the start, so it does not have to ask for them. Behind the scenes in a pipeline an agent can only use tools that read.')); ed.append(row); }
+        if (agent.custom) { const row = agEl('div', 'margin:0 0 18px;'); row.append(agEl('label', 'display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;', 'Max tool calls'));
+            const inp = document.createElement('input'); inp.type = 'number'; inp.min = 0; inp.className = 'vs-input'; inp.style.cssText = 'width:90px;'; inp.value = agent.maxToolCalls || 0;
+            inp.oninput = () => { agent.maxToolCalls = Math.max(0, parseInt(inp.value) || 0); agDirty(); };
+            row.append(inp, agEl('div', 'font-size:12px;color:var(--text-dim);margin-top:4px;', 'How many tool calls it may make for one message. After that its tools are taken away and it has to answer with what it has. 0 means no limit.')); ed.append(row); }
+        if (agent.custom) prField(ed, 'Message prompt', 'The message this agent is sent, with {tokens} filled in like the prompt above. Leave it empty to send the user\'s latest message as it is. Use it to keep a role in the prompt above and the task here.', [['message', "the user's latest message"], ['anything_else', 'any other {name} becomes an input port']], agent.messagePrompt || '', v => agent.messagePrompt = v);
         (spec.prompts || []).forEach(p => { agent.promptTemplates = agent.promptTemplates || {}; prField(ed, p.label, p.hint, p.tokens, agent.promptTemplates[p.key], v => agent.promptTemplates[p.key] = v); });
         const known = new Set((spec.prompts || []).map(p => p.key));
         Object.keys(agent.promptTemplates || {}).filter(k => !known.has(k)).forEach(k => {
@@ -4390,13 +5045,20 @@ function prRenderEditor() {
 // ── Pipelines: node editor backed by /pipeline-graphs ──
 // START (the conversation) → agents → END (the user). An agent's input ports are its {tokens} (custom agents) or fixed
 // (built-ins); each port takes one wire. The graph marked "active" answers chat messages in place of the built-in Dialogue.
-var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = {};
+var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = {}, pipMode = 'list';
 const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories'] };
 const pipUid = () => Math.random().toString(36).slice(2, 8);
-const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message');
-function pipDef(n) { return (agData.agents || []).find(a => a.name === n.agent) || {}; }
-function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipTokens(d.agentPrompt) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
-function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'end' ? ['stream'] : []; }
+const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message' && x !== 'since');   // both are always filled in, never wired
+const pipAgentTokens = d => pipTokens((d.agentPrompt || '') + '\n' + (d.messagePrompt || ''));
+function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a => a.name === n.agent) || {} : {}; }
+// A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
+const PIP_SUB_PORTS = ['history', 'message'];
+function pipSubOf(n) { return (pipD.data.pipelines || []).find(x => x.id === n.pipeline); }
+function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n).name : '(missing pipeline)') : n.agent === 'Memory' ? 'Recall' : n.agent; }
+const pipIsBox = n => n.type === 'agent' || n.type === 'pipeline';
+function pipOutputs(n) { return n.type === 'start' ? ['history', 'message'] : ['output']; }
+function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipAgentTokens(d) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
+function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'pipeline' ? PIP_SUB_PORTS : n.type === 'end' ? ['stream'] : []; }
 function pipCur() { return pipD.data.pipelines.find(p => p.id === pipD.cur) || pipD.data.pipelines[0]; }
 function pipView(p) { return pipViews[p.id] = pipViews[p.id] || { x: 0, y: 0, k: 1, fresh: true }; }
 function pipTouch() { pipDirty = true; const s = document.getElementById('pip-status'); if (s) s.textContent = 'Unsaved changes'; }
@@ -4409,7 +5071,7 @@ async function pipLoad() {
     try {
         const r = await cpFetch('/api/v1/admin/pipelineGraphs'); if (!r.ok) throw new Error();
         const j = await r.json();
-        pipD = { data: j.data, ports: j.ports || {}, running: j.running || null, problems: j.problems || {}, cur: (pipD && pipD.cur) || j.data.active || j.data.pipelines[0].id };
+        pipD = { data: j.data, ports: j.ports || {}, optional: j.optional || {}, problems: j.problems || {}, cur: (pipD && pipD.cur) || j.data.pipelines[0].id };
         pipDirty = false;
     } catch { host.textContent = 'Failed to load pipelines.'; return; }
     pipRender();
@@ -4420,42 +5082,102 @@ async function pipSave() {
         const r = await cpFetch('/api/v1/admin/pipelineGraphs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pipD.data) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { st.textContent = (j.error || 'Save failed.') + ' ' + ((j.problems || []).join(' ')); return; }
-        pipD.running = j.running || null; pipD.problems = j.problems || {}; pipDirty = false; st.textContent = 'Saved.'; pipRender();
+        pipD.problems = j.problems || {}; pipDirty = false; st.textContent = 'Saved.'; pipRender();
     } catch { st.textContent = 'Save failed.'; }
+}
+
+// The Pipelines tab opens on a list. Each row says whether the pipeline can run, whether it is offered when starting a chat, and
+// Edit opens the editor on it; only then is the canvas drawn.
+function pipProblems(q) { return (pipD.problems || {})[q.id] || []; }
+async function pipPersist() {
+    const r = await cpFetch('/api/v1/admin/pipelineGraphs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pipD.data) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((j.error || 'Save failed.') + ' ' + ((j.problems || []).join(' ')));
+    pipD.problems = j.problems || {}; pipDirty = false;
+}
+function pipRenderList() {
+    const host = document.getElementById('ag-view-pipelines'); host.innerHTML = '';
+    const head = agEl('div', 'display:flex;align-items:center;gap:12px;margin-bottom:6px;');
+    head.append(agEl('div', 'font-size:20px;font-weight:700;flex:1;', 'Pipelines'));
+    const neu = agEl('button', '', '+ New pipeline'); neu.className = 'vs-btn-primary'; neu.type = 'button';
+    neu.onclick = async () => { const n = pipBlank('Pipeline ' + (pipD.data.pipelines.length + 1)); pipD.data.pipelines.push(n); pipD.cur = n.id; pipSel = null; pipMode = 'edit'; pipTouch(); pipRender(); };
+    head.append(neu);
+    const note = agEl('p', 'font-size:13px;color:var(--text-dim);line-height:1.5;max-width:760px;margin:0 0 16px;', 'A pipeline is a way of building a reply: the agents that work on it and how they pass work along. Switch one on to offer it when starting a new chat. Default is always offered, and can be edited but not deleted.');
+    const list = agEl('div', 'display:flex;flex-direction:column;gap:10px;max-width:860px;');
+    pipD.data.pipelines.forEach(q => {
+        const row = agEl('div', 'display:flex;align-items:center;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble);');
+        const text = agEl('div', 'flex:1;min-width:0;');
+        const title = agEl('div', 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;');
+        title.append(agEl('span', 'font-size:14px;font-weight:600;', q.name));
+        if (q.id === 'default') { const b = agEl('span', '', 'Default'); b.className = 'mdl-badge startup'; title.append(b); }
+        const probs = pipProblems(q);
+        const stat = agEl('div', 'font-size:12.5px;color:' + (probs.length ? '#d9a441' : 'var(--text-dim)') + ';line-height:1.45;',
+            probs.length ? '⚠ ' + probs[0] + (probs.length > 1 ? ' (+' + (probs.length - 1) + ' more)' : '') : (q.nodes.filter(n => n.type === 'agent' || n.type === 'pipeline').map(n => n.type === 'pipeline' ? (pipSubOf(n) || { name: '?' }).name : (n.agent === 'Memory' ? 'Recall' : n.agent)).join(' → ') || 'No steps yet.'));
+        text.append(title, stat);
+        const right = agEl('div', 'display:flex;align-items:center;gap:12px;');
+        const lab = agEl('span', 'font-size:12px;color:var(--text-dim);', 'Show in new chat');
+        const tog = q.id === 'default' ? (() => { const t = agEl('span', ''); t.className = 'cp-toggle on'; t.style.cssText = 'opacity:.45;cursor:not-allowed;'; t.title = 'Default is always offered.'; t.innerHTML = '<span class="cp-toggle-track"></span><span class="cp-toggle-thumb"></span>'; return t; })()
+            : buildToggle(!q.hidden, async on => {
+                q.hidden = !on;
+                try { await pipPersist(); } catch (e) { q.hidden = on; alert(e.message); pipRenderList(); }
+            });
+        const edit = agEl('button', '', 'Edit'); edit.className = 'agv-btn'; edit.type = 'button'; edit.onclick = () => { pipD.cur = q.id; pipSel = null; pipMode = 'edit'; pipRender(); };
+        right.append(lab, tog, edit);
+        if (q.id !== 'default') {
+            const del = agEl('button', '', 'Delete'); del.className = 'agv-btn'; del.type = 'button';
+            del.onclick = async () => { if (!confirm('Delete "' + q.name + '"? Chats using it go back to Default.')) return; pipD.data.pipelines = pipD.data.pipelines.filter(x => x.id !== q.id); try { await pipPersist(); } catch (e) { alert(e.message); await pipLoad(); return; } pipRenderList(); };
+            right.append(del);
+        }
+        row.append(text, right); list.append(row);
+    });
+    host.append(head, note, list);
 }
 
 function pipRender() {
     const host = document.getElementById('ag-view-pipelines'); if (!host || !pipD) return;
+    if (pipMode === 'list') return pipRenderList();
     const p = pipCur(); host.innerHTML = '';
-    const answering = pipD.running === p.id;
-    const bar = agEl('div', 'display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;');
-    const sel = agEl('select', 'font-size:13px;padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:transparent;color:var(--text);');
-    pipD.data.pipelines.forEach(q => { const o = agEl('option', '', q.name + (pipD.running === q.id ? '  ● answering chats' : '')); o.value = q.id; sel.append(o); });
-    sel.value = p.id; sel.onchange = () => { pipD.cur = sel.value; pipSel = null; pipRender(); };
+    // The editor's header: back to the list, which pipeline this is, and the actions for it.
+    const bar = agEl('div', 'display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--border);');
     const btn = (t, f, cls) => { const b = agEl('button', '', t); b.type = 'button'; b.className = cls || 'agv-btn'; b.onclick = f; return b; };
-    const add = btn('+ Add agent', () => pipAddMenu(add), 'vs-btn-primary');
+    const back = btn('← All pipelines', async () => { if (pipDirty && !confirm('Leave without saving your changes?')) return; pipMode = 'list'; pipSel = null; pipDirty = false; await pipLoad(); });
+    const title = agEl('div', 'font-size:18px;font-weight:700;margin:0 8px;', p.name + (p.id === 'default' ? '  (default)' : ''));
+    const grow = agEl('div', 'flex:1;');
+    const add = btn('+ Add agent', () => pipAddMenu(add));
     const ren = btn('Rename', () => { const n = (prompt('Pipeline name?', p.name) || '').trim(); if (n) { p.name = n; pipTouch(); pipRender(); } });
-    const neu = btn('+ New pipeline', () => { const n = pipBlank('Pipeline ' + (pipD.data.pipelines.length + 1)); pipD.data.pipelines.push(n); pipD.cur = n.id; pipSel = null; pipTouch(); pipRender(); });
-    const del = btn('Delete', () => { if (pipD.data.pipelines.length < 2) { alert('Keep at least one pipeline.'); return; } if (!confirm('Delete "' + p.name + '"?')) return; pipD.data.pipelines = pipD.data.pipelines.filter(x => x.id !== p.id); if (pipD.data.active === p.id) pipD.data.active = null; pipD.cur = pipD.data.pipelines[0].id; pipTouch(); pipRender(); });
-    const use = btn(pipD.data.active === p.id ? 'Stop using' : 'Use for chats', () => { pipD.data.active = pipD.data.active === p.id ? null : p.id; pipTouch(); pipRender(); });
+    const del = btn('Delete', async () => {
+        if (!confirm('Delete "' + p.name + '"? Chats using it go back to Default.')) return;
+        pipD.data.pipelines = pipD.data.pipelines.filter(x => x.id !== p.id);
+        try { await pipPersist(); } catch (e) { alert(e.message); pipDirty = false; await pipLoad(); return; }
+        pipMode = 'list'; pipSel = null; pipRender();
+    });
     const save = btn('Save', pipSave, 'vs-btn-primary');
     const st = agEl('span', 'font-size:12px;color:var(--text-dim);', pipDirty ? 'Unsaved changes' : ''); st.id = 'pip-status';
-    bar.append(sel, add, btn('Recenter', () => pipRecenter(p)), ren, neu, del, use, save, st);
+    bar.append(back, title, grow, st, add, btn('Recenter', () => pipRecenter(p)), ren, ...(p.id === 'default' ? [] : [del]), save);
 
     const state = agEl('div', 'font-size:12.5px;color:var(--text-dim);margin-bottom:10px;');
-    state.textContent = pipD.running ? 'Chats are being answered by “' + ((pipD.data.pipelines.find(x => x.id === pipD.running) || {}).name || '?') + '”.' : 'Chats are being answered by the built-in Dialogue pipeline. Mark a pipeline “Use for chats” and save to switch.';
-    if (pipD.data.active !== pipD.running) state.textContent += '  (Unsaved: ' + (pipD.data.active ? 'will switch to “' + (pipD.data.pipelines.find(x => x.id === pipD.data.active) || {}).name + '”' : 'will switch back to built-in Dialogue') + '.)';
+    state.textContent = 'A pipeline is a way of building a reply: the agents that work on it and how they pass work along. Pick one when you start a chat. Default is what chats use unless you choose another, and it can be edited but not deleted. Each {token} in a custom agent\'s prompt becomes an input port you can wire an output into; select an agent and use Add input to make one.';
 
     const wrap = agEl('div'); wrap.className = 'pip-wrap';
     const canvas = agEl('div'); canvas.className = 'pip-canvas'; pipCanvas = canvas;
-    wrap.append(canvas, pipInspector(p));
+    wrap.append(canvas);
+    const insp = pipInspector(p); if (insp) wrap.append(insp);
     const issues = pipIssues(p);
     const warn = agEl('div', 'margin-top:10px;font-size:12.5px;line-height:1.6;white-space:pre-line;color:' + (issues.length ? '#d9a441' : 'var(--text-dim)'), issues.length ? issues.map(i => '⚠ ' + i).join('\n') : '✓ Pipeline is valid.');
     host.append(bar, state, wrap, warn);
+    pipFit();
     pipDraw(p); pipHook(p);
     const v = pipView(p);
     if (v.fresh) requestAnimationFrame(() => { if (pipCanvas && pipCanvas.clientWidth > 0 && v.fresh) { v.fresh = false; pipRecenter(p); } });
 }
+
+// The canvas takes whatever height is left on screen, so there is no dead space under it.
+function pipFit() {
+    if (!pipCanvas || !pipCanvas.isConnected) return;
+    const room = window.innerHeight - pipCanvas.getBoundingClientRect().top - 64;
+    pipCanvas.style.height = Math.max(420, room) + 'px';
+}
+window.addEventListener('resize', () => { if (pipCanvas && pipCanvas.isConnected) { pipFit(); if (typeof pipCur === 'function' && pipD) { try { pipApplyView(pipCur()); } catch {} } } });
 
 function pipReaches(p, from, to) { const seen = new Set(), st = [from]; while (st.length) { const x = st.pop(); if (x === to) return true; if (seen.has(x)) continue; seen.add(x); p.edges.filter(e => e.from === x).forEach(e => st.push(e.to)); } return false; }
 function pipIssues(p) {
@@ -4463,10 +5185,18 @@ function pipIssues(p) {
     if (!into.length) out.push('Nothing is connected to END, so this pipeline never answers.');
     p.nodes.filter(n => n.type === 'agent').forEach(n => {
         const ports = pipPortsOf(n.agent);
-        if (!ports) { out.push(n.agent + ' is not available (switched off, or ARI needs a restart after creating it).'); return; }
-        ports.forEach(q => { if (!p.edges.some(e => e.to === n.id && e.port === q)) out.push(n.agent + ': {' + q + '} has nothing wired in.'); });
+        if (!ports) { out.push(n.agent + ' is not available (is it switched off?).'); return; }
+        ports.filter(q => !((pipD.optional || {})[n.agent] || []).includes(q)).forEach(q => { if (!p.edges.some(e => e.to === n.id && e.port === q)) out.push(n.agent + ': {' + q + '} has nothing wired in.'); });
         if (!pipReaches(p, n.id, end.id)) out.push(n.agent + ' never reaches END, so it does nothing.');
         if (n.agent === 'Dialogue' && into.length && into[0].from !== n.id) out.push('The built-in Dialogue agent must be the one connected to END.');
+    });
+    p.nodes.filter(n => n.type === 'pipeline').forEach(n => {
+        const sub = pipSubOf(n);
+        if (!sub) { out.push('A sub-pipeline in here no longer exists — remove it.'); return; }
+        if (sub.nodes.some(x => x.type === 'agent' && x.agent === 'Dialogue')) out.push('“' + sub.name + '” has the built-in Dialogue agent, which can only reply to the chat — it can\'t run as a step inside another pipeline.');
+        if (sub.id === p.id || sub.nodes.some(x => x.type === 'pipeline' && x.pipeline === p.id)) out.push('“' + sub.name + '” would end up running itself.');
+        if (!pipReaches(p, n.id, end.id)) out.push('“' + sub.name + '” never reaches END, so it does nothing.');
+        if (into.length && into[0].from === n.id) out.push('A sub-pipeline is connected to END, so this pipeline can\'t answer a chat by itself (an agent has to write the reply), but it can run as a step inside another pipeline.');
     });
     const sl = {}; p.nodes.filter(n => n.type === 'agent').forEach(n => { const d = pipDef(n); if (d.serverName) (sl[d.serverName + '/' + d.slotName] = sl[d.serverName + '/' + d.slotName] || []).push(n.agent); });
     Object.entries(sl).forEach(([k, v]) => { if (v.length > 1) out.push(v.join(' and ') + ' share ' + k + ' — they will evict each other\'s cache.'); });
@@ -4475,8 +5205,10 @@ function pipIssues(p) {
 
 var pipCanvas = null, pipWorld = null, pipSvg = null;
 function pipPos(n, side, port) {
-    if (n.type !== 'agent') return { x: n.x + 13, y: n.y + 13 };
-    return side === 'out' ? { x: n.x + PIP_W, y: n.y + 46 } : { x: n.x, y: n.y + 74 + pipInputs(n).indexOf(port) * 28 };
+    if (!pipIsBox(n)) return { x: n.x + 13, y: n.y + 13 };
+    const outs = pipOutputs(n);
+    if (side === 'out') return { x: n.x + PIP_W, y: n.y + 46 + Math.max(0, outs.indexOf(port)) * 28 };
+    return { x: n.x, y: n.y + 46 + outs.length * 28 + pipInputs(n).indexOf(port) * 28 };
 }
 const pipWirePath = (a, b) => { const d = Math.max(60, Math.abs(b.x - a.x) / 2); return `M${a.x},${a.y} C${a.x + d},${a.y} ${b.x - d},${b.y} ${b.x},${b.y}`; };
 function pipApplyView(p) {
@@ -4500,15 +5232,19 @@ function pipMenu(e, title, items) {
     document.body.append(m);
 }
 function pipAddAgentNode(p, a, at) { const id = pipUid(); p.nodes.push({ id, type: 'agent', agent: a.name, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
-function pipDelete(p, n) { if (n.type !== 'agent') return; p.nodes = p.nodes.filter(x => x !== n); p.edges = p.edges.filter(e => e.from !== n.id && e.to !== n.id); if (pipSel === n.id) pipSel = null; pipTouch(); pipRender(); }
+function pipDelete(p, n) { if (!pipIsBox(n)) return; p.nodes = p.nodes.filter(x => x !== n); p.edges = p.edges.filter(e => e.from !== n.id && e.to !== n.id); if (pipSel === n.id) pipSel = null; pipTouch(); pipRender(); }
 function pipAddable(p) {   // agents that can sit in a graph and aren't in this one yet
     const have = new Set(p.nodes.filter(n => n.type === 'agent').map(n => n.agent));
-    return (agData.agents || []).filter(a => !have.has(a.name) && (a.custom || PIP_BUILTIN[a.name]));
+    return (agData.agents || []).filter(a => !have.has(a.name) && !a.system && (a.custom || PIP_BUILTIN[a.name]));
 }
+function pipAddPipelineNode(p, sub, at) { const id = pipUid(); p.nodes.push({ id, type: 'pipeline', pipeline: sub.id, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
+function pipAddablePipelines(p) { return (pipD.data.pipelines || []).filter(x => x.id !== p.id && x.id !== 'default'); }
 function pipAddMenu(anchor) {
     const p = pipCur(), r = anchor.getBoundingClientRect(), v = pipView(p), rc = pipCanvas.getBoundingClientRect(), free = pipAddable(p);
     const at = { x: (rc.width / 2 - v.x) / v.k - 115, y: (rc.height / 2 - v.y) / v.k - 40 };
-    pipMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {} }, 'Add agent', free.map(a => [a.name, () => pipAddAgentNode(p, a, at)]).concat(free.length ? [] : [['(every agent is already here — make more on the Agents page)', () => {}]]));
+    pipMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {} }, 'Add agent', free.map(a => [a.name === 'Memory' ? 'Recall' : a.name, () => pipAddAgentNode(p, a, at)]).concat(free.length ? [] : [['(every agent is already here — make more on the Agents page)', () => {}]])
+        .concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, at)]))
+        );
 }
 function pipDraw(p) {
     const c = pipCanvas; c.innerHTML = '';
@@ -4518,22 +5254,28 @@ function pipDraw(p) {
     const taken = new Set(p.edges.map(e => e.to + ':' + e.port));
     p.nodes.forEach(n => {
         let d;
-        if (n.type === 'agent') {
-            const def = pipDef(n), ports = pipInputs(n);
+        if (pipIsBox(n)) {
+            const def = pipDef(n), ports = pipInputs(n), outs = pipOutputs(n), isSub = n.type === 'pipeline';
             d = agEl('div'); d.className = 'pip-node' + (pipSel === n.id ? ' sel' : '') + (def.enabled === false ? ' off' : '');
-            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', n.agent)); const tg = agEl('span', '', def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
-            const out = agEl('div', '', 'Output'); out.className = 'pip-row out'; d.append(h, out);
+            const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', pipLabel(n))); const tg = agEl('span', '', isSub ? 'pipeline' : def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
+            d.append(h); outs.forEach(o => { const out = agEl('div', '', o === 'output' ? 'Output' : o); out.className = 'pip-row out'; d.append(out); });
             ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
-            const nb = agEl('div', '', (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '')); nb.className = 'pip-nb'; d.append(nb);
-            const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = 'right:-7px;top:39px'; po.onmousedown = e => pipDragWire(p, n, e); d.append(po);
-            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${67 + i * 28}px`; d.append(pi); });
+            const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
+            outs.forEach((o, i) => { const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, o); d.append(po); });
+            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
-            d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, n.agent, [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
+            d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, pipLabel(n), [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
+        } else if (n.type === 'start') {
+            // One round start, like END: a wire to a port called "message" carries the latest message, a wire to any other port carries the conversation.
+            d = agEl('div'); d.className = 'pip-term start';
+            const lab = agEl('div', '', 'START'); lab.className = 'pip-lab'; lab.append(agEl('small', '', 'Conversation in'));
+            const pt = agEl('div'); pt.className = 'pip-port'; pt.onmousedown = e => pipDragWire(p, n, e, 'history');
+            d.append(lab, pt); lab.onmousedown = e => { e.stopPropagation(); pipDragNode(p, n, d, e); };
         } else {
             d = agEl('div'); d.className = 'pip-term ' + n.type;
-            const lab = agEl('div', '', n.type === 'start' ? 'START' : 'END'); lab.className = 'pip-lab'; const sm = agEl('small', '', n.type === 'start' ? 'Conversation history' : 'Stream to user'); lab.append(sm);
+            const lab = agEl('div', '', 'END'); lab.className = 'pip-lab'; const sm = agEl('small', '', 'Stream to user'); lab.append(sm);
             const pt = agEl('div'); pt.className = 'pip-port';
-            if (n.type === 'start') pt.onmousedown = e => pipDragWire(p, n, e); else { pt.dataset.node = n.id; pt.dataset.port = 'stream'; }
+            pt.dataset.node = n.id; pt.dataset.port = 'stream';
             d.append(lab, pt); lab.onmousedown = e => { e.stopPropagation(); pipDragNode(p, n, d, e); };
         }
         d.style.left = n.x + 'px'; d.style.top = n.y + 'px'; world.append(d);
@@ -4544,7 +5286,7 @@ function pipWires(p) {
     p.edges.forEach((e, i) => {
         const A = pipNode(p, e.from), B = pipNode(p, e.to); if (!A || !B) return;
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', pipWirePath(pipPos(A, 'out'), pipPos(B, 'in', e.port))); if (e.mode === 'stream') path.setAttribute('class', 'stream');
+        path.setAttribute('d', pipWirePath(pipPos(A, 'out', e.fromPort), pipPos(B, 'in', e.port))); if (e.mode === 'stream') path.setAttribute('class', 'stream');
         const flip = () => { e.mode = e.mode === 'stream' ? 'complete' : 'stream'; pipTouch(); pipRender(); };
         path.onclick = flip;
         path.oncontextmenu = ev => pipMenu(ev, 'Connection', [[e.mode === 'stream' ? 'Wait until finished' : 'Stream live (not run yet)', flip], ['Disconnect', () => { p.edges.splice(i, 1); pipTouch(); pipRender(); }]]);
@@ -4557,17 +5299,17 @@ function pipDragNode(p, n, el, e) {
     const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); if (moved) pipTouch(); if (pipSel !== n.id) { pipSel = n.id; pipRender(); } };
     document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
 }
-function pipDragWire(p, from, e) {
+function pipDragWire(p, from, e, fromPort) {
     e.stopPropagation();
     const t = document.createElementNS('http://www.w3.org/2000/svg', 'path'); t.setAttribute('class', 'tmp'); pipSvg.append(t);
-    const a = pipPos(from, 'out'), mv = ev => t.setAttribute('d', pipWirePath(a, pipToWorld(p, ev)));
+    const a = pipPos(from, 'out', fromPort), mv = ev => t.setAttribute('d', pipWirePath(a, pipToWorld(p, ev)));
     const up = ev => {
         document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); t.remove();
         const el = document.elementFromPoint(ev.clientX, ev.clientY);
         if (!el || !el.dataset || !el.dataset.port || el.dataset.node === from.id) return;
         const to = pipNode(p, el.dataset.node); if (!to || pipReaches(p, to.id, from.id)) return;
         p.edges = p.edges.filter(x => !(x.to === to.id && x.port === el.dataset.port));
-        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete' }); pipTouch(); pipRender();
+        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' ? { fromPort: /^message$/i.test(el.dataset.port) ? 'message' : 'history' } : {}) }); pipTouch(); pipRender();
     };
     document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up); mv(e);
 }
@@ -4582,7 +5324,7 @@ function pipHook(p) {
         document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
     };
     c.onwheel = e => { e.preventDefault(); const v = pipView(p), r = c.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, k = Math.min(2, Math.max(.3, v.k * (e.deltaY < 0 ? 1.1 : 1 / 1.1))), f = k / v.k; v.x = mx - (mx - v.x) * f; v.y = my - (my - v.y) * f; v.k = k; pipApplyView(p); };
-    c.oncontextmenu = e => { const at = pipToWorld(p, e), free = pipAddable(p); pipMenu(e, 'Add agent here', free.map(a => [a.name, () => pipAddAgentNode(p, a, { x: at.x - 115, y: at.y - 20 })]).concat(free.length ? [] : [['(every agent is already here)', () => {}]]).concat([['Recenter', () => pipRecenter(p)]])); };
+    c.oncontextmenu = e => { const at = pipToWorld(p, e), free = pipAddable(p); pipMenu(e, 'Add agent here', free.map(a => [a.name, () => pipAddAgentNode(p, a, { x: at.x - 115, y: at.y - 20 })]).concat(pipAddablePipelines(p).map(x => ['Pipeline: ' + x.name, () => pipAddPipelineNode(p, x, { x: at.x - 115, y: at.y - 20 })])).concat(free.length ? [] : [['(every agent is already here)', () => {}]]).concat([['Recenter', () => pipRecenter(p)]])); };
     if (!pipHooked) {
         pipHooked = true;
         document.addEventListener('click', pipCloseMenu);
@@ -4597,20 +5339,47 @@ function pipInspector(p) {
     const box = agEl('div'); box.className = 'pip-insp'; const n = pipNode(p, pipSel);
     const dim = t => { const d = agEl('div', 'color:var(--text-dim);line-height:1.5;white-space:pre-wrap;margin-bottom:10px;', t); box.append(d); return d; };
     const lab = t => box.append(agEl('label', '', t));
-    if (!n || n.type !== 'agent') {
-        dim(n ? (n.type === 'start' ? 'START carries the conversation history into the pipeline.' : 'END streams whatever arrives here to the user.') : 'Select an agent to see it.');
-        dim('Each {token} in a custom agent\'s prompt becomes an input port; wire any agent\'s output into it. The built-in Memory and Dialogue have fixed ports. A solid wire waits until the agent has finished; a streaming wire is planned but not run yet.');
+    if (!n || !pipIsBox(n)) return null;
+    if (n.type === 'pipeline') {
+        const sub = pipSubOf(n);
+        box.append(agEl('div', 'font-size:15px;font-weight:600;', pipLabel(n)));
+        dim('A pipeline run as one step. Its START receives the two inputs below (left unwired, they are what this pipeline received), and whatever feeds its END comes out as this node\'s Output.');
+        lab('Inputs'); dim('{history} and {message}, both optional.');
+        if (sub) { const open = agEl('button', 'margin-right:8px;', 'Open this pipeline'); open.className = 'agv-btn'; open.type = 'button'; open.onclick = () => { pipD.cur = sub.id; pipSel = null; pipRender(); }; box.append(open); }
+        const d = agEl('button', '', 'Remove from pipeline'); d.className = 'agv-btn'; d.type = 'button'; d.onclick = () => pipDelete(p, n); box.append(d);
         return box;
     }
     const def = pipDef(n);
     box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
     lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName || 'default slot'));
-    lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? 'conversation' : f.agent; })() : 'nothing') ).join('\n') || 'none');
+    lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? (p.edges.find(e => e.to === n.id && e.port === q).fromPort === 'message' ? 'latest message' : 'conversation history') : pipLabel(f); })() : 'nothing') ).join('\n') || 'none');
     lab('System prompt'); dim(((def.agentPrompt || '').slice(0, 300) + ((def.agentPrompt || '').length > 300 ? '…' : '')) || '(empty)');
+    if (def.custom) {
+        lab('Own sub-thread');
+        const code = document.createElement('input'); code.type = 'text'; code.value = n.thread || ''; code.placeholder = 'e.g. memory'; code.className = 'vs-input'; code.style.cssText = 'width:100%;box-sizing:border-box;';
+        code.onchange = () => { const v = code.value.trim(); if (v && !/^[A-Za-z][A-Za-z0-9_-]{0,29}$/.test(v)) { alert('Letters, numbers, - or _ (up to 30), starting with a letter.'); code.value = n.thread || ''; return; } if (v) n.thread = v; else delete n.thread; pipTouch(); pipRender(); };
+        box.append(code);
+        dim('Give this agent a code to keep its own thread under the chat. It is found again by that code on every message, so the agent remembers what it did before, and it shows nested under the chat in the thread inspector. Leave empty to start fresh each time. Each agent needs its own code.');
+    }
+    if (def.custom) {
+        const add = agEl('button', 'margin:4px 8px 4px 0;', 'Add input'); add.className = 'agv-btn'; add.type = 'button';
+        add.onclick = async () => {
+            const t = (prompt('Name for the new input (letters, numbers or _). It is added to this agent\'s prompt as {name}, and you can wire an output into it.') || '').trim();
+            if (!t) return;
+            if (!/^\w+$/.test(t) || t.toLowerCase() === 'message') { alert('Use letters, numbers or _ only, and not "message" (that one is always there).'); return; }
+            if (pipInputs(n).includes(t)) { alert('{' + t + '} is already an input.'); return; }
+            const text = (def.agentPrompt || '').replace(/\s+$/, '') + '\n\n' + t + ':\n{' + t + '}\n';
+            const r = await cpFetch('/api/v1/admin/agents/' + encodeURIComponent(n.agent), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentPrompt: text }) });
+            if (!r.ok) { alert('Could not add the input.'); return; }
+            def.agentPrompt = text; pipRender();
+        };
+        box.append(add);
+    }
     const go = agEl('button', 'margin-right:8px;', 'Edit this agent'); go.className = 'agv-btn'; go.type = 'button'; go.onclick = () => { prSelected = 'agent:' + n.agent; switchTab('agents'); }; box.append(go);
     const d = agEl('button', '', 'Remove from pipeline'); d.className = 'agv-btn'; d.type = 'button'; d.onclick = () => pipDelete(p, n); box.append(d);
     return box;
 }
+
 
 var agIsDirty = false;
 async function loadAgents() {
@@ -4625,9 +5394,6 @@ async function loadAgents() {
             host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load agents.</span>';
             return;
         }
-        agData.shared = agData.shared || {};
-        agData.shared.budgets     = agData.shared.budgets     || {};
-        agData.shared.memoryAgent = agData.shared.memoryAgent || {};
         agIsDirty = false;
     }
     prRenderList();
@@ -4645,11 +5411,6 @@ async function agSave() {
             });
             if (!r.ok) throw new Error(a.name);
         }
-        const r2 = await cpFetch('/api/v1/admin/agents/shared', {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ memoryAgent: agData.shared.memoryAgent, budgets: agData.shared.budgets }),
-        });
-        if (!r2.ok) throw new Error('shared');
         setStatus('');
         agIsDirty = false;
         ['ag-restart', 'pr-restart'].forEach(id => { const n = document.getElementById(id); if (n) n.style.display = ''; });
@@ -6948,6 +7709,39 @@ function dbgFmtAgo(iso) {
     } catch { return ''; }
 }
 
+// Recall's prompt is a run of ALL-CAPS labels with the speaker's name glued on the front. That is exactly what the model gets, so the prompt
+// itself is left alone; this only tidies how it is shown here, and the exact text is one click away.
+const DBG_LABEL = /^([A-Z][A-Z0-9'’,\- ]{3,}[A-Z])(\s*\([^)]*\))?:\s*(.*)$/;
+function dbgSentence(label) {
+    const t = label.toLowerCase().replace(/\bari\b/g, 'Ari');
+    return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function dbgTidyRecall(text) {
+    // "# Prompt:" then "xywren: AUDIENCE: …": the name is only there for multi-user tracking, so drop it from the view.
+    text = text.replace(/^((?:#+ Prompt:\s*\n+)?)[^\n:]{1,40}: (?=[A-Z][A-Z' ]{3,}:)/, '$1');
+    const out = [];
+    let inSection = false;
+    for (const line of text.split('\n')) {
+        const m = line.match(DBG_LABEL);
+        if (!m) { out.push(line); continue; }
+        const label = dbgSentence(m[1]), note = (m[2] || '').trim(), rest = m[3].trim();
+        if (!rest) {
+            out.push('#### ' + label);
+            if (note) out.push('', '*' + note + '*');
+            out.push('');
+            inSection = true;
+        } else if (inSection) out.push('- **' + label + (note ? ' ' + note : '') + ':** ' + rest);
+        else out.push('#### ' + label, '', rest, '');
+    }
+    return out.join('\n');
+}
+function dbgPromptHtml(text) {
+    if (!text.includes('STARTING POINTS:')) return marked.parse(text);
+    const raw = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<div class="dbg-recallprompt">${marked.parse(dbgTidyRecall(text))}</div>`
+        + `<details class="dbg-rawtext"><summary>Exact text sent to the model</summary><pre>${raw}</pre></details>`;
+}
+
 async function loadDebugThreads() {
     const list = document.getElementById('dbg-thread-list');
     list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">Loading…</div>';
@@ -6983,11 +7777,11 @@ function dbgRenderThreadList(threads, diskSessions = []) {
     }
     list.innerHTML = '';
 
-    function addThreadItem(key, typeLabel, meta, onClick, container) {
+    function addThreadItem(key, typeLabel, meta, onClick, container, title) {
         const item = document.createElement('div');
         item.className = 'dbg-thread-item' + (key === dbgSelectedThread ? ' active' : '');
         item.innerHTML = `
-            <div class="dbg-thread-key">${escHtml(key)}</div>
+            <div class="dbg-thread-key">${escHtml(title ?? key)}</div>
             <div class="dbg-thread-meta">${escHtml(typeLabel)} · ${escHtml(meta)}</div>`;
         item.addEventListener('click', () => {
             dbgSelectedThread = key;
@@ -6999,14 +7793,19 @@ function dbgRenderThreadList(threads, diskSessions = []) {
         return item;
     }
 
-    threads
-        .filter(t => !t.key.startsWith('memory:') && !t.key.startsWith('extract:'))
-        .forEach(t => {
-            const typeLabel = t.isInternal ? (t.agentName || 'Internal') : (t.isCodeMode ? 'Code' : 'Dialogue');
-            const ago = t.lastMessageAt ? dbgFmtAgo(t.lastMessageAt) : '';
-            const meta = `${t.messageCount || 0} msgs${ago ? ' · ' + ago : ''}`;
-            addThreadItem(t.key, typeLabel, meta, () => { dbgOpenWatch(t.key); dbgLoadThread(t.key); });
-        });
+    // An agent's own sub-thread (carries parentKey) is listed indented straight under its chat, and opens on its own.
+    const visible = threads.filter(t => !t.key.startsWith('memory:') && !t.key.startsWith('extract:'));
+    const childrenOf = {};
+    visible.filter(t => t.parentKey).forEach(t => (childrenOf[t.parentKey] ??= []).push(t));
+    function addThread(t, depth) {
+        const typeLabel = t.parentKey ? 'Sub-thread' : t.isInternal ? (t.agentName || 'Internal') : (t.isCodeMode ? 'Code' : 'Dialogue');
+        const ago = t.lastMessageAt ? dbgFmtAgo(t.lastMessageAt) : '';
+        const meta = `${t.messageCount || 0} msgs${ago ? ' · ' + ago : ''}`;
+        const item = addThreadItem(t.key, typeLabel, meta, () => { dbgOpenWatch(t.key); dbgLoadThread(t.key); }, undefined, t.parentKey ? (t.agentName || 'Sub-thread') : undefined);
+        if (depth) { item.style.marginLeft = (depth * 14) + 'px'; item.style.borderLeft = '2px solid var(--accent)'; }
+        (childrenOf[t.key] || []).forEach(c => addThread(c, depth + 1));
+    }
+    visible.filter(t => !t.parentKey).forEach(t => addThread(t, 0));
 
     const visibleDisk = diskSessions.filter(s => !s.key.startsWith('Memory_memory_') && !s.key.startsWith('Memory_extract_'));
     if (visibleDisk.length) {
@@ -7169,7 +7968,8 @@ function dbgRenderThreadNode(thread, container, depth) {
     // sub-thread frame INLINE, directly beneath the spawn_coder call that created it — so its tool calls and
     // thinking sit next to their trigger instead of being dumped in a pile at the bottom of the view.
     const planChild = (thread.children || []).find(c => (c.key || '').includes('#plan'));
-    const workers   = (thread.children || []).filter(c => c !== planChild);
+    // An agent's own sub-thread (it has a code) is listed under its chat in the thread list instead of being folded in here.
+    const workers   = (thread.children || []).filter(c => c !== planChild && !c.code);
     const history   = planChild ? (planChild.history || []) : (thread.history || []);
 
     // Shared cursor into workers[]: dbgRenderTrace consumes one per spawn_coder call it renders.
@@ -7259,20 +8059,20 @@ function dbgRenderTrace(item, host, workers = [], cursor = { i: 0 }, depth = 0) 
                         const r = document.createElement('div');
                         r.className = 'dbg-row right';
                         r.innerHTML = `<div class="dbg-bubble user"><div class="dbg-bhead"><span>${userName}</span></div>`
-                            + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(display)}</div></div>`;
+                            + `<div class="dbg-bbody dbg-md dbg-prompt-body">${dbgPromptHtml(display)}</div></div>`;
                         host.appendChild(r);
                     }
                 } catch (e) {
                     const r = document.createElement('div');
                     r.className = 'dbg-row right';
                     r.innerHTML = `<div class="dbg-bubble user"><div class="dbg-bhead"><span>Prompt</span></div>`
-                        + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(step.text || '')}</div></div>`;
+                        + `<div class="dbg-bbody dbg-md dbg-prompt-body">${dbgPromptHtml(step.text || '')}</div></div>`;
                     host.appendChild(r);
                 }
             } else {
                 row.classList.add('right');
                 row.innerHTML = `<div class="dbg-bubble user"><div class="dbg-bhead"><span>Prompt</span></div>`
-                    + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(step.text || '')}</div></div>`;
+                    + `<div class="dbg-bbody dbg-md dbg-prompt-body">${dbgPromptHtml(step.text || '')}</div></div>`;
                 host.appendChild(row);
             }
             return; // rows already appended above; skip the default host.appendChild(row) below
@@ -7611,8 +8411,10 @@ document.getElementById('dbg-view-download').addEventListener('click', dbgDownlo
 // ── DTI live events — auto-refresh thread list and auto-select active threads ──
 function dbgIsActive() { return document.getElementById('tab-debug')?.style.display !== 'none'; }
 
-(function connectDtiEvents() {
-    const es = cpEventSource('/api/v1/events');
+let dtiEs = null;
+function openDtiEvents() {
+    if (dtiEs) return;
+    const es = dtiEs = cpEventSource('/api/v1/events');
     es.onmessage = e => {
         let evt;
         try { evt = JSON.parse(e.data); } catch { return; }
@@ -7638,91 +8440,198 @@ function dbgIsActive() { return document.getElementById('tab-debug')?.style.disp
             }
         }
     };
-    es.onerror = () => { es.close(); setTimeout(connectDtiEvents, 5000); };
-})();
+    es.onerror = () => { es.close(); dtiEs = null; setTimeout(() => { if (dbgIsActive()) openDtiEvents(); }, 5000); };
+}
+function closeDtiEvents() { if (dtiEs) { dtiEs.close(); dtiEs = null; } }
 
-// ── Image Generation ───────────────────────────────────────────────────────────
-
-let igConfig = {};
+// ── ImageGen ─────────────────────────────────────────────────────────────────
+// Models: what the server can draw with, with a Hugging Face download. Settings: where it runs and how it draws.
+let igConfig = {}, igModels = null, igPoll = null;
+const igPatch = body => cpFetch('/api/v1/admin/imageGen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+const igMB = n => n == null ? '' : n >= 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : Math.max(1, Math.round(n / 1048576)) + ' MB';
 
 async function igLoad() {
-    try {
-        igConfig = await cpFetch('/api/v1/admin/imageGen/config').then(r => r.json());
-        document.getElementById('ig-enabled').checked        = igConfig.enabled      ?? false;
-        document.getElementById('ig-comfyui-path').value     = igConfig.comfyUiPath  ?? '';
-        document.getElementById('ig-port').value             = igConfig.port         ?? 8188;
-        document.getElementById('ig-idle-seconds').value     = igConfig.idleSeconds  ?? 300;
-        document.getElementById('ig-checkpoint-custom').value = igConfig.checkpoint  ?? '';
-    } catch(e) { console.error('ImageGen config load failed', e); }
+    try { igConfig = await cpFetch('/api/v1/admin/imageGen/config').then(r => r.json()); } catch (e) { console.error('ImageGen config load failed', e); }
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? ''; };
+    set('ig-comfyui-path', igConfig.comfyUiPath); set('ig-port', igConfig.port ?? 8188); set('ig-idle-seconds', igConfig.idleSeconds ?? 300);
+    set('ig-remote-url', igConfig.remoteUrl); set('ig-sampler', igConfig.sampler); set('ig-scheduler', igConfig.scheduler);
+    set('ig-cfg', igConfig.cfg); set('ig-steps', igConfig.steps); set('ig-width', igConfig.width); set('ig-height', igConfig.height);
+    igRenderMode(!!(igConfig.remoteUrl || '').trim());
 
     try {
         const status = await cpFetch('/api/v1/admin/imageGen/status').then(r => r.json());
         const el = document.getElementById('ig-status');
-        if (status.ready)         el.innerHTML   = '<span style="color:var(--col-control-panel-line-7104-text)">● ComfyUI ready</span>';
-        else if (status.active)   el.textContent = 'Module loaded — ComfyUI will start on first generation request.';
-        else if (igConfig.enabled) el.innerHTML  = '<span style="color:var(--col-control-panel-line-7106-text)">⚠ Enabled in config but not yet loaded — restart ARI to activate.</span>';
-        else                      el.textContent = 'Module disabled — enable it in Settings, then restart ARI.';
-    } catch(e) { document.getElementById('ig-status').textContent = 'Could not reach server.'; }
+        if (status.ready && status.remote) el.textContent = 'Using the ComfyUI at ' + igConfig.remoteUrl + '.';
+        else if (status.ready)             el.textContent = 'Ready. ComfyUI starts when Ari first draws something, and stops when it has been idle.';
+        else if (status.active)            el.textContent = 'Setting up ComfyUI — check the server log if this stays here.';
+        else if (igConfig.enabled)         el.textContent = 'Switched on but not running yet. Restart Ari to start it.';
+        else                               el.textContent = 'Image generation is off. Turn it on in Modules.';
+    } catch { document.getElementById('ig-status').textContent = 'Could not reach the server.'; }
 
     await igLoadModels();
+    igWatchDownload();
 }
 
 async function igLoadModels() {
-    const sel = document.getElementById('ig-checkpoint-select');
-    sel.innerHTML = '<option value="">— select a checkpoint —</option>';
+    const box = document.getElementById('ig-installed');
+    box.innerHTML = '';
     try {
-        const models = await cpFetch('/api/v1/admin/imageGen/models').then(r => r.json());
-        models.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = opt.textContent = m;
-            if (m === (igConfig.checkpoint ?? '')) opt.selected = true;
-            sel.appendChild(opt);
-        });
-        if (!models.length) sel.innerHTML += '<option disabled>No .safetensors files found in ComfyUI/models/checkpoints/</option>';
-    } catch(e) { sel.innerHTML += '<option disabled>Could not load model list</option>'; }
+        igModels = await cpFetch('/api/v1/admin/imageGen/models').then(r => r.json());
+    } catch { box.innerHTML = '<span style="font-size:13px;color:var(--text-dim);">Could not load the model list.</span>'; return; }
+    document.getElementById('ig-download-section').style.display = igModels.remote ? 'none' : '';
+    if (igModels.error) box.innerHTML = `<span style="font-size:13px;color:var(--col-control-panel-line-1647-text);">${escHtml(igModels.error)}</span>`;
+    if (!igModels.checkpoints.length && !igModels.error)
+        box.innerHTML = '<span style="font-size:13px;color:var(--text-dim);">No models yet. Download one below.</span>';
+    for (const m of igModels.checkpoints) {
+        const active = m.name === igModels.active;
+        const row = document.createElement('div');
+        row.className = 'ig-row' + (active ? ' act' : '');
+        row.innerHTML = `<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(m.name)}</div>`
+                      + `<div style="font-size:11.5px;color:var(--text-dim);">${igMB(m.size)}</div></div>`;
+        if (active) row.insertAdjacentHTML('beforeend', '<span class="mdl-badge active">Active</span>');
+        else {
+            const use = document.createElement('button'); use.className = 'vs-btn-outline'; use.type = 'button'; use.textContent = 'Use';
+            use.style.cssText = 'font-size:12px;padding:3px 10px;';
+            use.onclick = async () => { await igPatch({ checkpoint: m.name }); igConfig.checkpoint = m.name; igLoadModels(); };
+            row.appendChild(use);
+            if (!igModels.remote) {
+                const del = document.createElement('button'); del.className = 'vs-btn-outline'; del.type = 'button'; del.textContent = 'Delete';
+                del.style.cssText = 'font-size:12px;padding:3px 10px;';
+                del.onclick = async () => {
+                    if (!confirm(`Delete ${m.name}? It can be downloaded again.`)) return;
+                    const r = await cpFetch('/api/v1/admin/imageGen/models/file/' + encodeURIComponent(m.name), { method: 'DELETE' });
+                    if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'Could not delete it.');
+                    igLoadModels();
+                };
+                row.appendChild(del);
+            }
+        }
+        box.appendChild(row);
+    }
 }
 
-document.getElementById('ig-refresh-models-btn').addEventListener('click', igLoadModels);
+async function igSearch() {
+    const q = document.getElementById('ig-search').value.trim(), out = document.getElementById('ig-results');
+    if (!q) return;
+    out.innerHTML = '<span style="font-size:12.5px;color:var(--text-dim);">Searching…</span>';
+    const r = await cpFetch('/api/v1/admin/imageGen/models/search?q=' + encodeURIComponent(q));
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { out.innerHTML = `<span style="font-size:13px;color:var(--col-control-panel-line-1647-text);">${escHtml(j.error || 'Search failed.')}</span>`; return; }
+    out.innerHTML = '';
+    if (j.link) { igDownload({ repo: j.link.repo, file: j.link.file }); out.innerHTML = ''; return; }
+    if (!j.repos.length) { out.innerHTML = '<span style="font-size:13px;color:var(--text-dim);">Nothing found.</span>'; return; }
+    for (const repo of j.repos) {
+        const row = document.createElement('div'); row.className = 'ig-row'; row.style.cssText = 'flex-direction:column;align-items:stretch;cursor:pointer;';
+        row.innerHTML = `<div style="font-weight:600;font-size:13px;">${escHtml(repo)}</div><div class="ig-files" style="display:none;margin-top:8px;"></div>`;
+        row.addEventListener('click', async e => {
+            if (e.target.closest('button')) return;
+            const box = row.querySelector('.ig-files');
+            if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+            box.style.display = ''; box.textContent = 'Loading…';
+            const fr = await cpFetch('/api/v1/admin/imageGen/models/files?repo=' + encodeURIComponent(repo));
+            const fj = await fr.json().catch(() => ({}));
+            if (!fr.ok) { box.textContent = fj.error || 'Could not read that repo.'; return; }
+            box.innerHTML = fj.files.length ? '' : '<span style="font-size:12.5px;color:var(--text-dim);">No .safetensors files in this repo.</span>';
+            for (const f of fj.files) {
+                const line = document.createElement('div'); line.style.cssText = 'display:flex;align-items:center;gap:10px;padding:4px 0;';
+                line.innerHTML = `<div style="flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(f.path)}</div><span style="font-size:11.5px;color:var(--text-dim);">${igMB(f.size)}</span>`;
+                const b = document.createElement('button'); b.className = 'vs-btn-primary'; b.type = 'button'; b.textContent = 'Download'; b.style.cssText = 'font-size:12px;padding:3px 10px;';
+                b.onclick = () => igDownload({ repo, file: f.path });
+                line.appendChild(b); box.appendChild(line);
+            }
+        });
+        out.appendChild(row);
+    }
+}
 
-document.getElementById('ig-checkpoint-select').addEventListener('change', function() {
-    if (this.value) document.getElementById('ig-checkpoint-custom').value = this.value;
-});
+async function igDownload(body) {
+    const r = await cpFetch('/api/v1/admin/imageGen/models/download', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (!r.ok) { alert((await r.json().catch(() => ({}))).error || 'Could not start the download.'); return; }
+    igWatchDownload();
+}
 
-document.getElementById('ig-save-model-btn').addEventListener('click', async () => {
-    const checkpoint = document.getElementById('ig-checkpoint-custom').value.trim()
-        || document.getElementById('ig-checkpoint-select').value;
-    const status = document.getElementById('ig-model-save-status');
-    status.textContent = 'Saving…';
-    try {
-        await cpFetch('/api/v1/admin/imageGen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
-            enabled:     document.getElementById('ig-enabled').checked,
-            checkpoint,
-            port:        parseInt(document.getElementById('ig-port').value) || 8188,
-            idleSeconds: parseInt(document.getElementById('ig-idle-seconds').value) || 300,
-        })});
-        igConfig.checkpoint = checkpoint;
-        status.textContent = 'Saved.';
-        setTimeout(() => status.textContent = '', 2500);
-    } catch(e) { status.textContent = 'Save failed: ' + e.message; }
-});
+// Polls while a download is running, and stops when it finishes or fails.
+function igWatchDownload() {
+    clearInterval(igPoll);
+    const box = document.getElementById('ig-progress');
+    const tick = async () => {
+        let d = null;
+        try { d = (await cpFetch('/api/v1/admin/imageGen/models/download').then(r => r.json())).download; } catch {}
+        if (!d || (d.finished && !d.error && box.dataset.shown !== d.file)) { if (!d) { box.style.display = 'none'; clearInterval(igPoll); return; } }
+        box.style.display = '';
+        const pct = d.totalBytes ? Math.round(d.doneBytes * 100 / d.totalBytes) : 0;
+        if (d.finished) {
+            clearInterval(igPoll);
+            box.innerHTML = d.error
+                ? `<div class="ig-row" style="color:var(--col-control-panel-line-1647-text);">${escHtml(d.file)}: ${escHtml(d.error)}</div>`
+                : `<div class="ig-row">${escHtml(d.file)} downloaded.</div>`;
+            if (!d.error) igLoadModels();
+            return;
+        }
+        box.innerHTML = `<div class="ig-row"><div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;">${escHtml(d.file)}</div>`
+            + `<div class="ig-bar"><i style="width:${pct}%"></i></div></div><span style="font-size:12px;color:var(--text-dim);">${igMB(d.doneBytes)} of ${igMB(d.totalBytes)}</span>`
+            + `<button class="vs-btn-outline" type="button" id="ig-cancel" style="font-size:12px;padding:3px 10px;">Cancel</button></div>`;
+        document.getElementById('ig-cancel').onclick = () => cpFetch('/api/v1/admin/imageGen/models/download', { method: 'DELETE' });
+    };
+    tick(); igPoll = setInterval(tick, 1000);
+}
+
+document.getElementById('ig-search-btn').addEventListener('click', igSearch);
+document.getElementById('ig-search').addEventListener('keydown', e => { if (e.key === 'Enter') igSearch(); });
+
+// Which server mode is chosen. Picking "existing" with no address yet just reveals the box.
+let igRemote = false;
+function igRenderMode(remote) {
+    igRemote = remote;
+    document.getElementById('ig-mode-managed').classList.toggle('on', !remote);
+    document.getElementById('ig-mode-remote').classList.toggle('on', remote);
+    document.getElementById('ig-managed-fields').style.display = remote ? 'none' : '';
+}
+document.getElementById('ig-mode-managed').addEventListener('click', () => igRenderMode(false));
+document.getElementById('ig-mode-remote').addEventListener('click', () => { igRenderMode(true); document.getElementById('ig-remote-url').focus(); });
 
 document.getElementById('ig-save-settings-btn').addEventListener('click', async () => {
-    const status = document.getElementById('ig-settings-save-status');
+    const status = document.getElementById('ig-settings-save-status'), v = id => document.getElementById(id).value.trim();
+    const remoteUrl = igRemote ? v('ig-remote-url') : '';
+    if (igRemote && !remoteUrl) { status.textContent = 'Enter the address of the ComfyUI to use.'; return; }
     status.textContent = 'Saving…';
     try {
-        await cpFetch('/api/v1/admin/imageGen/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
-            enabled:     document.getElementById('ig-enabled').checked,
-            checkpoint:  igConfig.checkpoint ?? '',
-            comfyUiPath: document.getElementById('ig-comfyui-path').value.trim(),
-            port:        parseInt(document.getElementById('ig-port').value) || 8188,
-            idleSeconds: parseInt(document.getElementById('ig-idle-seconds').value) || 300,
-        })});
-        status.textContent = 'Saved. Restart ARI for changes to take effect.';
-        setTimeout(() => status.textContent = '', 4000);
-    } catch(e) { status.textContent = 'Save failed: ' + e.message; }
+        const r = await igPatch({
+            remoteUrl, comfyUiPath: v('ig-comfyui-path'), port: parseInt(v('ig-port')) || 8188, idleSeconds: parseInt(v('ig-idle-seconds')) || 300,
+            sampler: v('ig-sampler') || 'euler', scheduler: v('ig-scheduler') || 'normal', cfg: parseFloat(v('ig-cfg')) || 7,
+            steps: parseInt(v('ig-steps')) || 25, width: parseInt(v('ig-width')) || 1024, height: parseInt(v('ig-height')) || 1024,
+        });
+        const j = await r.json().catch(() => ({}));
+        status.textContent = !r.ok ? (j.error || 'Could not save.') : j.restartRequired ? 'Saved. The server settings apply after Ari restarts; the drawing defaults apply now.' : 'Saved.';
+        if (r.ok) { igConfig.remoteUrl = remoteUrl; igLoadModels(); }
+    } catch (e) { status.textContent = 'Save failed: ' + e.message; }
 });
 
-
+</script>
+<script>
+// Dev Mode switch: while on, Engram writes to a throwaway copy of the brain. Header button or Ctrl+Shift+D.
+(function () {
+    const btn = document.getElementById('cp-devmode');
+    let on = false, busy = false;
+    function paint() {
+        btn.textContent = 'DEV MODE: ' + (on ? 'ON' : 'OFF');
+        btn.style.color = on ? '#101618' : 'var(--text-dim)';
+        btn.style.background = on ? '#CADDE2' : 'transparent';
+    }
+    async function set(value) {
+        if (busy) return; busy = true; btn.disabled = true;
+        try {
+            const r = await cpPatchSettings({ devMode: value });
+            if (r.ok) on = !!(await r.json()).settings.devMode;
+        } catch (e) { console.error('Dev Mode switch failed', e); }
+        busy = false; btn.disabled = false; paint();
+    }
+    btn.addEventListener('click', () => set(!on));
+    document.addEventListener('keydown', e => {
+        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); set(!on); }
+    });
+    (async () => { try { on = !!(await cpGetSettings()).devMode; } catch {} paint(); })();
+})();
 </script>
 </body>
 </html>

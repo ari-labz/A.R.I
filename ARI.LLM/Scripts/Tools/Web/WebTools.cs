@@ -343,7 +343,14 @@ internal sealed class FetchPage : Tool
             string content = PageReader.Extract(html, url);
 
             if (content.Length < PageReader.MIN_MEANINGFUL_CHARS)
-                return $"Page returned very little text ({content.Length} chars) — it may require JavaScript to render.";
+            {
+                // A short, plain page (a notice, a price list) has nothing the article extractor recognises; read its visible words instead.
+                string plain = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(
+                    System.Text.RegularExpressions.Regex.Replace(html, @"(?is)<(script|style|noscript|head)\b.*?</\1>|<!--.*?-->", " "), @"(?s)<[^>]+>", " "));
+                plain = System.Text.RegularExpressions.Regex.Replace(plain, @"\s+", " ").Trim();
+                if (plain.Length >= 15) return plain.Length > 4000 ? plain[..4000] + "…" : plain;
+                return $"Page returned very little text ({content.Length} chars) — it probably needs JavaScript to render. Open it with the browser tool instead.";
+            }
 
             const int MAX_CHARS = 12000;
             if (content.Length > MAX_CHARS)

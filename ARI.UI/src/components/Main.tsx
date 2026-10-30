@@ -1,8 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from "react"
+import type { PipelineOption } from "../hooks/usePipelines"
 import Messages from "./Messages"
 import InputArea from "./InputArea"
 import ThreadPanel from "./ThreadPanel"
 import DropOverlay from "./DropOverlay"
+import BrowserPane, { BrowserButton, BrowserNeedsYou } from "./BrowserPane"
+import { useBrowserSession } from "../hooks/useBrowserSession"
 import Orb from "./Orb"
 import type { AppMode, PendingAttachment } from "../App"
 import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
@@ -18,7 +21,7 @@ interface Props {
     items:         ThreadItem[]
     isRemembering: boolean
     isStreaming:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "queued" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
     activeThread:  string | null
     isInternal:    boolean
     agentName:     string | null
@@ -39,7 +42,7 @@ interface Props {
     projects:         Project[]
     selectedProject:  string | null
     onProjectChange:  (id: string | null) => void
-    pipelines:        string[]
+    pipelines:        PipelineOption[]
     selectedPipeline: string | null
     onPipelineChange: (id: string | null) => void
     speechMode:       boolean
@@ -118,10 +121,24 @@ export default function Main({
         return () => document.removeEventListener("keydown", onKey)
     }, [isStreaming, activeThread])
 
+    // An .ari file dropped anywhere is a plugin to install, not an attachment. The server only lets the owner install; anyone else gets its refusal.
+    function takePluginFiles(files: File[]): boolean {
+        const pkg = files.find(f => /\.ari$/i.test(f.name))
+        if (!pkg) return false
+        if (!window.confirm(`Install ${pkg.name}?\n\nA plugin is code that runs on this machine with full access to ARI. Only install ones you trust. It arrives switched off; turn it on from the Plugins page.`)) return true
+        apiFetch("/api/v1/admin/plugins/install", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pkg })
+            .then(async r => {
+                const j = await r.json().catch(() => ({} as { error?: string; id?: string }))
+                window.alert(r.ok ? `Installed. It's switched off: open Plugins in the control panel to turn on ${j.id}.` : (j.error || "The install failed."))
+            })
+            .catch(() => window.alert("The install failed."))
+        return true
+    }
+
     async function handleDropThread(files: File[]) {
         dragCounterRef.current = 0
         setDropVisible(false); setDropHovering(null)
-        if (!files.length) return
+        if (!files.length || takePluginFiles(files)) return
         const succeeded = await onUploadThreadFiles(files)
         if (succeeded.length) {
             setThreadPanelOpen(false)
@@ -139,8 +156,10 @@ export default function Main({
     function handleDropMessage(files: File[]) {
         dragCounterRef.current = 0
         setDropVisible(false); setDropHovering(null)
-        if (files.length) onUploadMessageFiles(files)
+        if (files.length && !takePluginFiles(files)) onUploadMessageFiles(files)
     }
+
+    const browser = useBrowserSession(activeThread)
 
     const mainClasses = [
         mode === "active" ? "active" : "",
@@ -169,6 +188,7 @@ export default function Main({
                         <img id="main-logo" src="/images/logo-black.png?v=2" alt="A·R·I" />
                         <img id="code-logo" src="/images/BlackCode.png?v=2" alt="Code" />
                     </div>
+                    <BrowserButton session={browser} />
                 </div>
 
                 {/* messages + thread panel zone */}
@@ -223,6 +243,8 @@ export default function Main({
                     />
                 </div>
 
+                <BrowserNeedsYou session={browser} />
+
                 {!isInternal && !(speechMode && activeThread) && (
                     <InputArea
                         isStreaming={isStreaming}
@@ -249,6 +271,8 @@ export default function Main({
                     />
                 )}
             </div>
+
+            <BrowserPane session={browser} />
         </div>
     )
 }

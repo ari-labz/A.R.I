@@ -64,7 +64,9 @@ internal sealed class DreamPipeline : Pipeline
     // Communication tools excluded from dreams — no voice channels, no external side-effects.
     private static readonly HashSet<string> DreamExcluded =
         ["discord_list_voice_channels", "discord_join_voice_channel", "discord_leave_voice_channel",
-         "edit_memory"];
+         "edit_memory",
+         // Reading how tools are written only leads to the owner-only authoring tools, which a dream can't use.
+         "tool_docs", "read_tool", "list_my_tools"];
 
     /// <summary>
     /// Registers the always-available Read tools for a dream turn. Filesystem tools are NOT

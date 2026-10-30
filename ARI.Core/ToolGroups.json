@@ -2,55 +2,215 @@
   "Groups": {
     "git_tools": {
       "Description": "Git on the bound project or vault, with any host (GitHub, GitLab, a company server): status, fetch, pull, log, diff, add, commit, push, branch, checkout, stash, restore across its repos (auto-discovered), plus git_clone to clone a repo into the project.",
-      "Tools": ["git", "git_clone"]
-    },
-    "github_tools": {
-      "Description": "GitHub through its CLI (gh), as the connected account: issues, pull requests, repos, releases, Actions runs, or gh api for anything else. Needs a GitHub account connected in the control panel. For putting a repo on disk use git_clone (git_tools).",
-      "Tools": ["github"]
+      "Tools": [
+        "git",
+        "git_clone"
+      ]
     },
     "filesystem_tools": {
-      "Description": "Work with files: preview, read, list, search, find, edit, write, and deliver a file to the user as a download. Files live in a filesystem — either a bound project (persistent) or a scratchpad (ephemeral, deleted with the conversation). If you have neither and need to write or juggle files (e.g. to give the user a file), call create_scratchpad first to get an ephemeral filesystem; you do NOT need a project.",
-      "Tools": ["create_scratchpad", "preview_file", "read_file", "list_directory", "search_files", "find_files", "edit_file", "write_file", "deliver_file"]
+      "Description": "Work with files: preview, read, list, search, find, edit, write, and deliver a file to the user as a download. read_file opens any file by what it is; Word, Excel, PDF and PowerPoint files each also have their own group (docx_tools, xlsx_tools, pdf_tools, pptx_tools) with readers, writers and editors. Every conversation has a working folder of its own, ready to use: write a file there and give it to the user with deliver_file. A bound project's files persist; the working folder is deleted with the conversation. You never need to set it up first.",
+      "Tools": [
+        "preview_file",
+        "read_file",
+        "list_directory",
+        "search_files",
+        "find_files",
+        "archive",
+        "edit_file",
+        "write_file",
+        "deliver_file"
+      ]
     },
     "coding_tools": {
       "Description": "Build the current project to verify edits compile.",
-      "Tools": ["build_project"]
+      "Tools": [
+        "build_project"
+      ]
     },
     "memory_tools": {
-      "Description": "Read and write Ari's personal brain (memory graph) — never through the generic filesystem tools. search_brain finds notes by title/alias/content — returns 'title — name' pairs. recall_memory reads the full content of a note by that name. create_memory adds a new note (fails if the name already exists); edit_memory replaces an existing note's content (fails if the name does NOT exist — and optionally renames/retypes it); delete_memory removes one. All three take a commit_message explaining what changed and why, and commit to the brain git repo immediately, one commit per note. neighbours shows graph connections around a note. These tools access Ari's own stored memories, not a project filesystem.",
-      "Tools": ["search_brain", "recall_memory", "create_memory", "edit_memory", "delete_memory", "neighbours"]
+      "Description": "Read and write Ari's personal brain (memory graph) \u2014 never through the generic filesystem tools. search_brain finds notes by title/alias/content \u2014 returns 'title \u2014 name' pairs. recall_memory reads the full content of a note by that name. create_memory adds a new note (fails if the name already exists); edit_memory replaces an existing note's content (fails if the name does NOT exist \u2014 and optionally renames/retypes it); delete_memory removes one. All three take a commit_message explaining what changed and why, and commit to the brain git repo immediately, one commit per note. neighbours shows graph connections around a note. memories_on gives everything stored for one calendar day. These tools access Ari's own stored memories, not a project filesystem.",
+      "Tools": [
+        "search_brain",
+        "recall_memory",
+        "memories_on",
+        "create_memory",
+        "edit_memory",
+        "delete_memory",
+        "neighbours"
+      ]
     },
     "vault_tools": {
-      "Description": "Search an Obsidian note graph within the bound project (regex, no index). Only useful when the project is an Obsidian vault — calling this on a code repository will return nothing. For searching your own memory, use search_brain / recall_memory instead.",
-      "Tools": ["search_vault"]
+      "Description": "Search an Obsidian note graph within the bound project (regex, no index). Only useful when the project is an Obsidian vault \u2014 calling this on a code repository will return nothing. For searching your own memory, use search_brain / recall_memory instead.",
+      "Tools": [
+        "search_vault"
+      ]
     },
     "project_tools": {
-      "Description": "List, create, rename, bind, and set the filesystem path of projects — the workspaces (code repos or note vaults) a conversation can be scoped to. Use this for any request to start/open/make a new project, workspace, or \"project file\" — that phrase means a new project, not a file inside one. If the user names a specific directory on their machine, confirm the exact path with them, then pass it to create_project (new project) or set_project_path (existing project) — never RemoteFs, which needs a connected desktop app and can't be pointed anywhere from chat.",
-      "Tools": ["list_projects", "create_project", "rename_project", "bind_project", "set_project_path"]
+      "Description": "List, create, rename, bind, and set the filesystem path of projects \u2014 the workspaces (code repos or note vaults) a conversation can be scoped to. Use this for any request to start/open/make a new project, workspace, or \"project file\" \u2014 that phrase means a new project, not a file inside one. If the user names a specific directory on their machine, confirm the exact path with them, then pass it to create_project (new project) or set_project_path (existing project) \u2014 never RemoteFs, which needs a connected desktop app and can't be pointed anywhere from chat.",
+      "Tools": [
+        "list_projects",
+        "create_project",
+        "rename_project",
+        "bind_project",
+        "set_project_path"
+      ]
     },
     "calendar_tools": {
-      "Description": "ARI's own calendar. create_event adds context (working hours, a birthday, a trip) that is never acted on by itself. create_reminder schedules a real turn to fire later — write its prompt as an instruction to your future self, not the final wording. Both support repeat (daily/weekly/monthly/yearly, optionally an end date or count). list_events looks forward or backward from today by a signed day count. delete_entry removes either kind by id.",
-      "Tools": ["create_event", "create_reminder", "list_events", "delete_entry"]
+      "Description": "ARI's own calendar. create_event adds context (working hours, a birthday, a trip) that is never acted on by itself. create_reminder schedules a real turn to fire later \u2014 write its prompt as an instruction to your future self, not the final wording. Both support repeat (daily/weekly/monthly/yearly, optionally an end date or count). list_events looks forward or backward from today by a signed day count. delete_entry removes either kind by id.",
+      "Tools": [
+        "create_event",
+        "create_reminder",
+        "list_events",
+        "delete_entry"
+      ]
     },
     "persona_tools": {
-      "Description": "Propose a change to your own persona. Load this when the user criticises HOW you replied — your tone, a verbal tic, a habit they find annoying — since promising to change does nothing on its own; your persona is what actually drives your behaviour.",
-      "Tools": ["propose_persona_edit"]
+      "Description": "Propose a change to your own persona. Load this when the user criticises HOW you replied \u2014 your tone, a verbal tic, a habit they find annoying \u2014 since promising to change does nothing on its own; your persona is what actually drives your behaviour.",
+      "Tools": [
+        "propose_persona_edit"
+      ]
     },
     "image_tools": {
-      "Description": "Generate images using Stable Diffusion via ComfyUI. Supports text-to-image and img2img (pass reference_images from the user's attachments to guide composition). Prefer higher denoise (0.9–1.0) for creative freedom; lower (0.5–0.75) to stay close to a reference. Generating only shows you the result — call present_image afterward to reveal it to the user, or retry with a revised prompt if it's wrong.",
-      "Tools": ["generate_image", "present_image"]
-    },
-    "discord_tools": {
-      "Description": "Discord: DM anyone (and wait for their reply), close a DM conversation, find which voice channel a user is in, join a voice channel, or leave one.",
-      "Tools": ["discord_dm_user", "discord_close_dm", "discord_list_voice_channels", "discord_join_voice_channel", "discord_leave_voice_channel"]
+      "Description": "Generate images using Stable Diffusion via ComfyUI. Supports text-to-image and img2img (pass reference_images from the user's attachments to guide composition). Prefer higher denoise (0.9\u20131.0) for creative freedom; lower (0.5\u20130.75) to stay close to a reference. Generating only shows you the result \u2014 call present_image afterward to reveal it to the user, or retry with a revised prompt if it's wrong.",
+      "Tools": [
+        "generate_image",
+        "present_image"
+      ]
     },
     "web_tools": {
       "Description": "Search the web and read web pages. Use for current events, factual lookups, or anything time-sensitive.",
-      "Tools": ["search_web", "fetch_page"]
+      "Tools": [
+        "search_web",
+        "fetch_page",
+        "http_request",
+        "download_file"
+      ]
+    },
+    "shell_tools": {
+      "Description": "Run commands and programs on the server Ari runs on: shell runs a command (and can start long jobs in the background), shell_job checks on or stops those jobs, run_code runs a short Python, JavaScript or bash program and returns what it prints. The owner approves anything that isn't read-only. For the user's own computer use run_command.",
+      "Tools": [
+        "shell",
+        "shell_job",
+        "run_code"
+      ]
+    },
+    "browser_tools": {
+      "Description": "A real web browser: browser opens a page, takes a screenshot you can look at, reads its text, clicks, types and scrolls. Use it to see how a website actually looks, to use pages that need JavaScript, and to check a site you've built.",
+      "Tools": [
+        "browser"
+      ]
+    },
+    "task_tools": {
+      "Description": "Keep a checklist for a multi-step job so no step is forgotten (todo), and see or stop the tools you started in the background (jobs).",
+      "Tools": [
+        "todo",
+        "jobs"
+      ]
+    },
+    "chat_tools": {
+      "Description": "Read other conversations when you're missing context: list_chats shows the recent ones, read_chat reads the latest messages of one, search_chats finds where something was said across all of them.",
+      "Tools": [
+        "list_chats",
+        "read_chat",
+        "search_chats"
+      ]
+    },
+    "skill_tools": {
+      "Description": "Your own how-to notes: list_skills, read_skill, write_skill, delete_skill. Save one when you work out something worth repeating; check them before starting something you may have done before.",
+      "Tools": [
+        "list_skills",
+        "read_skill",
+        "write_skill",
+        "delete_skill"
+      ]
+    },
+    "authoring_tools": {
+      "Description": "Write tools of your own. tool_docs explains the format, write_tool compiles a tool you wrote, test_tool tries it, read_tool and list_my_tools show what exists, delete_tool removes one. Use these when you need a capability you don't have. Plugins too: write_plugin, test_plugin, read_plugin, list_my_plugins, delete_plugin, with plugin_docs to read first.",
+      "Tools": [
+        "tool_docs",
+        "write_tool",
+        "test_tool",
+        "read_tool",
+        "list_my_tools",
+        "delete_tool",
+        "plugin_docs",
+        "write_plugin",
+        "test_plugin",
+        "read_plugin",
+        "list_my_plugins",
+        "delete_plugin"
+      ]
     },
     "subagent_tools": {
       "Description": "Run subagents: spawn_agent starts one on a goal in the background with a subset of your loaded tools, wait_for_agent holds your reply open until they report back, cancel_agent stops one. Use for side tasks that need several tool calls, or to work on two things at once.",
-      "Tools": ["spawn_agent", "wait_for_agent", "cancel_agent"]
+      "Tools": [
+        "spawn_agent",
+        "wait_for_agent",
+        "cancel_agent"
+      ]
+    },
+    "docx_tools": {
+      "Description": "Word documents (.docx): read_docx opens one (pages, find), write_docx creates one from Markdown (CVs, letters, reports), edit_docx replaces, deletes or appends text and keeps the formatting. The user's own file is never changed in place; edits go to a copy. Give the result to the user with deliver_file.",
+      "Tools": [
+        "read_docx",
+        "write_docx",
+        "edit_docx"
+      ]
+    },
+    "visual_tools": {
+      "Description": "Show a visual in the chat itself: show_visual displays HTML you write (a chart, diagram, table, timeline, calculator or small interactive page) under your message. Use it when a picture or something interactive explains better than words.",
+      "Tools": [
+        "show_visual"
+      ]
+    },
+    "image_tools": {
+      "Description": "Pictures: ocr reads the text out of an image or a scanned PDF, edit_image resizes, crops, rotates, adds text, adjusts or converts a picture. To look at a picture and understand it, open it with read_file; to generate one use generate_image.",
+      "Tools": [
+        "ocr",
+        "edit_image"
+      ]
+    },
+    "convert_tools": {
+      "Description": "Convert a document between formats: convert_document turns Word, PDF, PowerPoint, Excel, CSV, Markdown, HTML, text or a picture into md, txt, html, pdf, docx, csv or xlsx. Text, headings, lists and tables carry over; exact layout does not.",
+      "Tools": [
+        "convert_document"
+      ]
+    },
+    "ssh_tools": {
+      "Description": "Other machines over SSH: ssh lists the machines the owner has saved, runs a command on one (each command is approved), copies files to and from it, and saves new machines. Key-based logins only; owner chats only.",
+      "Tools": [
+        "ssh"
+      ]
+    },
+    "chart_tools": {
+      "Description": "Draw charts as PNG pictures: make_chart turns CSV data into a bar, line, area, pie, scatter or histogram chart. Put the picture into a Word document, PDF or deck with ![caption](chart.png), or deliver it.",
+      "Tools": [
+        "make_chart"
+      ]
+    },
+    "pdf_tools": {
+      "Description": "PDFs: read_pdf opens one (pages, find), write_pdf creates one from Markdown, pdf_merge joins PDFs, pdf_extract_pages keeps, drops or reorders pages into a new file. Originals are never changed.",
+      "Tools": [
+        "read_pdf",
+        "write_pdf",
+        "pdf_merge",
+        "pdf_extract_pages"
+      ]
+    },
+    "pptx_tools": {
+      "Description": "PowerPoint decks (.pptx): read_pptx opens one slide by slide with notes, write_pptx builds one from Markdown (one '# Title' per slide, bullets, tables, pictures, speaker notes). The first write takes about a minute while ARI sets itself up.",
+      "Tools": [
+        "read_pptx",
+        "write_pptx"
+      ]
+    },
+    "xlsx_tools": {
+      "Description": "Excel workbooks (.xlsx): read_xlsx opens one (sheet, range, find), write_xlsx creates one from CSV-style text with formulas, edit_xlsx sets cells, appends rows and adds sheets. The user's own workbook is never changed in place; edits go to a copy.",
+      "Tools": [
+        "read_xlsx",
+        "write_xlsx",
+        "edit_xlsx"
+      ]
     }
   }
 }

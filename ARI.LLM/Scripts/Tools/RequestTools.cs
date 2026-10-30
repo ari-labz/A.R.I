@@ -16,6 +16,8 @@ internal sealed class RequestTools : Tool
     private readonly Thread thread;
     internal RequestTools(Thread thread) => this.thread = thread;
 
+    // Loading a tool is not itself a change; what a loaded tool may do is limited per agent (see Agent.MayUse).
+    internal override ToolAccess Access => ToolAccess.Read;
     internal override string Name => "request_tools";
     internal override object Schema => new
     {

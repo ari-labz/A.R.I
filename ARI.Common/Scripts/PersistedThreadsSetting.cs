@@ -15,7 +15,8 @@ public static class PersistedThreadsSetting
 
     public static bool Enabled
     {
-        get { lock (gate) return cached ??= Read(); }
+        // Dev Mode never keeps a conversation: after a reboot every thread from a test run is gone.
+        get { if (Shared.DevMode) return false; lock (gate) return cached ??= Read(); }
     }
 
     public static void Set(bool enabled)

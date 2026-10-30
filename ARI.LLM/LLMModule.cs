@@ -23,11 +23,13 @@ public enum ThreadPhase { Idle, Prefilling, Thinking, Typing, Researching, Gener
 public class LLMModule : ILLMModule, IDisposable
 {
     //pipelines
-    private readonly DialoguePipeline? dialoguePipeline;
+    private readonly ConcurrentDictionary<string, PipelineGraph> graphs = new(StringComparer.OrdinalIgnoreCase);
+    // Every pipeline that can run as a step inside another, which includes ones that couldn't answer a chat by themselves.
+    private readonly ConcurrentDictionary<string, PipelineGraph> subGraphs = new(StringComparer.OrdinalIgnoreCase);
     private readonly CodePipeline?     codePipeline;
     private readonly SpeechPipeline?   speechPipeline;
     private readonly GraphPipeline?    graphPipeline;
-    private readonly Dictionary<string, CustomAgent> customAgents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CustomAgent> customAgents = new(StringComparer.OrdinalIgnoreCase);
     private readonly string            pipelinesPath;
     
     //agents
@@ -37,7 +39,6 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly Memory?           memory;
     private readonly Context?          context;
     private readonly Engram?           engram;
-    private readonly Refactor?         refactor;
     private readonly Awareness?        awareness;
     
     
@@ -48,8 +49,6 @@ public class LLMModule : ILLMModule, IDisposable
     private bool                        dreamingEnabled;
 
     //refactor's own daily schedule (self-contained now that there is no generic Scheduler module)
-    private CancellationTokenSource?    refactorLoopCts;
-    private DateTime                    lastScheduledRefactorUtc;
 
     private readonly CommandService    commands;
     // One queue per physical server — two servers can genuinely run at the same time; agents sharing
@@ -61,13 +60,14 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly ConcurrentDictionary<string, CancellationTokenSource>  processingThreads  = new();
     private readonly ConcurrentDictionary<string, LiveCallInfo>            liveCalls           = new();
     private readonly ConcurrentDictionary<Guid, Channel<AppEvent>>         globalSubscribers   = new();
-    private readonly Dictionary<string, Agent>                             agentMap            = new();
+    private readonly ConcurrentDictionary<string, Agent>                       agentMap            = new();
     private readonly ConcurrentDictionary<string, ThreadPipeline>          forcedPipelines     = new();
     private readonly ConcurrentDictionary<string, ThreadPhase>             threadPhases        = new();
     // Live count of /watch connections per thread — a client only holds one open while that thread is
     // its active view (see ARI.UI's attachWatch), so a count of zero means nobody is currently looking.
     // Backs the "push if unwatched" rule: a completed response only rings the thread owner's phone when this is 0.
     private readonly ConcurrentDictionary<string, int>                     threadWatchers      = new();
+    private UnreadNotifier? unreadNotifier;
     private readonly ConcurrentDictionary<string, Thread>                                         threads           = new();
 
     private readonly List<Server>  _servers    = new();
@@ -76,6 +76,7 @@ public class LLMModule : ILLMModule, IDisposable
     private ILogger                   _logger;
 
     /// <summary>All managed llama servers.</summary>
+    private readonly ConcurrentDictionary<string, byte> nearFull = new(StringComparer.OrdinalIgnoreCase);   // chats whose context is close to compaction and already swept for it
     public IReadOnlyList<Server> Servers    => _servers;
     public string                   ModelsPath => _modelsPath;
 
@@ -130,7 +131,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         CleanScratchpads();
 
-        Dictionary<string, Server> serverByName = servers.ToDictionary(s => s.Name, s => s);
+        SystemAgents.Ensure(agentsJsonPath);
 
         Dictionary<string, JsonElement> rawAgents = new(StringComparer.OrdinalIgnoreCase);
         // Agents switched off with "Enabled": false. They're absent from rawAgents, and this set stops the
@@ -140,19 +141,20 @@ public class LLMModule : ILLMModule, IDisposable
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(agentsJsonPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
 
-            Dictionary<string, string>? sharedMemory = null, sharedToolSystem = null;
+            Dictionary<string, string>? sharedToolSystem = null;
             if (TryGetPropCI(doc.RootElement, "Shared", out JsonElement sharedEl))
             {
-                if (TryGetPropCI(sharedEl, "MemoryAgent", out JsonElement memEl))
-                    sharedMemory = JsonSerializer.Deserialize<Dictionary<string, string>>(memEl.GetRawText(), JsonOptions);
                 if (TryGetPropCI(sharedEl, "ToolSystem", out JsonElement toolEl))
                     sharedToolSystem = JsonSerializer.Deserialize<Dictionary<string, string>>(toolEl.GetRawText(), JsonOptions);
             }
-            SharedPrompts.Load(sharedMemory, sharedToolSystem);
+            SharedPrompts.Load(sharedToolSystem);
             // Unlike Agents.json, ToolGroups.json has no control-panel edit UI yet — read straight from
             // the shipped copy (Paths.BuildPath) rather than agentsJsonPath's seeded-into-AppData copy,
             // which only exists for files a user is meant to tune in place.
             ToolGroups.Load(Path.Combine(Paths.BuildPath, "ToolGroups.json"));
+            CustomTools.Start();
+            // Long standalone jobs run in the background by default, so she can keep talking while they work (switchable per tool in the control panel).
+            foreach (string slow in new[] { "write_pdf", "write_pptx", "make_chart", "ocr", "edit_image", "convert_document", "download_file", "generate_image", "git_clone" }) ToolRegistry.SeedIfNew(slow, null, async: true);
 
             if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())
@@ -165,62 +167,11 @@ public class LLMModule : ILLMModule, IDisposable
                     }
         }
 
-        T Deserialize<T>(JsonElement el) where T : Agent
-        {
-            T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
 
-            if (serverByName.TryGetValue(agent.ServerName, out Server? bound))
-            {
-                agent.Endpoint    = bound.FullEndpoint;
-                agent.Server = bound;
-            }
-            else if (_servers.Count > 0)
-            {
-                // No binding, or one naming a server that no longer exists. Bindings are machine facts,
-                // so the shipped Agents.json carries none — on a fresh install this is how every agent
-                // finds the demo server. Lowest-index server, lowest-index slot, unless the user said
-                // otherwise. Logged because "why is this agent on that server" should be answerable
-                // from the log rather than by reading this method.
-                Server first = _servers[0];
-                _logger.LogInformation(
-                    agent.ServerName.Length == 0
-                        ? "Agent '{Agent}' has no server binding — defaulting to '{Server}' slot 0."
-                        : "Agent '{Agent}' is bound to unknown server '{Missing}' — defaulting to '{Server}' slot 0.",
-                    agent.Name, agent.ServerName.Length == 0 ? first.Name : agent.ServerName, first.Name);
-
-                agent.ServerName  = first.Name;
-                agent.Endpoint    = first.FullEndpoint;
-                agent.Server = first;
-            }
-            else
-            {
-                _logger.LogError("Agent '{Agent}' cannot be bound — no servers are configured.", agent.Name);
-            }
-
-            if (agent.Server is not null)
-            {
-                if (agent.SlotName is { Length: > 0 })
-                {
-                    agent.Slot = agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
-                    if (agent.Slot is null)
-                        _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — falling back to its first slot.",
-                            agent.Name, agent.SlotName, agent.Server.Name);
-                }
-                // No name given (or it didn't resolve) — default to the server's first slot, same as the
-                // old raw agent.Slot ??= 0 behaviour, so an agent still gets pinned/context-derived out of
-                // the box without needing the control panel touched first.
-                if (agent.Slot is null && agent.Server.Slots.Count > 0)
-                {
-                    agent.Slot = agent.Server.Slots[0];
-                    agent.SlotName  = agent.Slot.Name;
-                }
-            }
-            agent.Queue = QueueFor(agent.Server);
-            return agent;
-        }
-
+        realBrainConfig = brainConfig;
         if (brainConfig is not null)
         {
+            if (Shared.DevMode) brainConfig.VaultPath = PrepareDevSandbox(brainConfig);
             IndexStats brainStats = Brain.Initialize(brainConfig);
             _logger.LogInformation("Brain vault indexed: {Notes} notes, {Edges} edges, {Aliases} aliases, {Thoughts} thoughts.",
                 brainStats.Notes, brainStats.Edges, brainStats.Aliases, brainStats.Thoughts);
@@ -330,18 +281,7 @@ public class LLMModule : ILLMModule, IDisposable
 
             ToolApprovals.Notify = NotifyWatchers;   // approval prompts ride the thread's watch stream
 
-            if (rawAgents.TryGetValue("Refactor", out JsonElement refactorEl))
-            {
-                refactor = Deserialize<Refactor>(refactorEl);
-                refactor.engram = engram;
-                refactor.PersistentDir = PersistentDataDir;
-                refactor.Registry = threads;
-                refactor.Notify = NotifyWatchers;
-                agentMap["Refactor"] = refactor;
-                _logger.LogInformation("Refactor is active.");
-            }
-
-            commands = new CommandService(engram, refactor);
+            commands = new CommandService(engram);
         }
         else
         {
@@ -350,10 +290,6 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null && talkingAgent is not null)
         {
-            dialoguePipeline = new DialoguePipeline(textingAgent, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
-            dialoguePipeline.ThreadBufferFull     += key => NotifyWatchers(key);
-            dialoguePipeline.ThreadBecameInactive += key => NotifyWatchers(key);
-
             speechPipeline = new SpeechPipeline(talkingAgent, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
             speechPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
             speechPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
@@ -361,7 +297,9 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null)
         {
-            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, processingThreads, liveCalls, NotifyWatchers);
+            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers);
+            graphPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
+            graphPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
             ReloadPipelines();
         }
 
@@ -395,6 +333,8 @@ public class LLMModule : ILLMModule, IDisposable
                     "- Search an Obsidian note vault: search_vault — only useful if the bound project is an Obsidian graph, not a code repo; calling it on code will return nothing\n" +
                     "- Check the current time: get_time — the time was already given to you at the start of this dream, but call this again if the dream has run long and you want a fresh read before waking\n" +
                     "- Check when your master actually last messaged you: recent_activity — reads real conversation timestamps, not your memory notes (which can lag hours behind an actual conversation). Your memory notes going quiet does NOT mean your owner has gone quiet — call recent_activity before saying or implying 'you've been quiet' or 'it's been a while,' and only use that framing if it confirms a real gap\n\n" +
+                    "Dreaming is read-only. You can look at anything you have a tool to read, but you cannot change anything: you cannot write, edit, move or delete a file, edit or create a memory, run a command, make a document, write a tool or a skill, or message anyone except through wake. " +
+                    "If you decide something should change (a note is wrong, a file needs fixing, a tool should exist), don't try to do it. Keep it as the one thing you wake your master about, or leave it for a future dream.\n\n" +
                     "The wake tool ends the dream and sends your master a message that will notify them. " +
                     "The threshold is 'worth a notification' — not urgency. A question you need answered, a curiosity, something you noticed, something you want to say — all of these clear the bar. " +
                     "A wake message is about ONE topic — name it in the topic field before you write the content, and let that be the one thing the whole message stays on. If you found several separate things worth raising, send the strongest one now and leave the rest — they're not lost, a future dream can still pick them up. " +
@@ -435,16 +375,117 @@ public class LLMModule : ILLMModule, IDisposable
             agentMap["Dreamer"] = dreamer;
 
         // Wire phase tracking on every agent so watch clients know which phase is active.
-        foreach (Agent agent in agentMap.Values)
+        foreach (Agent agent in agentMap.Values) WirePhaseTracking(agent);
+    }
+
+    private void WirePhaseTracking(Agent agent)
+    {
+        agent.OnPhaseChange = (threadKey, phase) =>
         {
-            agent.OnPhaseChange = (threadKey, phase) =>
-            {
-                Shared.Logger.LogDebug("[PhaseChange] {Agent} ({Thread}) → {Phase}", agent.Name, threadKey, phase);
-                if (phase == ThreadPhase.Idle) threadPhases.TryRemove(threadKey, out _);
-                else                           threadPhases[threadKey] = phase;
-                NotifyWatchers(threadKey);
-            };
+            Shared.Logger.LogDebug("[PhaseChange] {Agent} ({Thread}) → {Phase}", agent.Name, threadKey, phase);
+            if (phase == ThreadPhase.Idle) threadPhases.TryRemove(threadKey, out _);
+            else                           threadPhases[threadKey] = phase;
+            NotifyWatchers(threadKey);
+        };
+    }
+
+    /// <summary>Adds an agent made in the control panel to the running server, so a pipeline can use it straight away.
+    /// <paramref name="entry"/> is its Agents.json entry. Returns false if an agent of that name is already loaded.</summary>
+    public bool AddCustomAgent(JsonElement entry)
+    {
+        CustomAgent custom = Deserialize<CustomAgent>(entry);
+        if (agentMap.ContainsKey(custom.Name)) return false;
+        WirePhaseTracking(custom);
+        customAgents[custom.Name] = custom;
+        agentMap[custom.Name]     = custom;
+        _logger.LogInformation("Custom agent '{Agent}' added.", custom.Name);
+        ReloadPipelines();
+        return true;
+    }
+
+    /// <summary>Takes a custom agent out of the running server. Any pipeline that still uses it stops being valid.</summary>
+    public bool RemoveCustomAgent(string name)
+    {
+        if (!customAgents.TryRemove(name, out _)) return false;
+        agentMap.TryRemove(name, out _);
+        _logger.LogInformation("Custom agent '{Agent}' removed.", name);
+        ReloadPipelines();
+        return true;
+    }
+
+    /// <summary>Swaps a running custom agent for its edited Agents.json entry (prompt, server and slot), so the change
+    /// applies to the next pipeline run.</summary>
+    public bool ReplaceCustomAgent(JsonElement entry)
+    {
+        CustomAgent custom = Deserialize<CustomAgent>(entry);
+        if (!customAgents.ContainsKey(custom.Name)) return false;
+        WirePhaseTracking(custom);
+        customAgents[custom.Name] = custom;
+        agentMap[custom.Name]     = custom;
+        ReloadPipelines();
+        return true;
+    }
+
+    /// <summary>Reads an agent from its Agents.json entry and binds it to its server and slot, falling back to the first
+    /// server (and its first slot) when it names none that exists.</summary>
+    private T Deserialize<T>(JsonElement el) where T : Agent
+    {
+        T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
+
+        if (TryGetServer(agent.ServerName, out Server? bound))
+        {
+            agent.Endpoint    = bound.FullEndpoint;
+            agent.Server = bound;
         }
+        else if (_servers.Count > 0)
+        {
+            // No binding, or one naming a server that no longer exists. Bindings are machine facts,
+            // so the shipped Agents.json carries none — on a fresh install this is how every agent
+            // finds the demo server. Lowest-index server, lowest-index slot, unless the user said
+            // otherwise. Logged because "why is this agent on that server" should be answerable
+            // from the log rather than by reading this method.
+            Server first = _servers[0];
+            _logger.LogInformation(
+                agent.ServerName.Length == 0
+                    ? "Agent '{Agent}' has no server binding — defaulting to '{Server}' slot 0."
+                    : "Agent '{Agent}' is bound to unknown server '{Missing}' — defaulting to '{Server}' slot 0.",
+                agent.Name, agent.ServerName.Length == 0 ? first.Name : agent.ServerName, first.Name);
+
+            agent.ServerName  = first.Name;
+            agent.Endpoint    = first.FullEndpoint;
+            agent.Server = first;
+        }
+        else
+        {
+            _logger.LogError("Agent '{Agent}' cannot be bound — no servers are configured.", agent.Name);
+        }
+
+        if (agent.Server is not null)
+        {
+            if (agent.SlotName is { Length: > 0 })
+            {
+                agent.Slot = agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
+                if (agent.Slot is null)
+                    _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — falling back to its first slot.",
+                        agent.Name, agent.SlotName, agent.Server.Name);
+            }
+            // No name given (or it didn't resolve) — default to the server's first slot, same as the
+            // old raw agent.Slot ??= 0 behaviour, so an agent still gets pinned/context-derived out of
+            // the box without needing the control panel touched first.
+            if (agent.Slot is null && agent.Server.Slots.Count > 0)
+            {
+                agent.Slot = agent.Server.Slots[0];
+                agent.SlotName  = agent.Slot.Name;
+            }
+        }
+        agent.Queue = QueueFor(agent.Server);
+        return agent;
+    }
+
+    private bool TryGetServer(string name, out Server server)
+    {
+        server = _servers.FirstOrDefault(s => s.Name == name)!;
+        return server is not null;
     }
 
     // ── Thread registry ──────────────────────────────────────────────────────────
@@ -468,6 +509,9 @@ public class LLMModule : ILLMModule, IDisposable
         // own copy for the same reason.
         new ListTools(thread).Register(thread);
         new RequestTools(thread).Register(thread);
+        new ToolSearch(thread).Register(thread);
+        // The reflex for corrections and "remember this" is always on for people-facing chats.
+        if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech) new RememberTool(thread).Register(thread);
         // Discord threads get discord_tools hot — no request_tools round-trip needed.
         bool isDiscord = threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) ||
                          threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
@@ -487,6 +531,9 @@ public class LLMModule : ILLMModule, IDisposable
         // propose_persona_edit — discovering it via list_tools is not something to rely on mid-request.
         if (!isDiscord && type is ThreadPipeline.Dialogue)
             new HandToCoder(thread).Register(thread);
+        // The pinned tools are in hand from the first message. This is the conversation's first sync; the chat API repeats it on
+        // each message, once it knows whether the Master or a guest is talking.
+        ToolFactories.SyncPinned(thread);
         thread.Updated           += () => Broadcast(new AppEvent("threadUpdated", threadKey));
         thread.Deleted           += () =>
         {
@@ -537,11 +584,18 @@ public class LLMModule : ILLMModule, IDisposable
             if (engram is not null)
                 thread.ExchangeCompleted += (_, _) =>
                 {
-                    if (thread.Internal || !thread.HasUserMessages || !thread.HasMemoryAccess || thread.OwnerId is null) return;
-                    if (!engram.ShouldIntervalSweep(threadKey)) return;
+                    if (!Engram.MaySweep(thread)) return;
+                    bool nearCompaction = false;
+                    if (textingAgent is { BudgetContext: > 0 } && thread.History.OfType<Response>().LastOrDefault()?.Data.PromptTokens is int used and > 0)
+                    {
+                        double share = used / (double)textingAgent.BudgetContext;
+                        if (share >= textingAgent.CompactHighPct / 100.0 - 0.1) nearCompaction = nearFull.TryAdd(threadKey, 0);
+                        else if (share < 0.5) nearFull.TryRemove(threadKey, out _);
+                    }
+                    if (!engram.ShouldIntervalSweep(threadKey) && !nearCompaction) return;
                     _ = Task.Run(async () =>
                     {
-                        try { await engram.RunEngram(threadKey, "interval"); }
+                        try { await engram.RunEngram(threadKey, nearCompaction ? "compaction" : "interval"); }
                         catch (Exception ex) { _logger.LogWarning("[Interval] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
                     });
                 };
@@ -577,15 +631,43 @@ public class LLMModule : ILLMModule, IDisposable
         converted.IsBrainVault   = existing.IsBrainVault;
         converted.HasMemoryAccess  = existing.HasMemoryAccess;
         converted.IsAdminChat    = existing.IsAdminChat;
+        converted.GraphId        = existing.GraphId;
         converted.Ct             = existing.Ct;
         return converted;
     }
 
     // ── Pipeline graphs ──────────────────────────────────────────────────────
 
-    /// <summary>The id of the pipeline graph currently answering Dialogue threads, or null while the built-in Dialogue
-    /// pipeline does.</summary>
-    public string? ActivePipelineId => graphPipeline?.Graph?.Id;
+    /// <summary>The pipelines a thread can be switched to: every graph that can run, Default first.</summary>
+    public IReadOnlyList<(string Id, string Name)> ReplyPipelines() =>
+        graphs.Values.Where(g => !PipelineGraph.StepOnlyIds.Contains(g.Id, StringComparer.OrdinalIgnoreCase) && (!g.Hidden || g.Id == PipelineGraph.DefaultId)).OrderBy(g => g.Id == PipelineGraph.DefaultId ? 0 : 1).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+              .Select(g => (g.Id, g.Name)).ToList();
+
+    /// <summary>The graph a thread runs on. An id that no longer exists (deleted, or broken by a deleted agent) answers
+    /// with Default rather than failing the reply.</summary>
+    private PipelineGraph GraphFor(string? id)
+    {
+        if (!string.IsNullOrEmpty(id) && graphs.TryGetValue(id, out PipelineGraph? g)) return g;
+        if (!string.IsNullOrEmpty(id)) _logger.LogWarning("Pipeline '{Id}' can't run any more — answering with Default.", id);
+        return graphs.TryGetValue(PipelineGraph.DefaultId, out PipelineGraph? d) ? d : PipelineGraph.BuiltInDefault(memory is not null);
+    }
+
+    /// <summary>Switches a thread to another pipeline for its next reply. False if there is no such pipeline.</summary>
+    public bool SetThreadPipeline(string threadKey, string? id)
+    {
+        if (!string.IsNullOrEmpty(id) && !id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase) && !graphs.ContainsKey(id)) return false;
+        if (!threads.TryGetValue(threadKey, out Thread? t)) return false;
+        t.GraphId = string.IsNullOrEmpty(id) || id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase) ? null : id;
+        return true;
+    }
+
+    /// <summary>The input ports each built-in agent can leave unwired: Dialogue's memories and any extra {token} its prompt adds.</summary>
+    public Dictionary<string, string[]> AgentOptionalPorts()
+    {
+        Dictionary<string, string[]> result = new(PipelineGraph.OptionalPorts, StringComparer.OrdinalIgnoreCase);
+        if (graphPipeline?.PortsOf("Dialogue") is { } d) result["Dialogue"] = d.Where(p => !p.Equals("history", StringComparison.OrdinalIgnoreCase)).ToArray();
+        return result;
+    }
 
     /// <summary>What can be wired into each agent: the built-ins' fixed ports, and a custom agent's {tokens}.</summary>
     public Dictionary<string, string[]> AgentPorts()
@@ -596,45 +678,88 @@ public class LLMModule : ILLMModule, IDisposable
         return result;
     }
 
-    /// <summary>Problems with a pipeline graph given as the control panel's JSON (one entry of Pipelines.json), empty if it can run.</summary>
-    public List<string> ValidatePipeline(JsonElement pipeline)
+    /// <summary>Problems with each pipeline in Pipelines.json as the control panel sends it, by pipeline id; empty when it can run.
+    /// A pipeline counts as fine if it can answer a chat or run as a step inside another one.</summary>
+    public Dictionary<string, List<string>> ValidatePipelines(JsonElement root)
     {
-        if (graphPipeline is null) return new() { "Dialogue is not configured, so no pipeline can run." };
-        using JsonDocument wrap = JsonDocument.Parse("{\"pipelines\":[" + pipeline.GetRawText() + "]}");
-        List<PipelineGraph> parsed = PipelineGraph.ParseAll(wrap.RootElement);
-        return parsed.Count == 0 ? new() { "Not a pipeline." } : parsed[0].Validate(graphPipeline.PortsOf);
+        Dictionary<string, List<string>> result = new();
+        if (graphPipeline is null) return result;
+        List<PipelineGraph> all = WithShipped(PipelineGraph.ParseAll(root), false);
+        Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        foreach (PipelineGraph g in all)
+        {
+            PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
+            List<string> asReply = g.Validate(env);
+            result[g.Id] = asReply.Count == 0 || g.Validate(env, asSub: true).Count == 0 ? [] : asReply;
+        }
+        return result;
     }
 
-    /// <summary>Re-reads Pipelines.json and switches Dialogue threads to the graph it marks active. A graph that doesn't
-    /// validate is never used — the built-in Dialogue pipeline keeps answering, and the reasons are logged.</summary>
+    /// <summary>The pipelines in the file plus any of the ones ARI ships that the file doesn't have yet.</summary>
+    private static List<PipelineGraph> WithShipped(List<PipelineGraph> fromFile, bool memoryAvailable)
+    {
+        using JsonDocument shipped = JsonDocument.Parse(PipelineGraph.ShippedJson);
+        List<PipelineGraph> all = fromFile.Concat(PipelineGraph.ParseAll(shipped.RootElement).Where(s => !fromFile.Any(f => f.Id.Equals(s.Id, StringComparison.OrdinalIgnoreCase)))).ToList();
+        // No saved Default: use the shipped one, with Memory as a pipeline.
+        if (memoryAvailable && !all.Any(g => g.Id.Equals(PipelineGraph.DefaultId, StringComparison.OrdinalIgnoreCase))) all.Add(PipelineGraph.BuiltInDefault(true));
+        return all;
+    }
+
+    /// <summary>Re-reads Pipelines.json and keeps every graph that can run. A pipeline that can answer a chat is offered as a
+    /// reply type; one that can only run as a step inside another is kept for that. One that does neither (an agent it uses was
+    /// deleted, say) is left out and the reasons logged; threads on it answer with Default until it is fixed. Default is always
+    /// there: the one in the file, or the built-in one.</summary>
     public void ReloadPipelines()
     {
         if (graphPipeline is null) return;
-        graphPipeline.Graph = null;
-        if (!File.Exists(pipelinesPath)) return;
+        Dictionary<string, PipelineGraph> loaded = new(StringComparer.OrdinalIgnoreCase), loadedSub = new(StringComparer.OrdinalIgnoreCase);
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(pipelinesPath), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-            string? active = TryGetPropCI(doc.RootElement, "active", out JsonElement a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
-            if (string.IsNullOrEmpty(active)) return;
-            PipelineGraph? graph = PipelineGraph.ParseAll(doc.RootElement).FirstOrDefault(g => g.Id == active);
-            if (graph is null) { _logger.LogWarning("Pipelines.json names active pipeline '{Id}' but no such pipeline exists — using built-in Dialogue.", active); return; }
-            List<string> problems = graph.Validate(graphPipeline.PortsOf);
-            if (problems.Count > 0)
+            System.Text.Json.Nodes.JsonObject saved = System.Text.Json.Nodes.JsonNode.Parse(File.Exists(pipelinesPath) ? File.ReadAllText(pipelinesPath) : "{\"pipelines\":[]}", documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip })!.AsObject();
+            PipelineGraph.UpgradeLegacyDefault(saved);
+            using JsonDocument doc = JsonDocument.Parse(saved.ToJsonString());
+            List<PipelineGraph> all = WithShipped(PipelineGraph.ParseAll(doc.RootElement), graphPipeline.PortsOf("Memory") is not null);
+            Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            foreach (PipelineGraph graph in all)
             {
-                _logger.LogWarning("Pipeline '{Name}' is marked active but cannot run — using built-in Dialogue instead: {Problems}", graph.Name, string.Join(" | ", problems));
-                return;
+                PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
+                List<string> asReply = graph.Validate(env);
+                List<string> asSub   = graph.Validate(env, asSub: true);
+                if (asReply.Count == 0) loaded[graph.Id] = graph;
+                if (asSub.Count == 0)   loadedSub[graph.Id] = graph;
+                if (asReply.Count > 0 && asSub.Count > 0)
+                    _logger.LogWarning("Pipeline '{Name}' can't run and is not available: {Problems}", graph.Name, string.Join(" | ", asReply));
             }
-            graphPipeline.Graph = graph;
-            _logger.LogInformation("Pipeline '{Name}' is answering Dialogue threads.", graph.Name);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Could not read Pipelines.json — using built-in Dialogue.");
+            _logger.LogError(ex, "Could not read Pipelines.json — only the built-in Default pipeline is available.");
         }
+    
+        if (!loaded.ContainsKey(PipelineGraph.DefaultId)) loaded[PipelineGraph.DefaultId] = PipelineGraph.BuiltInDefault(graphPipeline.PortsOf("Memory") is not null);
+
+        foreach (string gone in graphs.Keys.Where(k => !loaded.ContainsKey(k)).ToList()) graphs.TryRemove(gone, out _);
+        foreach ((string id, PipelineGraph g) in loaded) graphs[id] = g;
+        foreach (string gone in subGraphs.Keys.Where(k => !loadedSub.ContainsKey(k)).ToList()) subGraphs.TryRemove(gone, out _);
+        foreach ((string id, PipelineGraph g) in loadedSub) subGraphs[id] = g;
     }
 
     // ── Agent assignment ─────────────────────────────────────────────────────────
+
+    /// <summary>Applies an edited prompt, templates, thinking flag or tool-call cap to a live agent so a change takes effect on its next run without a restart.</summary>
+    public void ApplyAgentPatch(string agentName, System.Text.Json.Nodes.JsonObject patch)
+    {
+        if (!agentMap.TryGetValue(agentName, out Agent? agent)) return;
+        if (patch["agentPrompt"]?.GetValue<string>() is { } prompt) agent.AgentPrompt = prompt;
+        if (patch["promptTemplates"] is System.Text.Json.Nodes.JsonObject tpl)
+        {
+            Dictionary<string, string> merged = new(agent.PromptTemplates ?? new());
+            foreach ((string k, System.Text.Json.Nodes.JsonNode? v) in tpl) if (v is not null) merged[k] = v.GetValue<string>();
+            agent.PromptTemplates = merged;
+        }
+        if (patch["think"]?.GetValue<bool>() is { } think) agent.Think = think;
+        if (patch["maxToolCalls"]?.GetValue<int>() is { } cap) agent.MaxToolCalls = cap;
+    }
 
     /// <summary>
     /// Reassigns a live agent to a different server. Resolves the server name to an endpoint
@@ -716,7 +841,6 @@ public class LLMModule : ILLMModule, IDisposable
         await Task.WhenAll(boots);
 
         dreamOrchestrator?.Start();
-        StartRefactorLoop();
 
         async Task BootOne(Server server, Model? model)
         {
@@ -798,13 +922,53 @@ public class LLMModule : ILLMModule, IDisposable
         });
     }
 
+    /// <summary>DevMode never touches the real brain. Engram and everything else still run in full, but against a throwaway copy of it made fresh at
+    /// every start (<c>Brain.devrun</c> beside the real one), so you can read exactly what she tried to remember without any of it being kept.</summary>
+    private BrainConfig? realBrainConfig;
+    private readonly object devModeLock = new();
+
+    /// <summary>Turns Dev Mode on or off while running. On: a fresh throwaway copy of the brain is made and everything points at it. Off: the
+    /// real brain is loaded again. Either way the index is rebuilt for the brain now in use. Does nothing if the brain module is disabled.</summary>
+    public void SetDevMode(bool on)
+    {
+        lock (devModeLock)
+        {
+            if (Shared.DevMode == on) return;
+            Shared.SetDevMode(on);
+            if (realBrainConfig is null) return;
+            BrainConfig config = new() { Enabled = realBrainConfig.Enabled, VaultPath = realBrainConfig.VaultPath, BackupPath = realBrainConfig.BackupPath, MaxBackups = realBrainConfig.MaxBackups };
+            if (on) config.VaultPath = PrepareDevSandbox(config);
+            IndexStats stats = Brain.Initialize(config);
+            _logger.LogWarning("Dev Mode switched {State}: brain is now {Root} ({Notes} notes).", on ? "ON" : "OFF", Brain.VaultRoot, stats.Notes);
+        }
+    }
+
+    private string PrepareDevSandbox(BrainConfig config)
+    {
+        string real = Path.GetFullPath(config.VaultPath.Length > 0 ? config.VaultPath : Paths.Brain);
+        string sandbox = real.TrimEnd(Path.DirectorySeparatorChar) + ".devrun";
+        if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: true);   // only ever our own ".devrun" copy
+        if (Directory.Exists(real)) CopyDirectory(real, sandbox);
+        _logger.LogWarning("DevMode: the brain for this run is a throwaway copy at {Sandbox}. Engram runs in full and its notes are written there; your real brain at {Real} is untouched.", sandbox, real);
+        return sandbox;
+    }
+
+    private static void CopyDirectory(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (string file in Directory.GetFiles(from))
+            File.Copy(file, Path.Combine(to, Path.GetFileName(file)), overwrite: true);
+        foreach (string dir in Directory.GetDirectories(from))
+            if (Path.GetFileName(dir) != ".ari") CopyDirectory(dir, Path.Combine(to, Path.GetFileName(dir)));   // the index is rebuilt
+    }
+
     public void Dispose()
     {
         dreamOrchestrator?.Dispose();
         brainWatchCts?.Cancel();
         brainWatchCts?.Dispose();
-        refactorLoopCts?.Cancel();
-        refactorLoopCts?.Dispose();
+        // Conversations that haven't been swept yet are swept before the servers go, so closing ARI doesn't lose them.
+        try { engram?.FlushAsync(TimeSpan.FromMinutes(3)).GetAwaiter().GetResult(); } catch { /* best effort */ }
         engram?.Dispose();
         foreach (Server server in _servers)
             server.Dispose();
@@ -862,7 +1026,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// delete-retry poll tries again.</summary>
     private void OnThreadDormant(Thread thread)
     {
-        bool canSweep = engram is not null && !thread.Internal && thread.HasUserMessages && !thread.EngramProcessed && thread.HasMemoryAccess && thread.OwnerId is not null;
+        bool canSweep = engram is not null && !thread.EngramProcessed && Engram.MaySweep(thread);
         if (!canSweep) { thread.EngramProcessed = true; return; }
 
         if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
@@ -948,6 +1112,7 @@ public class LLMModule : ILLMModule, IDisposable
     public Task<string> Prompt(string threadKey, string prompt, string username, string? platformContext = null, List<Attachment>? messageAttachments = null, InferencePriority priority = InferencePriority.Normal)
     {
         wakeStreak.TryRemove(threadKey, out _);
+        unreadNotifier?.Read(threadKey);   // replying means they've read it
         return RouteThenWake(threadKey, prompt, username, platformContext, null, CancellationToken.None, messageAttachments, priority: priority);
     }
 
@@ -1048,7 +1213,7 @@ public class LLMModule : ILLMModule, IDisposable
         if (isDiscordThread)
         {
             Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
-            return await dialoguePipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
+            return await graphPipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
         }
 
         // No more classifier. Routing is deterministic: an explicit pin (UI selection, or a bound
@@ -1075,19 +1240,18 @@ public class LLMModule : ILLMModule, IDisposable
             case "Code":
             {
                 Thread codeThread = Recategorise(ThreadPipeline.Code, threadKey, platformContext);
-                return await (codePipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath);
+                return await (codePipeline ?? (Pipeline)graphPipeline!).ExecuteAsync(codeThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath);
             }
             case "Speech":
             {
                 Thread speechThread = Recategorise(ThreadPipeline.Speech, threadKey, platformContext);
                 speechPipeline?.SetSteering(threadKey, steering);
-                return await (speechPipeline ?? (Pipeline)dialoguePipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath, onTextDelta);
+                return await (speechPipeline ?? (Pipeline)graphPipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath, onTextDelta);
             }
             default:
             {
                 Thread dlgThread = Recategorise(ThreadPipeline.Dialogue, threadKey, platformContext);
-                Pipeline replyPipeline = graphPipeline is { Graph: not null } ? graphPipeline : dialoguePipeline!;
-                string reply = await replyPipeline.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
+                string reply = await graphPipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
                 return dlgThread.PendingCoderHandoff is { } brief
                     ? await RunCoderHandoff(dlgThread, brief, username, platformContext, onDelta, externalCt, localPath) ?? reply
                     : reply;
@@ -1240,6 +1404,7 @@ public class LLMModule : ILLMModule, IDisposable
     public IDisposable WatchThread(string threadKey, Channel<bool?> channel)
     {
         threadWatchers.AddOrUpdate(threadKey, 1, (_, n) => n + 1);
+        unreadNotifier?.Read(threadKey);   // opening a thread is reading it
         int released = 0;
         void Release()
         {
@@ -1289,7 +1454,10 @@ public class LLMModule : ILLMModule, IDisposable
         if (threads.TryGetValue(threadKey, out Thread? thread)) thread.RaiseUpdated();
     }
 
-    public bool IsEngramSweeping(string threadKey) => engram?.IsSweeping(threadKey) ?? false;
+    public bool IsEngramSweeping(string threadKey) => engram?.IsSaving(threadKey) ?? false;
+
+    /// <summary>A reply is held back until Engram finishes saving this chat.</summary>
+    public bool IsWaitingOnMemory(string threadKey) => threads.TryGetValue(threadKey, out Thread? t) && t.WaitingOnMemory;
 
     /// <summary>How many completed exchanges an active thread accumulates before Engram sweeps it
     /// mid-conversation. 0 = interval sweeping disabled (dormant/close remain the only triggers).</summary>
@@ -1308,7 +1476,7 @@ public class LLMModule : ILLMModule, IDisposable
     public ThreadPhase GetThreadPhase(string threadKey) => threadPhases.TryGetValue(threadKey, out ThreadPhase p) ? p : ThreadPhase.Idle;
 
     // Idle = no thread is currently being processed. Read statically via Activity.IsIdle(); background
-    // work (Refactor's loop, Dream) runs only while this holds, and yields the moment Ari is busy.
+    // work (Dream) runs only while this holds, and yields the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
     // Ari is "active" whenever any visible (non-Internal) thread is in a state the user can see in the
@@ -1318,79 +1486,9 @@ public class LLMModule : ILLMModule, IDisposable
         threads.Values.Any(t => !t.Internal &&
             t.State is ThreadState.Unread or ThreadState.Active or ThreadState.Streaming or ThreadState.Inactive);
 
-    /// <summary>True when Refactor is loaded and can be run on a schedule (the graph walk that replaced BrainScan).</summary>
-    public bool HasRefactor => refactor is not null;
-
     // Canonical persistent-data location. Only needed by the manual /brainscan and /proactive commands
-    // (which don't receive it from ARI.Core) and by the dreaming/refactor schedule state below.
+    // (which don't receive it from ARI.Core) and by the dreaming state below.
     private static string PersistentDataDir => Paths.PersistentData;
-
-    /// <summary>Runs a scheduled graph-walk refactor pass, capped at 10 epochs (honours the token so it
-    /// yields when cancelled). The manual /refactor command still runs the full uncapped walk.</summary>
-    public Task RunRefactorAsync(CancellationToken ct) =>
-        refactor?.Run(allNotes: true, ct, epochsOverride: SCHEDULED_REFACTOR_EPOCHS) ?? Task.CompletedTask;
-
-    // ── Refactor's own schedule ──────────────────────────────────────────────────
-    // Roughly once a day, while Ari is idle. There's exactly one scheduled job left in the whole
-    // process, so it isn't worth a generic cron/scheduler module for it — a plain poll loop covers it.
-
-    private static readonly TimeSpan REFACTOR_INTERVAL      = TimeSpan.FromDays(1);
-    private static readonly TimeSpan REFACTOR_POLL_INTERVAL = TimeSpan.FromMinutes(30);
-    private static string RefactorScheduleStatePath => Path.Combine(PersistentDataDir, "RefactorSchedule.json");
-
-    private void StartRefactorLoop()
-    {
-        if (refactor is null) return;
-        lastScheduledRefactorUtc = LoadLastRefactorRunUtc();
-        refactorLoopCts = new CancellationTokenSource();
-        _ = RefactorLoopAsync(refactorLoopCts.Token);
-    }
-
-    private async Task RefactorLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                if (IsIdle && DateTime.UtcNow - lastScheduledRefactorUtc >= REFACTOR_INTERVAL)
-                {
-                    await RunRefactorAsync(ct);
-                    lastScheduledRefactorUtc = DateTime.UtcNow;
-                    SaveLastRefactorRunUtc(lastScheduledRefactorUtc);
-                }
-            }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { _logger.LogWarning(ex, "[Refactor] Scheduled check failed."); }
-
-            try { await Task.Delay(REFACTOR_POLL_INTERVAL, ct); }
-            catch (OperationCanceledException) { break; }
-        }
-    }
-
-    private sealed record RefactorScheduleState(DateTime LastRunUtc);
-
-    // A fresh install has never run Refactor — treated as "just ran" so it doesn't fire the moment
-    // Ari first goes idle, rather than waiting out a full day like every subsequent run.
-    private static DateTime LoadLastRefactorRunUtc()
-    {
-        try
-        {
-            if (File.Exists(RefactorScheduleStatePath))
-                return JsonSerializer.Deserialize<RefactorScheduleState>(File.ReadAllText(RefactorScheduleStatePath))?.LastRunUtc ?? DateTime.UtcNow;
-        }
-        catch { /* fall through to "just ran" */ }
-        return DateTime.UtcNow;
-    }
-
-    private static void SaveLastRefactorRunUtc(DateTime utc)
-    {
-        try
-        {
-            Directory.CreateDirectory(PersistentDataDir);
-            File.WriteAllText(RefactorScheduleStatePath, JsonSerializer.Serialize(new RefactorScheduleState(utc)));
-        }
-        catch { /* best-effort — worst case Refactor re-runs sooner than once a day */ }
-    }
 
     // ── Dreaming on/off ──────────────────────────────────────────────────────────
     // Runtime-editable from the control panel; persisted here now that there is no Scheduler module
@@ -1429,7 +1527,6 @@ public class LLMModule : ILLMModule, IDisposable
 
     // The scheduled walk is deliberately short: 10 seeds per run, then it reschedules. Ordering by
     // LastRefactored (oldest first) means each run advances to notes the previous runs never reached.
-    private const int SCHEDULED_REFACTOR_EPOCHS = 10;
 
     /// <summary>
     /// Creates a fresh, Master-facing Dialogue thread whose history is a single assistant message — Ari
@@ -1496,7 +1593,7 @@ public class LLMModule : ILLMModule, IDisposable
     /// thread — see CreateProactiveDialogueThread.</summary>
     public async Task FireReminderAsync(string prompt, string context, string title, CancellationToken ct = default)
     {
-        if (dialoguePipeline is null)
+        if (graphPipeline is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
         string scratchKey = $"reminder-scratch-{Guid.NewGuid():N}";
@@ -1507,7 +1604,7 @@ public class LLMModule : ILLMModule, IDisposable
         string reply;
         try
         {
-            reply = await dialoguePipeline.ExecuteAsync(scratch, scratchKey, prompt, "reminder", context, onDelta: null, cts);
+            reply = await graphPipeline.ExecuteAsync(scratch, scratchKey, prompt, "reminder", context, onDelta: null, cts);
         }
         finally
         {
@@ -1519,22 +1616,22 @@ public class LLMModule : ILLMModule, IDisposable
 
     private async Task SendProactivePush(string body, string threadKey, string? ownerId)
     {
-        try { await (Modules.WebPush?.SendPushNotification(body, url: $"/?thread={threadKey}", title: "Ari", ownerUserId: ownerId) ?? Task.CompletedTask); }
+        try { await (Modules.WebPush?.SendPushNotification(body, url: $"/?thread={threadKey}", title: "Ari", ownerUserId: ownerId, tag: $"ari-{threadKey}") ?? Task.CompletedTask); }
         catch (Exception ex) { _logger.LogWarning("[Push] notification failed for thread '{Key}': {Msg}", threadKey, ex.Message); }
     }
 
-    /// <summary>A completed response that nobody was watching live is exactly the case a push exists for
-    /// — the thread's owner would otherwise only find out next time they happen to open the app. Internal/guest
-    /// threads never ring the phone; a thread with a watcher already saw the reply stream in, so no push.</summary>
+    /// <summary>A reply nobody was watching is the case a push exists for, but not at once: someone may be about to look. If the thread is
+    /// still unread two minutes after the first unread reply, its owner's devices (and only theirs) get one notification; tapping it
+    /// opens the thread. Voice, background and ownerless threads never ring the phone. See <see cref="UnreadNotifier"/>.</summary>
     private void PushIfUnwatched(Thread thread, string threadKey)
     {
-        if (thread.Internal || thread.OwnerId is null) return;   // no owner, nobody to ring
-        if (HasWatchers(threadKey)) return;
-
-        string? body = thread.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText;
-        if (string.IsNullOrWhiteSpace(body)) return;
-
-        _ = SendProactivePush(body, threadKey, thread.OwnerId);
+        if (thread.Internal || thread.OwnerId is null || thread.Pipeline is not (ThreadPipeline.Dialogue or ThreadPipeline.Code)) return;
+        unreadNotifier ??= new UnreadNotifier(TimeSpan.FromMinutes(2), HasWatchers,
+            key => threads.TryGetValue(key, out Thread? t)
+                ? (t.OwnerId, t.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText)
+                : null,
+            (key, text, owner) => SendProactivePush(text, key, owner));
+        unreadNotifier.ReplyFinished(threadKey, thread.OwnerId);
     }
 
     public void NotifyTyping(string threadKey)

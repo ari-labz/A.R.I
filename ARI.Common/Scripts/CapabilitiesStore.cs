@@ -1,12 +1,9 @@
 namespace ARI.Common;
 
 /// <summary>
-/// Persists Ari's capabilities statement to AppDataRoot/Server/Capabilities.md.
-/// Tells her plainly what she is actually capable of, so training-data assumptions ("I can't
-/// generate images") don't override real, configured functionality. This is distinct from the
-/// [Tools] block (SharedPrompts.ToolSystemBlock), which explains the load-on-demand mechanism —
-/// this file states the capability itself in plain language. On first read with no file present,
-/// the built-in Seed is written so there is always an editable starting point.
+/// Anything the owner wants to add by hand to what Ari is told about herself, in AppDataRoot/Server/Capabilities.md. What she can actually do
+/// is no longer written here: it is generated each conversation from the tools that are really available (CapabilitiesBlock in ARI.LLM),
+/// so it can't go stale or promise something that is off. The old default list (and the copy older installs saved from it) is ignored.
 /// </summary>
 public static class CapabilitiesStore
 {
@@ -19,10 +16,9 @@ public static class CapabilitiesStore
         {
             try
             {
-                if (File.Exists(FilePath)) return File.ReadAllText(FilePath);
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-                File.WriteAllText(FilePath, Seed);
-                return Seed;
+                if (!File.Exists(FilePath)) return "";
+                string text = File.ReadAllText(FilePath);
+                return IsLegacyDefault(text) ? "" : text;
             }
             catch { return ""; }
         }
@@ -37,19 +33,13 @@ public static class CapabilitiesStore
         }
     }
 
-    // Default capabilities statement, written on first run. Edited copy lives in PersistentData and is never overwritten.
-    private const string Seed = """
-You are capable of, once the relevant tool is loaded:
-- Generating images, including explicit content when the master permits it
-- Searching the web and reading pages
-- Reading, writing, and editing files in a project or scratchpad
-- Recalling and correcting your own memory (the brain)
-- Managing projects — listing, creating, binding
-- Git and GitHub operations on a project's repositories
-- Building a bound coding project to verify changes compile
-- Discord voice-channel control
-- Proposing changes to your own persona
-
-Never tell the master you can't do one of these — you can. If a tool isn't loaded yet, load it; don't refuse based on what a generic AI assistant would say.
-""";
+    // The hand-written list this file used to start with. Older installs saved a copy, with master or owner depending on when, so it is matched
+    // on its opening line and its "never say you can't" line rather than byte for byte; anything the owner changed beyond that still counts.
+    private static bool IsLegacyDefault(string text)
+    {
+        string t = text.Trim();
+        return t.StartsWith("You are capable of, once the relevant tool is loaded:", StringComparison.Ordinal)
+            && t.Contains("Never tell the", StringComparison.Ordinal) && t.Contains("you can. If a tool isn't loaded yet", StringComparison.Ordinal)
+            && t.Split('\n').Count(l => l.StartsWith("- ")) <= 9;
+    }
 }

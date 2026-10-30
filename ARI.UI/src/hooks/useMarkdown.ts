@@ -14,6 +14,8 @@ const TOOL_ERROR_RE = /<!--ari-tool-error:([^:]+):([^:]*):([^>]*?)-->/g
 const TOOL_MODE_RE  = /<!--ari-tool-mode:([^:]+):([^>]*?)-->/g
 const FILE_RE       = /<!--ari-file:([^:]+):([^>]*?)-->/g
 const IMAGE_RE      = /<!--ari-image:([^:]+):([^>]+?)-->/g
+const VISUAL_RE     = /<!--ari-visual:([^:]+):([^>]+?)-->/g
+const BROWSER_RE    = /<!--ari-browser:([^>]+?)-->/g
 
 // Turns deliver_file markers into a hover-to-download card. Shared by the streaming render
 // (preprocessToolCards) and the finished-blocks render (renderBlockHtml text blocks), so the card
@@ -33,6 +35,27 @@ function renderFileMarkers(s: string): string {
 
 function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+// A browser step: a one-line card that opens the pane beside the chat (useBrowserSession listens for data-open-browser).
+const GLOBE_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>'
+// Steps that follow one another become one card ("opened shop.html · read the page · looked at the page"), not a stack of them.
+const BROWSER_RUN_RE = /(?:<!--ari-browser:[^>]+?-->\s*)+/g
+function renderBrowserMarkers(s: string): string {
+    return s.replace(BROWSER_RUN_RE, run => {
+        const steps = [...run.matchAll(BROWSER_RE)].map(m => decodeMarkerLabel(m[1]).trim()).filter(Boolean)
+        const text = escHtml(steps.join(" · "))
+        return `\n\n<div class="browser-card" role="button" tabindex="0" data-open-browser title="${text}"><span class="bc-ico" aria-hidden="true">${GLOBE_SVG}</span>`
+            + `<span class="bc-text"><b>Browser</b>${text}</span><span class="bc-go">Open ›</span></div>\n\n`
+    })
+}
+
+// A visual Ari drew (show_visual): an empty frame the page mounts a sandboxed iframe into (see visuals.ts).
+function renderVisualMarkers(s: string): string {
+    return s.replace(VISUAL_RE, (_, threadKey, filename) => {
+        const src = `/api/v1/threads/${encodeURIComponent(threadKey)}/files/content?path=${encodeURIComponent(filename)}`
+        return `\n\n<div class="ari-visual" data-visual-src="${escHtml(src)}" data-visual-name="${escHtml(filename)}"><span class="ari-visual-loading">Drawing…</span></div>\n\n`
+    })
 }
 
 function renderImageMarkers(s: string): string {
@@ -199,7 +222,7 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     // Delivered file: a download card ARI emitted with deliver_file. Also applied in the finished-blocks
     // path (renderBlockHtml) so the card survives after streaming — the marker rides in a text block there.
     out = renderFileMarkers(out)
-    out = renderImageMarkers(out)
+    out = renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(out)))
 
     // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
@@ -504,7 +527,7 @@ export function renderBlockHtml(block: BlockLike): string {
     const done = (block.state ?? 0) === 1
     const err  = (block.state ?? 0) === 2
 
-    if (block.type === "text")     return marked.parse(renderImageMarkers(renderFileMarkers(block.text ?? "")), { async: false }) as string
+    if (block.type === "text")     return marked.parse(renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(renderFileMarkers(block.text ?? "")))), { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
 
     // Plan proposed: a subtle non-interactive chip in the transcript — the Accept/Amend actions live in the

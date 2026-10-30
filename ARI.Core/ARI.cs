@@ -2,7 +2,6 @@ using ARI.Common;
 using System.Diagnostics;
 using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
-using ARI.Discord;
 using Dependency    = ARI.Core.Scripts.Dependency;
 using ARI.LLM;
 using LLMDependency = ARI.LLM.Dependency;
@@ -27,7 +26,6 @@ public class ARI : BackgroundService, IModuleLifecycle
     private AriConfig config;
 
     // modules
-    public DiscordModule? discordService;
     public APIModule?     apiModule;
     public VoiceModule?           voiceModule;
     public VoiceSynthesisModule?  voiceSynthesisModule;
@@ -83,7 +81,7 @@ public class ARI : BackgroundService, IModuleLifecycle
 
         Shared.ResolveDevMode(config.DevMode);
         if (Shared.DevMode)
-            _logger.LogWarning("DevMode is ON — Engram is disabled; no memories will be written to the brain this run.");
+            _logger.LogWarning("DevMode is ON — Engram runs, but against a throwaway copy of the brain; your real brain is untouched this run.");
         else
             _logger.LogInformation("DevMode is off — Engram is active.");
 
@@ -174,29 +172,9 @@ public class ARI : BackgroundService, IModuleLifecycle
         if (config.modules.ImageGen.Enabled)
             await StartImageGenAsync();
 
-        // ── Discord ──────────────────────────────────────────────────────────────
-        // Discord.json (app data, control-panel edited) is the source of truth. On first run it is
-        // seeded from the AriConfig.json section so existing setups keep working — including a token
-        // still coming from secrets.env, which is copied in and can then be deleted from there. Only
-        // needs to happen once, at real boot — a hot start/stop later always reads Discord.json fresh.
-        if (!DiscordStore.Exists())
-        {
-            DiscordConfig seed = config.modules.Discord;
-            string seedToken = seed.Token.Contains("${") ? "" : seed.Token;
-            DiscordStore.Set(new DiscordSettings
-            {
-                Enabled            = seed.Enabled,
-                Token              = seedToken,
-                MasterDiscordId    = seed.MasterDiscordId,
-                WhitelistedUserIds = seed.WhitelistedUserIds ?? [],
-                WatchedChannelIds  = seed.WatchedChannelIds,
-                AllowedGuildIds    = seed.AllowedGuildIds,
-            });
-            _logger.LogInformation("Discord settings seeded to Discord.json from AriConfig.json.");
-        }
-
-        if (DiscordStore.Get().Enabled)
-            await StartDiscordAsync();
+        // Plugins (Discord, GitHub and the rest) are installed from .ari files; the host gives each one what it needs when it is created.
+        CompiledPlugins.Host = new PluginHost(loggerFactory, () => llmModule, () => appStoppingToken, moduleTasks.Add);
+        await ScriptPlugins.StartAsync();       // plugins written as source (the owner's, and Ari's) and plugins installed from built .ari files
 
         // ── Calendar ──────────────────────────────────────────────────────────────
         // Refactor's daily walk (see DreamOrchestrator for why Curiosity/ProactiveMessage were retired
@@ -264,8 +242,10 @@ public class ARI : BackgroundService, IModuleLifecycle
                 await StartVoiceSynthesisAsync();
                 return voiceSynthesisModule!.IsSetupComplete ? null : "Setup failed — check the server log for details.";
             case "Voice":
+                // One switch covers the speech engines and the voices that run on them: set the engines up first.
+                if (!(voiceSynthesisModule?.IsSetupComplete ?? false)) await StartVoiceSynthesisAsync();
                 if (!(voiceSynthesisModule?.IsSetupComplete ?? false))
-                    return "Voice needs VoiceSynthesis running first.";
+                    return "Setup failed — check the server log for details.";
                 await StartVoiceAsync();
                 return voiceModule is not null ? null : "Could not start — check the server log for details.";
             case "Listener":
@@ -275,10 +255,6 @@ public class ARI : BackgroundService, IModuleLifecycle
             case "ImageGen":
                 await StartImageGenAsync();
                 return imageGenModule is not null ? null : "Could not start — check the server log for details.";
-            case "Discord":
-                try { await StartDiscordAsync(); }
-                catch (Exception ex) { return ex.Message; }
-                return discordService is not null ? null : "No Discord token is set — add one in the control panel first.";
             case "Calendar":
                 StartCalendar();
                 return null;
@@ -292,10 +268,9 @@ public class ARI : BackgroundService, IModuleLifecycle
         switch (key)
         {
             case "VoiceSynthesis": StopVoiceSynthesis();     return null;
-            case "Voice":          StopVoice();              return null;
+            case "Voice":          StopVoice(); StopVoiceSynthesis(); return null;
             case "Listener":       StopListener();           return null;
             case "ImageGen":       StopImageGen();           return null;
-            case "Discord":        await StopDiscordAsync(); return null;
             case "Calendar":       StopCalendar();           return null;
             default:               return $"{key} requires a restart to stop.";
         }
@@ -463,9 +438,12 @@ public class ARI : BackgroundService, IModuleLifecycle
         try
         {
             _logger.LogInformation("ImageGen module is enabled. Checking ComfyUI...");
-            await ImageGenDependency.Check(config.modules.ImageGen.ComfyUiPath);
+            if (config.modules.ImageGen.IsRemote)
+                _logger.LogInformation("ImageGen is set to use the ComfyUI at {Url}; nothing to install.", config.modules.ImageGen.RemoteUrl);
+            else
+                await ImageGenDependency.Check(config.modules.ImageGen.ComfyUiPath);
 
-            if (string.IsNullOrEmpty(ImageGenDependency.Status))
+            if (config.modules.ImageGen.IsRemote || string.IsNullOrEmpty(ImageGenDependency.Status))
             {
                 imageGenModule = new ImageGenModule(config.modules.ImageGen);
                 CommonModules.Register(imageGen: imageGenModule);
@@ -488,43 +466,6 @@ public class ARI : BackgroundService, IModuleLifecycle
         imageGenModule = null;
         CommonModules.ClearImageGen();
         _logger.LogInformation("ImageGen stopped.");
-    }
-
-    private async Task StartDiscordAsync()
-    {
-        DiscordSettings discord = DiscordStore.Get();
-        if (string.IsNullOrWhiteSpace(discord.Token))
-        {
-            _logger.LogWarning("Discord module is enabled but no token is set — add one in the control panel. Skipping Discord.");
-            return;
-        }
-
-        _logger.LogInformation("Discord module is enabled. Starting...");
-        discordService = new DiscordModule(loggerFactory, llmModule, new DiscordConfig
-        {
-            Enabled            = discord.Enabled,
-            Token              = discord.Token,
-            MasterDiscordId    = discord.MasterDiscordId,
-            WhitelistedUserIds = discord.WhitelistedUserIds,
-            WatchedChannelIds  = discord.WatchedChannelIds,
-            AllowedGuildIds    = discord.AllowedGuildIds,
-        });
-        await discordService.StartAsync(appStoppingToken);
-        if (discordService.ExecuteTask is not null)
-            moduleTasks.Add(discordService.ExecuteTask);
-
-        CommonModules.Register(discord: discordService);
-    }
-
-    private async Task StopDiscordAsync()
-    {
-        if (discordService is null) return;
-        await discordService.NotifyOffline();
-        await discordService.StopAsync(appStoppingToken);
-        discordService.Dispose();
-        discordService = null;
-        CommonModules.ClearDiscord();
-        _logger.LogInformation("Discord stopped.");
     }
 
     private void StartCalendar()
@@ -666,8 +607,8 @@ public class ARI : BackgroundService, IModuleLifecycle
 
         _logger.LogInformation("ARI is shutting down...");
 
-        if (discordService != null)
-            await discordService.NotifyOffline();
+        if (CommonModules.Discord is { } discord)
+            await discord.NotifyOffline();
 
         speechQueue?.Dispose();
         synthesiser?.Dispose();
@@ -685,4 +626,14 @@ public class ARI : BackgroundService, IModuleLifecycle
 
         await base.StopAsync(cancellationToken);
     }
+}
+
+/// <summary>What ARI hands a compiled plugin when it creates one.</summary>
+internal sealed class PluginHost(ILoggerFactory loggers, Func<LLMModule?> llm, Func<CancellationToken> stopping, Action<Task> track) : IPluginHost
+{
+    public ILoggerFactory Loggers => loggers;
+    public LLMModule? Llm => llm();
+    public CancellationToken Stopping => stopping();
+    public string PluginsFolder => ScriptPlugins.Folder;
+    public void Track(Task task) => track(task);
 }

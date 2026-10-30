@@ -27,7 +27,7 @@ internal static class SubagentManager
     // never had, sidestepping the subset rule).
     private static readonly HashSet<string> NeverInherited = new(StringComparer.Ordinal)
     {
-        "spawn_agent", "wait_for_agent", "cancel_agent", "list_tools", "request_tools",
+        "spawn_agent", "wait_for_agent", "cancel_agent", "list_tools", "request_tools", "tool_search",
         "plan_proposed", "start_build", "replan", "wake",
     };
 

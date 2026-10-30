@@ -85,9 +85,9 @@ public interface IImageGenModule
         string   prompt,
         string   negativePrompt     = "",
         string   checkpointFilename = "",
-        int      steps              = 25,
-        int      width              = 1024,
-        int      height             = 1024,
+        int?     steps              = null,
+        int?     width              = null,
+        int?     height             = null,
         long     seed               = -1,
         string[] referenceImages    = default!,
         float    denoise            = 1.0f,
@@ -156,7 +156,8 @@ public interface IWebPushModule
     /// <summary>Sends a push notification to every registered device. <paramref name="url"/> deep-links the
     /// notification click (e.g. a thread); <paramref name="title"/> overrides the default notification title.
     /// <paramref name="ownerUserId"/> limits it to that user's devices; null sends nothing (an ownerless thread has nobody to notify).</summary>
-    Task SendPushNotification(string text, string? url = null, string? title = null, string? ownerUserId = null);
+    /// <summary><paramref name="tag"/> makes a newer notification replace an older one with the same tag, so each thread keeps one.</summary>
+    Task SendPushNotification(string text, string? url = null, string? title = null, string? ownerUserId = null, string? tag = null);
 }
 
 public interface IListenerModule
