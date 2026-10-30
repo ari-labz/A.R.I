@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using ARI.Common;
 
 namespace ARI.LLM;
@@ -14,6 +15,9 @@ public static class DiscordConversations
     /// <summary>An open conversation closes itself after this long without activity, so a forgotten one can't
     /// swallow the person's later DMs.</summary>
     public static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(30);
+
+    /// <summary>What a report from a DM conversation starts with when discord_dm_user hands it back.</summary>
+    internal const string ReportPrefix = "Report from the conversation: ";
 
     public sealed class Conversation
     {
@@ -69,4 +73,32 @@ public static class DiscordConversations
     /// <summary>Conversations idle past <see cref="IdleTimeout"/>.</summary>
     public static IReadOnlyList<ulong> Idle() =>
         open.Values.Where(c => DateTime.Now - c.LastActivity > IdleTimeout).Select(c => c.UserId).ToList();
+}
+
+/// <summary>Chip labels for the DM tools: the person's name rather than their raw ID.</summary>
+internal static class DmLabels
+{
+    internal static string Name(string argsJson)
+    {
+        string? name = null;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.TryGetProperty("user_id", out JsonElement idEl) && ulong.TryParse(idEl.ToString(), out ulong id))
+                name = Modules.Discord?.GetUserName(id);
+        }
+        catch (JsonException) { }
+        name = (name ?? "Discord user").Replace("|", " ").Replace(":", " ").Replace("\n", " ").Trim();
+        return ToolCallParser.EscapeLabel(name);
+    }
+
+    internal static bool Waits(string argsJson)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            return doc.RootElement.TryGetProperty("wait_for_reply", out JsonElement w) && w.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException) { return false; }
+    }
 }

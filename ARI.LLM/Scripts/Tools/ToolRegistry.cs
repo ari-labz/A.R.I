@@ -259,6 +259,7 @@ public static class ToolRegistry
     {
         try
         {
+            if (PluginTools.Find(n) is { } provided) return provided.Tool.Description;
             string built = ToolFactories.TryBuild(n, Scratch(), out Tool tool, ignoreSettings: true) ? tool.SchemaDescription : "";
             return built.Length > 0 ? built : ToolSources.DescriptionOf(n);
         }

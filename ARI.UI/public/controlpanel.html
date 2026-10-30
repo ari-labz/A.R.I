@@ -509,6 +509,14 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 .dbg-bubble.toolresult.err .dbg-bhead { background: var(--col-dbg-bubble-toolresult-err-dbg-bhead-colour); color: var(--col-dbg-bubble-toolresult-err-dbg-bhead-colour-2); }
 /* #167: no block caps its own height with an inner scrollbar — every block grows to fit its
    content, same as tool-call/tool-result/text blocks always have. */
+.dbg-recallprompt h4 { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 18px 0 6px; }
+.dbg-recallprompt h4:first-child { margin-top: 2px; }
+.dbg-recallprompt ul { columns: 2; column-gap: 32px; margin: 6px 0; padding-left: 18px; }
+.dbg-recallprompt li { break-inside: avoid; margin: 2px 0; }
+.dbg-recallprompt p { margin: 4px 0; }
+.dbg-rawtext { margin-top: 14px; font-size: 12px; color: var(--text-dim); }
+.dbg-rawtext summary { cursor: pointer; }
+.dbg-rawtext pre { white-space: pre-wrap; margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .dbg-prompt-body { padding: 10px 12px; }
 .dbg-args   { padding: 9px 12px; color: var(--col-dbg-args-colour); }
 .dbg-result { padding: 9px 12px; color: var(--col-dbg-result-colour); }
@@ -582,6 +590,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
         <div class="cp-nav-item top-level" data-tab="users">Users</div>
         <div class="cp-nav-item top-level" data-tab="settings">Settings</div>
+        <div class="cp-nav-item top-level" data-tab="plugins" id="nav-plugins">Plugins</div>
         <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
         <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
@@ -604,9 +613,6 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
         <div class="cp-nav-item" data-tab="dataset" data-group="voice" id="nav-dataset">Dataset Builder</div>
         <div class="cp-nav-group" id="nav-group-memory" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="brain" data-group="memory" id="nav-brain">Brain</div>
-        <div class="cp-nav-group" id="nav-group-integrations" data-group-id="integrations">Integrations<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="discord" data-group="integrations" id="nav-discord">Discord</div>
-        <div class="cp-nav-item" data-tab="github" data-group="integrations" id="nav-github">GitHub</div>
         <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">ImageGen<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="imagegen-model" data-group="imagegen" id="nav-imagegen-model">Models</div>
         <div class="cp-nav-item" data-tab="imagegen-settings" data-group="imagegen" id="nav-imagegen-settings">Settings</div>
@@ -1364,106 +1370,86 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
       </div>
     </div>
 
-    <div id="tab-discord" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section">
-        <div class="vs-section-title">Connection</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          A·R·I reads these when she starts, so changes need a restart to take effect.
+    <div id="tab-plugins" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <style>
+        .pl-card { background: var(--col-vs-section-colour); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+        .pl-head { display: flex; align-items: center; gap: 14px; }
+        .pl-ico { width: 40px; height: 40px; border-radius: 10px; background: var(--accent); color: var(--bg); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 17px; flex: none; }
+        .pl-name { font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
+        .pl-tag { font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 8px; border: 1px solid var(--border); color: var(--text-dim); }
+        .pl-status { font-size: 12px; color: var(--text-dim); margin: 3px 0 0; display: flex; align-items: center; gap: 6px; }
+        .pl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex: none; }
+        .pl-dot.running { background: #1d9e75; } .pl-dot.error { background: #d85a30; }
+        .pl-desc { font-size: 13px; color: var(--text-dim); margin: 12px 0 0; line-height: 1.5; }
+        .pl-switch { appearance: none; -webkit-appearance: none; width: 40px; height: 23px; border-radius: 12px; background: var(--border); position: relative; cursor: pointer; flex: none; transition: background .15s; margin: 0; }
+        .pl-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%; background: #fff; transition: left .15s; }
+        .pl-switch:checked { background: #1d6f80; } .pl-switch:checked::after { left: 20px; }
+        .pl-switch:disabled { opacity: .5; cursor: wait; }
+        .pl-fields { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+        .pl-field { margin-bottom: 16px; } .pl-field label { display: block; font-size: 12px; margin-bottom: 4px; }
+        .pl-help { font-size: 11px; color: var(--text-dim); margin: 4px 0 0; }
+        .pl-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+        .pl-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 4px 3px 10px; border-radius: 12px; border: 1px solid var(--border); }
+        .pl-chip button { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; }
+        .pl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .pl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(300px, calc(50% - 6px)), 1fr)); gap: 12px; }
+        .pl-grid .pl-card { margin: 0; cursor: pointer; transition: border-color .12s; }
+        .pl-grid .pl-card:hover { border-color: var(--text-dim); }
+        .pl-ico img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
+        .pl-ico.big { width: 56px; height: 56px; font-size: 24px; border-radius: 14px; } .pl-ico.big img { border-radius: 14px; }
+        .pl-tabs { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; margin: 0 0 16px; }
+        .pl-tabs button { font: inherit; font-size: 13px; padding: 5px 16px; border: none; border-radius: 7px; background: none; color: var(--text-dim); cursor: pointer; }
+        .pl-tabs button.on { background: var(--col-vs-section-colour); color: var(--text); font-weight: 600; }
+        .pl-store .pl-intro { font-size: 13px; color: var(--text-dim); margin: 0 0 16px; max-width: 760px; line-height: 1.5; }
+        .pl-store .pl-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .pl-store .pl-count { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+        .pl-store .pl-h { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 24px 0 12px; }
+        .pl-store .pl-h::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+        .pl-store .pl-card { cursor: default; display: flex; flex-direction: column; padding: 20px; border-radius: 14px; transition: border-color .12s, box-shadow .12s, transform .12s; }
+        .pl-store .pl-card:hover { border-color: var(--text-dim); box-shadow: 0 4px 18px rgba(0,0,0,.07); transform: translateY(-1px); }
+        .pl-store .pl-ico { width: 56px; height: 56px; border-radius: 14px; font-size: 24px; overflow: hidden; } .pl-store .pl-ico img { border-radius: 0; }
+        .pl-store .pl-name { font-size: 17px; font-weight: 650; }
+        .pl-store .pl-meta { font-size: 12px; color: var(--text-dim); margin: 4px 0 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .pl-store .pl-desc { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 14px 0 0; flex: 1; line-height: 1.55; }
+        .pl-store .pl-getrow { display: flex; align-items: center; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+        .pl-store .pl-getrow .vs-btn-primary { padding: 7px 20px; }
+        .pl-store .pl-getrow .vs-btn-outline { padding: 7px 16px; font-size: 13px; }
+        .pl-store .pl-link { margin-left: auto; font-size: 12px; color: var(--text-dim); text-decoration: none; } .pl-store .pl-link:hover { color: var(--text); text-decoration: underline; }
+        .pl-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap; }
+        .pl-badge.feat { border-color: transparent; background: rgba(29,111,128,.12); color: #1d6f80; font-weight: 600; }
+        .pl-badge.ok { border-color: transparent; background: rgba(29,158,117,.12); color: #1d9e75; font-weight: 600; }
+        .pl-go { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border); background: none; color: var(--text); font-size: 20px; line-height: 1; cursor: pointer; flex: none; font-family: inherit; }
+        .pl-go:hover { border-color: var(--text-dim); }
+        .pl-section { margin-top: 22px; } .pl-section h3 { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px; }
+        .pl-code { display: flex; gap: 12px; align-items: flex-start; }
+        .pl-files { width: 210px; flex: none; display: flex; flex-direction: column; gap: 4px; }
+        .pl-file { text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 5px 8px; font-size: 12px; font-family: var(--font-mono, monospace); color: var(--text-dim); cursor: pointer; }
+        .pl-file.on { border-color: var(--border); color: var(--text); background: var(--col-vs-section-colour); }
+        .pl-src { flex: 1; min-width: 0; margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5; max-height: 560px; overflow: auto; white-space: pre; tab-size: 4; }
+      </style>
+      <div id="pl-grid-view">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+          <h2 style="margin:0;font-size:18px;font-weight:600;">Plugins</h2>
+          <div style="flex:1"></div>
+          <button type="button" id="pl-install" class="vs-btn-outline" title="Install a plugin from an .ari file (or drop one on this page)">Install…</button>
+          <input type="file" id="pl-file-input" accept=".ari,.zip" style="display:none">
+          <button type="button" id="pl-reload" class="vs-btn-outline" title="Look at the plugins folder again">Reload</button>
+          <input type="text" id="pl-search" class="vs-input" style="width:240px;" placeholder="Search plugins">
+        </div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 18px;">
+          A plugin connects Ari to something outside, keeps its own settings, and adds the tools she uses there. Open one to switch it on or off, change its settings and read its code.
         </p>
-
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:14px;cursor:pointer;">
-          <input type="checkbox" id="dc-enabled"> Enable Discord
-        </label>
-
-        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">Bot token</label>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-          <input type="password" id="dc-token" class="vs-input" style="flex:1;max-width:520px;" placeholder="Paste a bot token">
-          <button type="button" id="dc-token-show" class="vs-btn" style="font-size:11px;padding:5px 10px;border:1px solid var(--border,var(--col-control-panel-dc-token-show-colour));border-radius:6px;background:transparent;color:var(--text-dim);cursor:pointer;">Show</button>
-        </div>
-        <p id="dc-token-state" style="color:var(--text-dim);font-size:11px;margin:0 0 16px;"></p>
-
-        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">Master's Discord ID</label>
-        <input type="text" id="dc-master" class="vs-input" style="max-width:280px;margin-bottom:16px;" placeholder="e.g. 171691421407903744" inputmode="numeric">
-
-        <div id="dc-lists"></div>
-
-        <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
-          <button class="vs-btn-primary" id="dc-save" type="button">Save settings</button>
-          <span id="dc-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
-        <div id="dc-restart" style="display:none;margin-top:12px;padding:10px 12px;border:1px solid var(--col-control-panel-dc-restart-border);background:var(--col-control-panel-dc-restart-background);color:var(--col-control-panel-dc-restart-text);border-radius:8px;font-size:12px;">
-          Saved. Restart A·R·I for these changes to take effect.
-        </div>
+        <div class="pl-tabs"><button type="button" id="pl-t-installed" class="on">Installed</button><button type="button" id="pl-t-browse">Browse</button></div>
+        <div id="pl-list" class="pl-grid"></div>
+        <div id="pl-browse" class="pl-store" style="display:none;"></div>
+        <div id="pl-drop" style="display:none;position:fixed;inset:0;z-index:50;background:rgba(16,22,24,.6);color:#fff;align-items:center;justify-content:center;font-size:20px;pointer-events:none;">Drop an .ari file to install the plugin</div>
       </div>
-
-      <div class="vs-section">
-        <div class="vs-section-title">Delete recent messages</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          Delete every message A·R·I sent in the last 24 hours across all reachable channels
-          (server text channels and the Master's DM). This cannot be undone.
-        </p>
-        <div style="display:flex;align-items:center;gap:12px;">
-          <button class="vs-btn-primary" id="discord-delete-btn" type="button">Delete messages</button>
-          <span id="discord-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
-      </div>
-    </div>
-
-    <div id="tab-github" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
-      <div class="vs-section">
-        <div class="vs-section-title">Connection</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          ARI never sees a token you type — you approve a short code on GitHub's own site and she's connected.
-          This gives her the same repo access your GitHub account has, so only connect an account you're
-          comfortable with her using.
-        </p>
-
-        <label class="vs-label" style="display:block;font-size:12px;margin-bottom:4px;">OAuth App Client ID</label>
-        <p style="color:var(--text-dim);font-size:11px;margin:0 0 6px;">
-          From a GitHub OAuth App with "Enable Device Flow" checked, created at
-          <a href="https://github.com/settings/developers" target="_blank" rel="noopener">github.com/settings/developers</a>.
-          Not secret — safe to leave saved.
-        </p>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;">
-          <input type="text" id="gh-client-id" class="vs-input" style="flex:1;max-width:420px;" placeholder="Iv1.xxxxxxxxxxxxxxxx" autocomplete="off">
-          <button class="vs-btn-primary" id="gh-client-id-save" type="button">Save</button>
-        </div>
-
-        <div id="gh-connected-box" style="display:none;margin-bottom:16px;">
-          <span style="font-size:13px;">Connected as <strong id="gh-login"></strong></span>
-          <button type="button" id="gh-disconnect" class="vs-btn" style="margin-left:12px;font-size:11px;padding:5px 10px;border:1px solid var(--border,var(--col-control-panel-gh-disconnect-colour));border-radius:6px;background:transparent;color:var(--text-dim);cursor:pointer;">Disconnect</button>
-        </div>
-
-        <div id="gh-connect-box" style="display:flex;align-items:center;gap:12px;">
-          <button class="vs-btn-primary" id="gh-connect-btn" type="button">Connect GitHub</button>
-          <span id="gh-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
-
-        <div id="gh-code-box" style="display:none;margin-top:16px;padding:14px 16px;border:1px solid var(--border,var(--col-control-panel-gh-code-box-colour));border-radius:10px;background:var(--user-bubble,var(--col-control-panel-gh-code-box-colour-2));max-width:420px;">
-          <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px;">
-            Go to <a id="gh-verify-link" href="#" target="_blank" rel="noopener"></a> and enter:
-          </div>
-          <div id="gh-user-code" style="font-size:24px;font-weight:700;letter-spacing:.08em;"></div>
-        </div>
-      </div>
-
-      <div class="vs-section">
-        <div class="vs-section-title">Commits made by A.R.I</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          How ARI signs every commit she makes — in projects and in the Brain — so you can tell hers from yours at a glance.
-          Works with or without a GitHub connection.
-        </p>
-        <div style="display:flex;align-items:center;gap:12px;">
-          <select id="gh-commit-as" class="vs-input" style="width:auto;">
-            <option value="Author">Author — A.R.I is the commit's author</option>
-            <option value="CoAuthor">Co-author — you're the author, A.R.I is credited as co-author</option>
-          </select>
-          <span id="gh-commit-as-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
+      <div id="pl-detail-view" style="display:none;">
+        <button type="button" id="pl-back" class="vs-btn-outline" style="margin-bottom:18px;">‹ Plugins</button>
+        <div id="pl-detail"></div>
       </div>
     </div>
 
-    <!-- ImageGen — Models tab -->
     <div id="tab-imagegen-model" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title">Models</div>
@@ -1644,15 +1630,10 @@ cpGetSettings().then(d => { if (d.userName) window._ariUserName = d.userName; })
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), discord: document.getElementById('tab-discord'), github: document.getElementById('tab-github'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), tools: document.getElementById('tab-tools'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', tools: 'Tools', brain: 'Brain', discord: 'Discord', github: 'GitHub', llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'ImageGen — Models', 'imagegen-settings': 'ImageGen — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), voicesettings: document.getElementById('tab-voicesettings'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), plugins: document.getElementById('tab-plugins'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), tools: document.getElementById('tab-tools'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', voicesettings: 'Voice Settings', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', tools: 'Tools', brain: 'Brain', plugins: 'Plugins',  llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'ImageGen — Models', 'imagegen-settings': 'ImageGen — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
 
 let srvPollTimer = null;
-// Declared here (not down in the GitHub section) because switchTab('overview') below calls stopGhPoll()
-// at load time — a `let` declared later would still be in its temporal dead zone at that point and throw,
-// which silently aborts every script statement after it, including every other tab's event listeners.
-let ghPollTimer = null;
-function stopGhPoll() { if (ghPollTimer) { clearInterval(ghPollTimer); ghPollTimer = null; } }
 // The streams below are declared further down the page, so they are only touched once the page has finished loading.
 let cpStreamsReady = false;
 function switchTab(name) {
@@ -1680,9 +1661,7 @@ function switchTab(name) {
     if (name === 'llmconfigs') loadLLMConfigs();
     if (name === 'tools') loadTools();
     if (name === 'calendar') loadCalendar();
-    if (name === 'discord') loadDiscord();
-    if (name === 'github') loadGitHub();
-    if (name !== 'github') stopGhPoll();
+    if (name === 'plugins') { loadPlugins(); plSetMode('installed'); }
     if (name === 'debug') loadDebugThreads();
     if (name === 'users') loadUserManagement();
     if (name === 'settings') { loadPersistedThreads(); loadLogging(); loadDreaming(); loadEngramOthers(); }
@@ -1866,7 +1845,6 @@ const NAV_ITEM_MODULES = {
     'nav-voicesettings':     ['Voice'],
     'nav-voice':             ['Voice'],
     'nav-dataset':           ['Voice'],
-    'nav-discord':           ['Discord'],
     'nav-brain':             ['Brain'],
     'nav-calendar':          ['Calendar'],
     'nav-imagegen-model':    ['ImageGen'],
@@ -1874,7 +1852,6 @@ const NAV_ITEM_MODULES = {
 };
 const NAV_GROUP_ITEMS = {
     'nav-group-voice':        ['nav-voices', 'nav-voicesettings', 'nav-voice', 'nav-dataset'],
-    'nav-group-integrations': ['nav-discord', 'nav-github'],
     'nav-group-memory':       ['nav-brain'],
     'nav-group-imagegen':     ['nav-imagegen-model', 'nav-imagegen-settings'],
 };
@@ -3368,284 +3345,423 @@ document.getElementById('brain-backup-btn').addEventListener('click', async () =
 });
 document.getElementById('brain-refresh-btn').addEventListener('click', () => { brainStatus().textContent = ''; loadBrain(); });
 
-// ── discord integration ───────────────────────────────────
-document.getElementById('discord-delete-btn').addEventListener('click', async (e) => {
-    if (!confirm("Delete all messages A·R·I sent in the last 24 hours? This cannot be undone.")) return;
-    const btn = e.currentTarget;
-    const s = document.getElementById('discord-status');
-    btn.disabled = true; s.textContent = 'Deleting…';
-    try {
-        const r = await cpFetch('/api/v1/admin/integrations/discord/deleteRecent', { method: 'POST' });
-        const d = await r.json();
-        s.textContent = d.message || (r.ok ? 'Done.' : 'Failed.');
-    } catch { s.textContent = 'Delete failed.'; }
-    finally { btn.disabled = false; }
-});
+// ── plugins ───────────────────────────────────────────────
+// A plugin describes its own settings, actions and source; this page only draws them. IDs stay strings end to end: Discord snowflakes exceed 2^53.
+var plState = [];
+var plView = null;       // null = the card grid; otherwise a plugin id, or 'github'
 
-// ── discord settings ──────────────────────────────────────
-// IDs are kept as strings end to end: Discord snowflakes exceed 2^53 and Number() mangles them.
-const DC_LISTS = [
-    { key: 'whitelistedUserIds', title: 'Whitelisted users',  hint: 'User IDs A·R·I will respond to.',            ph: 'User ID' },
-    { key: 'watchedChannelIds',  title: 'Watched channels',   hint: 'Channel IDs she reads and can reply in.',    ph: 'Channel ID' },
-    { key: 'allowedGuildIds',    title: 'Allowed guilds',     hint: 'Servers she is permitted to operate in.',    ph: 'Guild ID' },
-];
-var dcState = null;
+function plEl(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+}
 
-async function loadDiscord() {
-    const host = document.getElementById('dc-lists');
+async function loadPlugins() {
+    plView = null;
+    const host = document.getElementById('pl-list');
     try {
-        const r = await cpFetch('/api/v1/admin/integrations/discord');
+        const r = await cpFetch('/api/v1/admin/plugins');
         if (!r.ok) throw new Error();
-        dcState = await r.json();
+        plState = (await r.json()).plugins;
     } catch {
-        host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load Discord settings.</span>';
+        host.innerHTML = '<span style="font-size:12px;color:var(--text-dim)">Failed to load plugins.</span>';
         return;
     }
-    document.getElementById('dc-enabled').checked = !!dcState.enabled;
-    document.getElementById('dc-master').value = dcState.masterDiscordId && dcState.masterDiscordId !== '0' ? dcState.masterDiscordId : '';
-    document.getElementById('dc-token').value = '';
-    document.getElementById('dc-token-state').textContent = dcState.tokenConfigured
-        ? 'A token is saved. Leave blank to keep it, or paste a new one to replace it.'
-        : 'No token saved — Discord will not start without one.';
+    plRender();
+}
 
+function plAll() { return plState; }
+
+function plSetView(v) { plView = v; plRender(); document.getElementById('tab-plugins').scrollTop = 0; }
+
+function plRender() {
+    const grid = plView === null;
+    document.getElementById('pl-grid-view').style.display = grid ? '' : 'none';
+    document.getElementById('pl-detail-view').style.display = grid ? 'none' : '';
+    if (grid) return plGrid();
+    const p = plAll().find(x => x.id === plView);
+    if (!p) return plSetView(null);
+    const box = document.getElementById('pl-detail'); box.innerHTML = '';
+    plDetail(p, box);
+}
+
+function plGrid() {
+    const q = document.getElementById('pl-search').value.trim().toLowerCase();
+    const host = document.getElementById('pl-list');
     host.innerHTML = '';
-    DC_LISTS.forEach(spec => host.appendChild(dcBuildList(spec, dcState[spec.key] || [])));
-    document.getElementById('dc-restart').style.display = 'none';
-}
-
-function dcBuildList(spec, ids) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-bottom:18px;';
-    wrap.dataset.dcList = spec.key;
-
-    const t = document.createElement('div');
-    t.style.cssText = 'font-size:12px;font-weight:600;margin-bottom:2px;';
-    t.textContent = spec.title;
-    const h = document.createElement('div');
-    h.style.cssText = 'font-size:11px;color:var(--text-dim);margin-bottom:6px;';
-    h.textContent = spec.hint;
-
-    const chips = document.createElement('div');
-    chips.className = 'dc-chips';
-    chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;';
-
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:6px;';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'vs-input';
-    input.style.cssText = 'max-width:280px;';
-    input.placeholder = spec.ph;
-    input.inputMode = 'numeric';
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'vs-btn';
-    add.style.cssText = 'font-size:11px;padding:4px 12px;border:1px solid var(--border,var(--col-control-panel-line-2718-colour));border-radius:6px;background:transparent;color:var(--text,var(--col-control-panel-line-2718-colour-2));cursor:pointer;';
-    add.textContent = 'Add';
-
-    function addId() {
-        const v = input.value.trim();
-        if (!v) return;
-        if (!/^\d+$/.test(v)) { input.style.borderColor = 'var(--col-control-panel-line-2724-border)'; return; }
-        input.style.borderColor = '';
-        if (!dcIds(wrap).includes(v)) chips.appendChild(dcChip(v));
-        input.value = '';
-    }
-    add.addEventListener('click', addId);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addId(); } });
-
-    row.append(input, add);
-    (ids || []).forEach(id => chips.appendChild(dcChip(id)));
-    wrap.append(t, h, chips, row);
-    return wrap;
-}
-
-function dcChip(id) {
-    const c = document.createElement('span');
-    c.className = 'dc-chip';
-    c.dataset.id = id;
-    c.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;border:1px solid var(--border,var(--col-control-panel-line-2742-colour));border-radius:999px;';
-
-    const label = document.createElement('span');
-    label.textContent = id;
-
-    const x = document.createElement('button');
-    x.type = 'button';
-    x.title = 'Remove';
-    x.style.cssText = 'background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;line-height:1;padding:0;';
-    x.textContent = '×';
-    x.addEventListener('click', () => c.remove());
-
-    c.append(label, x);
-    return c;
-}
-
-function dcIds(wrap) {
-    return Array.from(wrap.querySelectorAll('.dc-chip')).map(c => c.dataset.id);
-}
-
-document.getElementById('dc-token-show').addEventListener('click', e => {
-    const t = document.getElementById('dc-token');
-    const showing = t.type === 'text';
-    t.type = showing ? 'password' : 'text';
-    e.currentTarget.textContent = showing ? 'Show' : 'Hide';
-});
-
-document.getElementById('dc-save').addEventListener('click', async e => {
-    const btn = e.currentTarget;
-    const s = document.getElementById('dc-status');
-    const body = {
-        enabled: document.getElementById('dc-enabled').checked,
-        // Blank means "keep the saved token" — the panel never holds it, so it cannot round-trip it.
-        token:   document.getElementById('dc-token').value.trim(),
-        masterDiscordId: document.getElementById('dc-master').value.trim(),
-    };
-    DC_LISTS.forEach(spec => {
-        const wrap = document.querySelector(`[data-dc-list="${spec.key}"]`);
-        body[spec.key] = wrap ? dcIds(wrap) : [];
+    const shown = plAll().filter(p => !q || (p.name + ' ' + p.description).toLowerCase().includes(q));
+    if (shown.length === 0) { const n = plEl('p', '', q ? 'No plugin matches that.' : 'No plugins are installed.'); n.style.cssText = 'font-size:13px;color:var(--text-dim);'; host.appendChild(n); return; }
+    shown.forEach(p => {
+        const card = plEl('div', 'pl-card');
+        const row = plEl('div', 'pl-head');
+        row.appendChild(plIcon(p));
+        const mid = plEl('div'); mid.style.cssText = 'flex:1;min-width:0;';
+        mid.appendChild(plEl('p', 'pl-name', p.name));
+        const st = plEl('p', 'pl-status'); st.appendChild(plEl('span', 'pl-dot ' + p.state)); st.appendChild(plEl('span', '', p.status || ''));
+        mid.appendChild(st); row.appendChild(mid);
+        const go = plEl('button', 'pl-go', '›'); go.type = 'button'; go.setAttribute('aria-label', 'Open ' + p.name);
+        row.appendChild(go); card.appendChild(row);
+        card.addEventListener('click', () => plSetView(p.id));
+        host.appendChild(card);
     });
-
-    btn.disabled = true; s.textContent = 'Saving…';
-    try {
-        const r = await cpFetch('/api/v1/admin/integrations/discord', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) { s.textContent = d.error || 'Save failed.'; return; }
-        s.textContent = '';
-        document.getElementById('dc-restart').style.display = '';
-        document.getElementById('dc-token').value = '';
-        document.getElementById('dc-token-state').textContent =
-            'A token is saved. Leave blank to keep it, or paste a new one to replace it.';
-    } catch { s.textContent = 'Save failed.'; }
-    finally { btn.disabled = false; }
+}
+document.getElementById('pl-search').addEventListener('input', () => plMode === 'browse' ? plBrowse() : plGrid());
+document.getElementById('pl-back').addEventListener('click', () => plSetView(null));
+document.getElementById('pl-reload').addEventListener('click', async e => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Reloading…';
+    try { await cpFetch('/api/v1/admin/plugins/reload', { method: 'POST' }); await loadPlugins(); } catch { }
+    b.disabled = false; b.textContent = 'Reload';
 });
 
-// ── github integration ─────────────────────────────────────
-// ghPollTimer / stopGhPoll are declared up near srvPollTimer — see the comment there.
+// ── The store: plugins from the catalogs, searchable, with the featured ones first ──
+let plMode = 'installed', plCat = null, plCatBusy = false;
+function plSetMode(m) {
+    plMode = m;
+    document.getElementById('pl-t-installed').classList.toggle('on', m === 'installed');
+    document.getElementById('pl-t-browse').classList.toggle('on', m === 'browse');
+    document.getElementById('pl-list').style.display = m === 'installed' ? '' : 'none';
+    document.getElementById('pl-browse').style.display = m === 'browse' ? '' : 'none';
+    document.getElementById('pl-reload').style.display = m === 'installed' ? '' : 'none';
+    if (m === 'browse') plLoadCatalog(false); else plGrid();
+}
+document.getElementById('pl-t-installed').addEventListener('click', () => plSetMode('installed'));
+document.getElementById('pl-t-browse').addEventListener('click', () => plSetMode('browse'));
 
-async function loadGitHub() {
-    stopGhPoll();
-    document.getElementById('gh-code-box').style.display = 'none';
-    ghSetStatus('', false);
+async function plLoadCatalog(refresh) {
+    if (plCatBusy) return;
+    plCatBusy = true;
+    const host = document.getElementById('pl-browse');
+    if (!plCat) host.textContent = 'Loading the catalog…';
     try {
-        const r = await cpFetch('/api/v1/admin/integrations/github');
+        const r = await cpFetch('/api/v1/admin/plugins/catalog' + (refresh ? '?refresh=true' : ''));
         if (!r.ok) throw new Error();
-        const d = await r.json();
-        document.getElementById('gh-client-id').value = d.clientId || '';
-        document.getElementById('gh-connected-box').style.display = d.connected ? '' : 'none';
-        document.getElementById('gh-connect-box').style.display = d.connected ? 'none' : 'flex';
-        document.getElementById('gh-login').textContent = d.login || '';
-        document.getElementById('gh-commit-as').value = d.commitAs || 'Author';
-    } catch {
-        ghSetStatus('Failed to load GitHub settings.', true);
-    }
+        plCat = await r.json();
+    } catch { host.textContent = 'Couldn\'t load the catalog.'; plCatBusy = false; return; }
+    plCatBusy = false;
+    plBrowse();
 }
 
-// Saves on change — takes effect on ARI's next commit, no restart.
-document.getElementById('gh-commit-as').addEventListener('change', async e => {
-    const status = document.getElementById('gh-commit-as-status');
-    status.textContent = 'Saving…';
-    try {
-        const r = await cpFetch('/api/v1/admin/integrations/github', {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ commitAs: e.currentTarget.value }),
+function plStoreCard(c) {
+    const card = plEl('div', 'pl-card');
+    const row = plEl('div', 'pl-head');
+    const ico = plEl('div', 'pl-ico');
+    if (c.hasIcon) { const i = document.createElement('img'); i.alt = ''; i.src = '/api/v1/admin/plugins/catalog/' + encodeURIComponent(c.id) + '/icon'; ico.appendChild(i); } else ico.textContent = c.name.charAt(0).toUpperCase();
+    row.appendChild(ico);
+    const mid = plEl('div'); mid.style.cssText = 'flex:1;min-width:0;';
+    const nm = plEl('p', 'pl-name', c.name);
+    if (c.featured) nm.appendChild(plEl('span', 'pl-badge feat', '★ Featured'));
+    mid.appendChild(nm);
+    const meta = plEl('p', 'pl-meta');
+    if (c.author) meta.appendChild(plEl('span', '', c.author));
+    meta.appendChild(plEl('span', 'pl-badge', 'v' + c.latest));
+    if (c.installed) meta.appendChild(plEl('span', 'pl-badge ok', c.installedVersion ? 'Installed v' + c.installedVersion : 'Installed'));
+    mid.appendChild(meta);
+    row.appendChild(mid); card.appendChild(row);
+    card.appendChild(plEl('p', 'pl-desc', c.description));
+
+    const act = plEl('div', 'pl-getrow');
+    const label = c.updateAvailable ? 'Update to v' + c.latest : 'Install';
+    if (!c.installed || c.updateAvailable) {
+        const btn = plEl('button', 'vs-btn-primary', label); btn.type = 'button';
+        btn.addEventListener('click', async () => {
+            if (!confirm((c.updateAvailable ? 'Update ' : 'Install ') + c.name + ' v' + c.latest + '?\n\nA plugin is code that runs on this machine with full access to ARI. It arrives switched off, and you can read its code before you turn it on.')) return;
+            btn.disabled = true; btn.textContent = 'Installing…';
+            try {
+                const r = await cpFetch('/api/v1/admin/plugins/catalog/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: c.id }) });
+                if (!r.ok) { alert(await cpErrorText(r)); btn.disabled = false; btn.textContent = label; return; }
+                plState = (await r.json()).plugins;
+                await plLoadCatalog(true);
+            } catch { alert('The install failed.'); btn.disabled = false; btn.textContent = label; }
         });
-        status.textContent = r.ok ? 'Saved.' : 'Save failed.';
-    } catch { status.textContent = 'Save failed.'; }
-});
-
-function ghSetStatus(text, isError) {
-    const s = document.getElementById('gh-status');
-    s.textContent = text;
-    s.style.color = isError ? cv('--col-control-panel-line-2838-text') : 'var(--text-dim)';
-    s.style.fontWeight = isError ? '600' : 'normal';
+        act.appendChild(btn);
+    }
+    if (c.installed) { const open = plEl('button', 'vs-btn-outline', 'Open settings'); open.type = 'button'; open.addEventListener('click', () => { plSetMode('installed'); plSetView(c.id); }); act.appendChild(open); }
+    if (c.repo) { const a = plEl('a', 'pl-link', 'Source ↗'); a.href = c.repo; a.target = '_blank'; a.rel = 'noopener'; act.appendChild(a); }
+    card.appendChild(act);
+    return card;
 }
 
-async function ghSaveClientId(clientId) {
-    const r = await cpFetch('/api/v1/admin/integrations/github', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId }),
+function plBrowse() {
+    const host = document.getElementById('pl-browse');
+    if (!plCat) return;
+    host.innerHTML = '';
+    host.appendChild(plEl('p', 'pl-intro', 'Plugins from the official A.R.I Plugins catalogue and any catalogues you add. Each download is checked against a checksum before it is installed, and every plugin arrives switched off.'));
+    const bar = plEl('div', 'pl-bar');
+    const refresh = plEl('button', 'vs-btn-outline', 'Refresh'); refresh.type = 'button';
+    refresh.addEventListener('click', () => { refresh.disabled = true; plLoadCatalog(true); });
+    const cats = plEl('button', 'vs-btn-outline', 'Catalogs…'); cats.type = 'button';
+    cats.addEventListener('click', async () => {
+        const now = plCat.sources.slice(1).join('\n');
+        const text = prompt('Extra catalogs, one address per line (the official one is always included):', now);
+        if (text === null) return;
+        const r = await cpFetch('/api/v1/admin/plugins/catalog/sources', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ extra: text.split('\n') }) });
+        if (!r.ok) { alert(await cpErrorText(r)); return; }
+        plLoadCatalog(true);
+    });
+    bar.appendChild(refresh); bar.appendChild(cats);
+    host.appendChild(bar);
+    plCat.errors.forEach(e => { const n = plEl('p', 'pl-help', e); n.style.color = '#d85a30'; host.appendChild(n); });
+
+    const q = document.getElementById('pl-search').value.trim().toLowerCase();
+    const list = plCat.plugins.filter(c => !q || (c.name + ' ' + c.description + ' ' + (c.author || '')).toLowerCase().includes(q));
+    bar.appendChild(plEl('span', 'pl-count', list.length + (list.length === 1 ? ' plugin' : ' plugins')));
+    if (!list.length) { const n = plEl('p', '', q ? 'No plugin matches that.' : 'The catalog has no plugins yet.'); n.style.cssText = 'font-size:13px;color:var(--text-dim);'; host.appendChild(n); return; }
+    const section = (title, items) => {
+        if (!items.length) return;
+        if (title) host.appendChild(plEl('div', 'pl-h', title));
+        const g = plEl('div', 'pl-grid'); items.forEach(c => g.appendChild(plStoreCard(c))); host.appendChild(g);
+    };
+    if (q) section('', list);
+    else { section('★ Featured', list.filter(c => c.featured)); section(list.some(c => c.featured) ? 'All plugins' : '', list.filter(c => !c.featured)); }
+}
+
+// Installing from an .ari file: the button, or a file dropped anywhere on the Plugins page.
+async function plInstallFile(file) {
+    if (!file) return;
+    if (!/\.(ari|zip)$/i.test(file.name)) { alert('That isn\'t an .ari file.'); return; }
+    if (!confirm('Install ' + file.name + '?\n\nA plugin is code that runs on this machine with full access to ARI. Only install ones you trust. It arrives switched off, and you can read its code before you turn it on.')) return;
+    try {
+        const r = await cpFetch('/api/v1/admin/plugins/install', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+        if (!r.ok) { alert(await cpErrorText(r)); return; }
+        const j = await r.json();
+        await loadPlugins();
+        plSetView(j.id);
+    } catch { alert('The install failed.'); }
+}
+document.getElementById('pl-install').addEventListener('click', () => document.getElementById('pl-file-input').click());
+document.getElementById('pl-file-input').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; plInstallFile(f); });
+(() => {
+    // Dropping an .ari file anywhere in the control panel installs it. The full-screen hint only shows on the Plugins tab, because while
+    // a file is being dragged its name can't be read yet.
+    const tab = () => document.getElementById('tab-plugins'), drop = () => document.getElementById('pl-drop');
+    const files = e => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+    const onPlugins = () => tab() && tab().offsetParent !== null;
+    let depth = 0;
+    document.addEventListener('dragenter', e => { if (files(e) && onPlugins()) { depth++; drop().style.display = 'flex'; } });
+    document.addEventListener('dragleave', e => { if (files(e) && onPlugins() && --depth <= 0) { depth = 0; drop().style.display = 'none'; } });
+    document.addEventListener('dragover', e => { if (files(e) && onPlugins()) e.preventDefault(); });
+    document.addEventListener('drop', e => {
+        depth = 0; drop().style.display = 'none';
+        const pkg = e.dataTransfer && [...e.dataTransfer.files].find(f => /\.ari$/i.test(f.name));
+        if (!pkg) return;                       // any other file: leave it to whatever else is on the page
+        e.preventDefault();
+        if (!onPlugins() && typeof switchTab === 'function') switchTab('plugins');
+        plInstallFile(pkg);
+    });
+})();
+
+// The plugin's own picture, or a letter tile when it hasn't got one.
+function plIcon(p, big) {
+    const t = plEl('div', 'pl-ico' + (big ? ' big' : ''));
+    if (p.hasIcon) { const i = document.createElement('img'); i.alt = ''; i.src = '/api/v1/admin/plugins/' + encodeURIComponent(p.id) + '/icon'; t.appendChild(i); }
+    else t.textContent = p.name.charAt(0).toUpperCase();
+    return t;
+}
+
+function plHeader(p, withSwitch) {
+    const head = plEl('div', 'pl-head');
+    head.appendChild(plIcon(p, true));
+    const mid = plEl('div'); mid.style.cssText = 'flex:1;min-width:0;';
+    const name = plEl('p', 'pl-name', p.name); name.style.fontSize = '20px'; name.appendChild(plEl('span', 'pl-tag', p.author));
+    mid.appendChild(name);
+    const st = plEl('p', 'pl-status'); st.appendChild(plEl('span', 'pl-dot ' + p.state)); st.appendChild(plEl('span', '', p.status || ''));
+    mid.appendChild(st);
+    mid.appendChild(plEl('p', 'pl-desc', p.description));
+    head.appendChild(mid);
+    if (withSwitch) head.appendChild(withSwitch);
+    return head;
+}
+
+function plReplace(updated) {
+    const i = plState.findIndex(p => p.id === updated.id);
+    if (i >= 0) plState[i] = updated;
+    plRender();
+}
+
+async function plPatch(id, body) {
+    const r = await cpFetch('/api/v1/admin/plugins/' + encodeURIComponent(id) + '/settings', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const d = await r.json().catch(() => ({}));
-    return { ok: r.ok, error: d.error };
+    return { ok: r.ok, data: d };
 }
 
-document.getElementById('gh-client-id-save').addEventListener('click', async e => {
-    const btn = e.currentTarget;
-    const clientId = document.getElementById('gh-client-id').value.trim();
-    if (!clientId) { ghSetStatus('Enter a Client ID first.', true); return; }
-    btn.disabled = true; ghSetStatus('Saving…', false);
-    try {
-        const { ok, error } = await ghSaveClientId(clientId);
-        ghSetStatus(ok ? 'Saved.' : (error || 'Save failed.'), !ok);
-    } catch { ghSetStatus('Save failed.', true); }
-    finally { btn.disabled = false; }
-});
+function plDetail(p, box) {
+    const sw = plEl('input', 'pl-switch'); sw.type = 'checkbox'; sw.checked = !!p.enabled; sw.title = p.enabled ? 'Switch off' : 'Switch on';
+    sw.addEventListener('change', async () => {
+        sw.disabled = true;
+        try {
+            const { ok, data } = await plPatch(p.id, { enabled: sw.checked });
+            if (!ok) { alert(data.error || 'That failed.'); sw.checked = !sw.checked; sw.disabled = false; return; }
+            plReplace(data.plugin);
+        } catch { sw.checked = !sw.checked; sw.disabled = false; }
+    });
+    const card = plEl('div', 'pl-card'); card.style.padding = '20px 22px';
+    card.appendChild(plHeader(p, sw));
+    box.appendChild(card);
 
-// Connect always saves whatever's currently in the field first, so pasting an ID and clicking
-// Connect works in one step — it doesn't silently depend on a separate Save click having happened.
-document.getElementById('gh-connect-btn').addEventListener('click', async e => {
-    const btn = e.currentTarget;
-    const clientId = document.getElementById('gh-client-id').value.trim();
-    if (!clientId) { ghSetStatus('Enter a Client ID first.', true); return; }
-    btn.disabled = true; ghSetStatus('Saving Client ID…', false);
-    try {
-        const { ok, error } = await ghSaveClientId(clientId);
-        if (!ok) { ghSetStatus(error || 'Failed to save Client ID.', true); return; }
-
-        ghSetStatus('Starting…', false);
-        const r = await cpFetch('/api/v1/admin/integrations/github/connection', { method: 'POST' });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) { ghSetStatus(d.error || 'Failed to start.', true); return; }
-        ghSetStatus('', false);
-        const link = document.getElementById('gh-verify-link');
-        link.href = d.verificationUri; link.textContent = d.verificationUri;
-        document.getElementById('gh-user-code').textContent = d.userCode;
-        document.getElementById('gh-code-box').style.display = '';
-        stopGhPoll();
-        ghPollTimer = setInterval(pollGhConnect, 3000);
-    } catch { ghSetStatus('Failed to start.', true); }
-    finally { btn.disabled = false; }
-});
-
-async function pollGhConnect() {
-    let d;
-    try {
-        const r = await cpFetch('/api/v1/admin/integrations/github/connection');
-        if (!r.ok) return;
-        d = await r.json();
-    } catch { return; }
-
-    if (d.state === 'connected') {
-        stopGhPoll();
-        await loadGitHub();
-    } else if (d.state === 'expired') {
-        stopGhPoll();
-        document.getElementById('gh-code-box').style.display = 'none';
-        ghSetStatus('Code expired — click Connect to try again.', true);
-    } else if (d.state === 'denied') {
-        stopGhPoll();
-        document.getElementById('gh-code-box').style.display = 'none';
-        ghSetStatus('Authorization was denied.', true);
-    } else if (d.state === 'error') {
-        stopGhPoll();
-        document.getElementById('gh-code-box').style.display = 'none';
-        ghSetStatus(d.error || 'Something went wrong.', true);
+    if (p.actions.length) {
+        const sec = plEl('div', 'pl-section'); sec.appendChild(plEl('h3', '', 'Actions'));
+        const row = plEl('div', 'pl-row');
+        const msg = plEl('span'); msg.style.cssText = 'font-size:12px;color:var(--text-dim);';
+        p.actions.forEach(a => {
+            const b = plEl('button', 'vs-btn-outline', a.label); b.type = 'button'; b.title = a.help;
+            b.addEventListener('click', async () => {
+                if (a.confirm && !confirm(a.help + '\n\nContinue?')) return;
+                b.disabled = true; msg.textContent = 'Working…';
+                try {
+                    const r = await cpFetch('/api/v1/admin/plugins/' + encodeURIComponent(p.id) + '/actions/' + encodeURIComponent(a.key), { method: 'POST' });
+                    const d = await r.json().catch(() => ({}));
+                    msg.textContent = d.message || d.error || (r.ok ? 'Done.' : 'That failed.');
+                } catch { msg.textContent = 'That failed.'; }
+                finally { b.disabled = false; }
+            });
+            row.appendChild(b);
+        });
+        row.appendChild(msg); sec.appendChild(row); box.appendChild(sec);
     }
+
+    if (p.settings.length) {
+        const sec = plEl('div', 'pl-section'); sec.appendChild(plEl('h3', '', 'Settings'));
+        const wrap = plFields(p); wrap.style.cssText = 'margin:0;padding:0;border:none;';
+        sec.appendChild(wrap); box.appendChild(sec);
+    }
+
+    if ((p.tools || []).length) {
+        const tsec = plEl('div', 'pl-section'); tsec.appendChild(plEl('h3', '', 'Tools this plugin adds'));
+        const list = plEl('div'); list.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+        p.tools.forEach(t => {
+            const row = plEl('div'); row.style.cssText = 'font-size:13px;';
+            const n = plEl('code', '', t.name); n.style.cssText = 'font-family:var(--font-mono,monospace);font-size:12px;margin-right:8px;';
+            row.appendChild(n); row.appendChild(plEl('span', '', t.description)); row.lastChild.style.color = 'var(--text-dim)';
+            list.appendChild(row);
+        });
+        tsec.appendChild(list);
+        tsec.appendChild(plEl('p', 'pl-help', p.enabled ? 'These are in Ari\'s tool list while this plugin is on.' : 'Switched off: Ari doesn\'t have these tools until the plugin is on.'));
+        box.appendChild(tsec);
+    }
+
+    if (p.removable) {
+        if (p.exportable) {
+            const xsec = plEl('div', 'pl-section'); xsec.appendChild(plEl('h3', '', 'Share'));
+            const ex = plEl('a', 'vs-btn-outline', 'Export as .ari file'); ex.href = '/api/v1/admin/plugins/' + encodeURIComponent(p.id) + '/package'; ex.download = p.id + '.ari'; ex.style.textDecoration = 'none';
+            xsec.appendChild(ex);
+            xsec.appendChild(plEl('p', 'pl-help', 'One file with the plugin\'s code and picture, and none of your settings or tokens. Drop it on another ARI\'s Plugins page to install it there.'));
+            box.appendChild(xsec);
+        }
+        const rsec = plEl('div', 'pl-section'); rsec.appendChild(plEl('h3', '', 'Remove'));
+        const rm = plEl('button', 'vs-btn-outline', 'Remove this plugin'); rm.type = 'button';
+        rm.addEventListener('click', async () => {
+            if (!confirm('Remove ' + p.name + '? Its tools go from Ari\'s list and its folder is deleted.')) return;
+            rm.disabled = true;
+            try {
+                const r = await cpFetch('/api/v1/admin/plugins/' + encodeURIComponent(p.id), { method: 'DELETE' });
+                if (r.ok) { plState = plState.filter(x => x.id !== p.id); plSetView(null); return; }
+                alert((await r.json().catch(() => ({}))).error || 'That failed.');
+            } catch { alert('That failed.'); }
+            rm.disabled = false;
+        });
+        rsec.appendChild(rm); box.appendChild(rsec);
+    }
+
+    const sec = plEl('div', 'pl-section'); sec.appendChild(plEl('h3', '', 'Code'));
+    if (!p.source.length) {
+        const n = plEl('p', '', 'This plugin doesn\'t include its source.'); n.style.cssText = 'font-size:13px;color:var(--text-dim);margin:0;'; sec.appendChild(n);
+    } else {
+        const wrap = plEl('div', 'pl-code'), files = plEl('div', 'pl-files'), pre = plEl('pre', 'pl-src', 'Loading…');
+        const show = async name => {
+            files.querySelectorAll('.pl-file').forEach(b => b.classList.toggle('on', b.dataset.name === name));
+            pre.textContent = 'Loading…';
+            try {
+                const r = await cpFetch('/api/v1/admin/plugins/' + encodeURIComponent(p.id) + '/source?file=' + encodeURIComponent(name));
+                pre.textContent = r.ok ? await r.text() : 'Couldn\'t load that file.';
+            } catch { pre.textContent = 'Couldn\'t load that file.'; }
+        };
+        p.source.forEach(f => {
+            const b = plEl('button', 'pl-file', f.name); b.type = 'button'; b.dataset.name = f.name; b.title = f.lines + ' lines';
+            b.addEventListener('click', () => show(f.name)); files.appendChild(b);
+        });
+        wrap.appendChild(files); wrap.appendChild(pre); sec.appendChild(wrap);
+        sec.appendChild(plEl('p', 'pl-help', 'Read-only. This is the code that is running.'));
+        show((p.source.find(f => f.name === 'DiscordPlugin.cs') || p.source[0]).name);
+    }
+    box.appendChild(sec);
 }
 
-document.getElementById('gh-disconnect').addEventListener('click', async e => {
-    if (!confirm("Disconnect ARI's GitHub account? She will lose access to private repos until reconnected.")) return;
-    const btn = e.currentTarget;
-    btn.disabled = true;
-    try {
-        await cpFetch('/api/v1/admin/integrations/github/connection', { method: 'DELETE' });
-        await loadGitHub();
-    } finally { btn.disabled = false; }
-});
+function plFields(p) {
+    const box = plEl('div', 'pl-fields');
+    const readers = {};
+
+    p.settings.forEach(s => {
+        const f = plEl('div', 'pl-field');
+        f.appendChild(plEl('label', '', s.label));
+        const value = p.values[s.key];
+
+        if (s.type === 'idlist') {
+            let ids = (value || []).slice();
+            const chips = plEl('div', 'pl-chips');
+            const draw = () => {
+                chips.innerHTML = '';
+                ids.forEach(id => {
+                    const c = plEl('span', 'pl-chip', id);
+                    const x = plEl('button', '', '×'); x.type = 'button'; x.title = 'Remove';
+                    x.addEventListener('click', () => { ids = ids.filter(i => i !== id); draw(); });
+                    c.appendChild(x); chips.appendChild(c);
+                });
+            };
+            draw(); f.appendChild(chips);
+            const row = plEl('div', 'pl-row');
+            const inp = plEl('input', 'vs-input'); inp.type = 'text'; inp.inputMode = 'numeric'; inp.placeholder = s.placeholder || 'ID'; inp.style.cssText = 'width:240px;';
+            const add = plEl('button', 'vs-btn-outline', 'Add'); add.type = 'button';
+            const commit = () => {
+                const v = inp.value.trim();
+                if (!v) return;
+                if (!/^\d+$/.test(v)) { inp.style.borderColor = '#d85a30'; return; }
+                inp.style.borderColor = '';
+                if (!ids.includes(v)) ids.push(v);
+                inp.value = ''; draw();
+            };
+            add.addEventListener('click', commit);
+            inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+            row.appendChild(inp); row.appendChild(add); f.appendChild(row);
+            readers[s.key] = () => { commit(); return ids; };
+        } else {
+            const inp = plEl('input', 'vs-input');
+            inp.style.cssText = 'width:100%;max-width:420px;';
+            if (s.type === 'secret') { inp.type = 'password'; inp.autocomplete = 'off'; inp.placeholder = value ? 'Saved. Leave blank to keep it.' : (s.placeholder || ''); }
+            else { inp.type = 'text'; inp.value = value || ''; inp.placeholder = s.placeholder || ''; }
+            f.appendChild(inp);
+            readers[s.key] = () => inp.value.trim();
+        }
+        if (s.help) f.appendChild(plEl('p', 'pl-help', s.help));
+        box.appendChild(f);
+    });
+
+    const row = plEl('div', 'pl-row');
+    const save = plEl('button', 'vs-btn-primary', 'Save settings'); save.type = 'button';
+    const msg = plEl('span'); msg.style.cssText = 'font-size:12px;color:var(--text-dim);';
+    save.addEventListener('click', async () => {
+        const body = {};
+        p.settings.forEach(s => {
+            const v = readers[s.key]();
+            if (s.type === 'secret' && !v) return;     // blank keeps the saved secret
+            body[s.key] = v;
+        });
+        save.disabled = true; msg.textContent = 'Saving…';
+        try {
+            const { ok, data } = await plPatch(p.id, body);
+            if (!ok) { msg.textContent = data.error || 'Save failed.'; return; }
+            plReplace(data.plugin);
+            // plReplace redraws the card, so say how it went through the fresh status line instead.
+            if (data.startError) alert(p.name + ' saved, but it did not start: ' + data.startError);
+        } catch { msg.textContent = 'Save failed.'; }
+        finally { save.disabled = false; }
+    });
+    row.appendChild(save); row.appendChild(msg);
+    box.appendChild(row);
+    return box;
+}
 
 async function restoreBackup(file, count) {
     if (!confirm(`Restore ${count} note(s) from\n${file}?\n\nThis recreates missing notes and overwrites present ones to the snapshot. It does not delete anything.`)) return;
@@ -7593,6 +7709,39 @@ function dbgFmtAgo(iso) {
     } catch { return ''; }
 }
 
+// Recall's prompt is a run of ALL-CAPS labels with the speaker's name glued on the front. That is exactly what the model gets, so the prompt
+// itself is left alone; this only tidies how it is shown here, and the exact text is one click away.
+const DBG_LABEL = /^([A-Z][A-Z0-9'’,\- ]{3,}[A-Z])(\s*\([^)]*\))?:\s*(.*)$/;
+function dbgSentence(label) {
+    const t = label.toLowerCase().replace(/\bari\b/g, 'Ari');
+    return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function dbgTidyRecall(text) {
+    // "# Prompt:" then "xywren: AUDIENCE: …": the name is only there for multi-user tracking, so drop it from the view.
+    text = text.replace(/^((?:#+ Prompt:\s*\n+)?)[^\n:]{1,40}: (?=[A-Z][A-Z' ]{3,}:)/, '$1');
+    const out = [];
+    let inSection = false;
+    for (const line of text.split('\n')) {
+        const m = line.match(DBG_LABEL);
+        if (!m) { out.push(line); continue; }
+        const label = dbgSentence(m[1]), note = (m[2] || '').trim(), rest = m[3].trim();
+        if (!rest) {
+            out.push('#### ' + label);
+            if (note) out.push('', '*' + note + '*');
+            out.push('');
+            inSection = true;
+        } else if (inSection) out.push('- **' + label + (note ? ' ' + note : '') + ':** ' + rest);
+        else out.push('#### ' + label, '', rest, '');
+    }
+    return out.join('\n');
+}
+function dbgPromptHtml(text) {
+    if (!text.includes('STARTING POINTS:')) return marked.parse(text);
+    const raw = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<div class="dbg-recallprompt">${marked.parse(dbgTidyRecall(text))}</div>`
+        + `<details class="dbg-rawtext"><summary>Exact text sent to the model</summary><pre>${raw}</pre></details>`;
+}
+
 async function loadDebugThreads() {
     const list = document.getElementById('dbg-thread-list');
     list.innerHTML = '<div class="cp-placeholder" style="padding:10px 12px;">Loading…</div>';
@@ -7910,20 +8059,20 @@ function dbgRenderTrace(item, host, workers = [], cursor = { i: 0 }, depth = 0) 
                         const r = document.createElement('div');
                         r.className = 'dbg-row right';
                         r.innerHTML = `<div class="dbg-bubble user"><div class="dbg-bhead"><span>${userName}</span></div>`
-                            + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(display)}</div></div>`;
+                            + `<div class="dbg-bbody dbg-md dbg-prompt-body">${dbgPromptHtml(display)}</div></div>`;
                         host.appendChild(r);
                     }
                 } catch (e) {
                     const r = document.createElement('div');
                     r.className = 'dbg-row right';
                     r.innerHTML = `<div class="dbg-bubble user"><div class="dbg-bhead"><span>Prompt</span></div>`
-                        + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(step.text || '')}</div></div>`;
+                        + `<div class="dbg-bbody dbg-md dbg-prompt-body">${dbgPromptHtml(step.text || '')}</div></div>`;
                     host.appendChild(r);
                 }
             } else {
                 row.classList.add('right');
                 row.innerHTML = `<div class="dbg-bubble user"><div class="dbg-bhead"><span>Prompt</span></div>`
-                    + `<div class="dbg-bbody dbg-md dbg-prompt-body">${marked.parse(step.text || '')}</div></div>`;
+                    + `<div class="dbg-bbody dbg-md dbg-prompt-body">${dbgPromptHtml(step.text || '')}</div></div>`;
                 host.appendChild(row);
             }
             return; // rows already appended above; skip the default host.appendChild(row) below

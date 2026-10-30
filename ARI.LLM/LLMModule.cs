@@ -154,7 +154,7 @@ public class LLMModule : ILLMModule, IDisposable
             ToolGroups.Load(Path.Combine(Paths.BuildPath, "ToolGroups.json"));
             CustomTools.Start();
             // Long standalone jobs run in the background by default, so she can keep talking while they work (switchable per tool in the control panel).
-            foreach (string slow in new[] { "write_pdf", "write_pptx", "make_chart", "download_file", "generate_image", "git_clone" }) ToolRegistry.SeedIfNew(slow, null, async: true);
+            foreach (string slow in new[] { "write_pdf", "write_pptx", "make_chart", "ocr", "edit_image", "convert_document", "download_file", "generate_image", "git_clone" }) ToolRegistry.SeedIfNew(slow, null, async: true);
 
             if (TryGetPropCI(doc.RootElement, "Agents", out JsonElement arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement el in arr.EnumerateArray())

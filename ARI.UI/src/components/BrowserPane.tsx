@@ -1,47 +1,45 @@
 import { useEffect, useRef, useState } from "react"
 import { apiFetch } from "../auth"
+import type { BrowserSession } from "../hooks/useBrowserSession"
 
-interface Status { open: boolean; waiting?: boolean; prompt?: string | null; tabs?: string[]; active?: number }
+// Ari's browser for this conversation. It has three parts: a button in the header (BrowserButton) that shows or hides it, the pane itself
+// beside the chat (BrowserPane), and a line above the input when she is waiting for the person (BrowserNeedsYou). A picture of the page
+// refreshes about once a second; clicking, typing and scrolling over it drive the real page, so the person can log in for her and press Done.
 
-interface Props { activeThread: string | null }
+export function BrowserButton({ session }: { session: BrowserSession }) {
+    const { status, hidden } = session
+    if (!status.open) return null
+    const tabs = status.tabs?.length ?? 1
+    return (
+        <button id="browser-btn" className={`${status.waiting ? "waiting" : ""} ${hidden ? "" : "on"}`.trim()} onClick={session.toggle}
+                title={hidden ? "Show Ari's browser" : "Hide Ari's browser"}>
+            <span className="bb-dot" aria-hidden="true" />
+            <span>Browser</span>
+            <span className="bb-sub">· {status.waiting ? "needs you" : `${tabs} tab${tabs === 1 ? "" : "s"}`}</span>
+        </button>
+    )
+}
 
-// The conversation's browser, shown only while Ari has a page open. A picture of the page refreshes about once a second; clicking,
-// typing and scrolling over it drive the real page, so the person can log in for her and press Done.
-export default function BrowserPane({ activeThread }: Props) {
-    const [status, setStatus] = useState<Status>({ open: false })
+export function BrowserNeedsYou({ session }: { session: BrowserSession }) {
+    const { status, hidden } = session
+    if (!status.open || !status.waiting || !hidden) return null
+    return (
+        <div id="browser-need">
+            <span>{status.prompt || "Ari needs you to do something in the browser."}</span>
+            <button onClick={session.show}>Open browser</button>
+        </div>
+    )
+}
+
+export default function BrowserPane({ session }: { session: BrowserSession }) {
+    const { base, status, hidden } = session
     const [shot, setShot] = useState<string | null>(null)
-    const [hidden, setHidden] = useState(false)
     const [address, setAddress] = useState("")
     const imgRef = useRef<HTMLImageElement>(null)
-    const wasWaiting = useRef(false)
 
-    const base = activeThread ? `/api/v1/threads/${activeThread}/browser` : null
+    useEffect(() => { setShot(null) }, [base])
 
-    useEffect(() => { setStatus({ open: false }); setShot(null); setHidden(false) }, [activeThread])
-
-    // Is there a page? Cheap, so check every couple of seconds.
-    useEffect(() => {
-        if (!base) return
-        let stop = false
-        const tick = async () => {
-            try {
-                const r = await apiFetch(base)
-                if (!stop && r.ok) setStatus(await r.json())
-                else if (!stop) setStatus({ open: false })
-            } catch { /* server busy */ }
-        }
-        tick()
-        const t = setInterval(tick, 2000)
-        return () => { stop = true; clearInterval(t) }
-    }, [base])
-
-    // When she asks for the person, bring the pane back even if it was tucked away.
-    useEffect(() => {
-        if (status.waiting && !wasWaiting.current) setHidden(false)
-        wasWaiting.current = !!status.waiting
-    }, [status.waiting])
-
-    // The picture.
+    // The picture, only while the pane is on screen.
     useEffect(() => {
         if (!base || !status.open || hidden) return
         let stop = false
@@ -58,7 +56,7 @@ export default function BrowserPane({ activeThread }: Props) {
         return () => { stop = true; clearInterval(t) }
     }, [base, status.open, status.waiting, hidden])
 
-    if (!base || !status.open) return null
+    if (!base || !status.open || hidden) return null
     const url = status.tabs?.[status.active ?? 0] ?? ""
 
     const send = (body: object) => apiFetch(base + "/input", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {})
@@ -79,12 +77,6 @@ export default function BrowserPane({ activeThread }: Props) {
         if (text) { e.preventDefault(); send({ kind: "type", text }) }
     }
 
-    if (hidden) return (
-        <button id="browser-pane-tab" onClick={() => setHidden(false)} title="Show Ari's browser">
-            Browser{status.waiting ? " — needs you" : ""}
-        </button>
-    )
-
     return (
         <div id="browser-pane" className={status.waiting ? "waiting" : ""}>
             <div className="bp-bar">
@@ -92,7 +84,7 @@ export default function BrowserPane({ activeThread }: Props) {
                 <form onSubmit={e => { e.preventDefault(); if (address.trim()) { send({ kind: "navigate", text: address.trim() }); setAddress("") } }}>
                     <input value={address} onChange={e => setAddress(e.target.value)} placeholder="Go to…" spellCheck={false} />
                 </form>
-                <button onClick={() => setHidden(true)} title="Tuck away">–</button>
+                <button onClick={() => session.setHidden(true)} title="Hide (the Browser button in the header brings it back)">Hide ›</button>
                 <button onClick={() => apiFetch(base + "/close", { method: "POST" })} title="Close the browser">×</button>
             </div>
             {status.waiting && (

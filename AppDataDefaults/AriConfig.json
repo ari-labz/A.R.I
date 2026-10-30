@@ -30,14 +30,6 @@
       "BackupPath": "./Backups",
       "MaxBackups": 5
     },
-    "Discord": {
-      "Enabled": false,
-      "Token": "",
-      "MasterDiscordId": 0,
-      "WhitelistedUserIds": [],
-      "WatchedChannelIds": [],
-      "AllowedGuildIds": []
-    },
     "Listener": {
       "Enabled": false,
       "WhisperPort": 8123,

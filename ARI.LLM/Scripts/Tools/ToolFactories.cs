@@ -24,11 +24,6 @@ internal static class ToolFactories
         // git_tools for commits, and nothing should ever clone into the Brain.
         ["git_clone"] = t => t.FilesystemRoot is { } r && !IsVault(t, r) ? new GitClone(r) : null,
 
-        // GitHub through gh, as the account connected in the control panel. Only in the admin's own app
-        // chats — never Discord, guests or background agents — and only once gh has been provisioned.
-        ["github"] = t => t.IsAdminChat && GitHubStore.ResolveToken() is not null && GhCli.ExecutablePath is { } gh
-            ? new GitHubTool(gh, t.FilesystemRoot, t) : null,
-
         ["deliver_file"]      = t => new DeliverFile(t.Key),
         ["create_scratchpad"] = t => new CreateScratchpad(t),
 
@@ -48,6 +43,9 @@ internal static class ToolFactories
         ["make_chart"]     = t => With<MakeChart>(t),
         ["show_visual"]    = t => t.Medium == ThreadMedium.Discord ? null : new ShowVisual(t),
         ["archive"]        = t => With<Archive>(t),
+        ["ocr"]            = t => With<Ocr>(t),
+        ["edit_image"]     = t => With<EditImage>(t),
+        ["convert_document"] = t => With<ConvertDocument>(t),
         ["pdf_merge"]      = t => With<PdfMerge>(t),
         ["pdf_extract_pages"] = t => With<PdfExtractPages>(t),
         ["list_directory"] = t => Fs(t) is { } fs ? new ListDirectory(fs) : null,
@@ -95,11 +93,6 @@ internal static class ToolFactories
         ["search_web"]  = _ => new SearchWeb(),
         ["fetch_page"]  = _ => new FetchPage(),
 
-        ["discord_list_voice_channels"] = _ => Modules.Discord is not null ? new DiscordListVoiceChannels() : null,
-        ["discord_join_voice_channel"]  = _ => Modules.Discord is not null ? new DiscordJoinVoiceChannel()  : null,
-        ["discord_leave_voice_channel"] = _ => Modules.Discord is not null ? new DiscordLeaveVoiceChannel() : null,
-        ["discord_dm_user"]             = t => Modules.Discord is not null ? new DiscordDmUser(t)          : null,
-        ["discord_close_dm"]            = _ => Modules.Discord is not null ? new DiscordCloseDm()          : null,
 
         // Image generation — only available when the ImageGen module is enabled and ComfyUI is ready.
         // subagent_tools — conversations only: never on internal threads (no nesting) or Discord server channels.
@@ -114,6 +107,7 @@ internal static class ToolFactories
         ["run_code"]       = t => With<RunCode>(t),
         ["http_request"]   = t => With<HttpRequest>(t),
         ["download_file"]  = t => With<DownloadFile>(t),
+        ["ssh"]            = t => With<Ssh>(t),
         ["todo"]           = t => With<Todo>(t),
         ["list_chats"]     = t => With<ListChats>(t),
         ["read_chat"]      = t => With<ReadChat>(t),
@@ -128,6 +122,12 @@ internal static class ToolFactories
         ["read_tool"]      = t => With<ReadTool>(t),
         ["list_my_tools"]  = t => With<ListMyTools>(t),
         ["delete_tool"]    = t => With<DeleteTool>(t),
+        ["plugin_docs"]    = t => With<PluginDocs>(t),
+        ["write_plugin"]   = t => With<WritePlugin>(t),
+        ["test_plugin"]    = t => With<TestPlugin>(t),
+        ["read_plugin"]    = t => With<ReadPlugin>(t),
+        ["list_my_plugins"] = t => With<ListMyPlugins>(t),
+        ["delete_plugin"]  = t => With<DeletePlugin>(t),
 
         ["browser"]        = t => new BrowserTool(t),
 
@@ -139,8 +139,12 @@ internal static class ToolFactories
 
     private static readonly HashSet<string> AdminChatOnly = new(StringComparer.OrdinalIgnoreCase)
     {
-        "shell", "shell_job", "run_code", "http_request", "download_file", "browser", "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
+        "shell", "shell_job", "run_code", "http_request", "download_file", "ssh", "browser", "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
+        "plugin_docs", "write_plugin", "test_plugin", "read_plugin", "list_my_plugins", "delete_plugin",
     };
+
+    /// <summary>True when this conversation is never given the tool at all (owner-only tools on a guest's or Discord thread), so there is nothing to tell her about it.</summary>
+    internal static bool Withheld(string name, Thread t) => (t.IsGuarded && MASTER_ONLY_TOOLS.Contains(name)) || (AdminChatOnly.Contains(name) && !t.IsAdminChat);
 
     private static bool IsVault(Thread t, string root) => t.IsBrainVault || Directory.Exists(Path.Combine(root, ".obsidian"));
 
@@ -165,12 +169,14 @@ internal static class ToolFactories
             if (t.tools.ContainsKey(name)) { if (withheld) t.UnregisterTool(name); continue; }
             if (!withheld && TryBuild(name, t, out Tool tool)) tool.Register(t);
         }
+        foreach (string name in t.tools.Keys.ToList())
+            if (PluginTools.Find(name) is { } owned && !PluginTools.IsAvailable(owned.Plugin)) t.UnregisterTool(name);
     }
 
     // Filesystem tool names that unlock when a FilesystemRoot is set.
     // Read-only subset registered for dream/read-only agents; full set for normal agents.
     private static readonly string[] FilesystemReadToolNames  = ["preview_file", "read_file", "read_document", "read_docx", "read_xlsx", "read_pdf", "read_pptx", "list_directory", "search_files", "find_files", "search_vault"];
-    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "write_xlsx", "edit_xlsx", "write_docx", "edit_docx", "write_pptx", "write_pdf", "make_chart", "archive", "pdf_merge", "pdf_extract_pages", "deliver_file", "create_scratchpad", "build_project"];
+    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "write_xlsx", "edit_xlsx", "write_docx", "edit_docx", "write_pptx", "write_pdf", "make_chart", "ocr", "edit_image", "convert_document", "archive", "pdf_merge", "pdf_extract_pages", "deliver_file", "create_scratchpad", "build_project"];
 
     /// <summary>
     /// Registers all filesystem tools that now resolve for the thread. Call this immediately after
@@ -189,9 +195,12 @@ internal static class ToolFactories
                 tool.Register(thread);
     }
 
-    internal static IEnumerable<string> AllNames() => _factories.Keys.Concat(CustomTools.Names).Distinct(StringComparer.OrdinalIgnoreCase);
+    internal static IEnumerable<string> AllNames() => _factories.Keys.Concat(CustomTools.Names).Concat(PluginTools.Names).Distinct(StringComparer.OrdinalIgnoreCase);
 
-    internal static bool IsBuiltIn(string name) => _factories.ContainsKey(name);
+    /// <summary>True for a tool ARI itself ships, not one a plugin brought.</summary>
+    internal static bool IsCoreBuiltIn(string name) => _factories.ContainsKey(name);
+
+    internal static bool IsBuiltIn(string name) => _factories.ContainsKey(name) || PluginTools.IsProvided(name);
 
     /// <summary>Why a known tool didn't resolve for this thread — the real reason, so ARI doesn't blame a
     /// missing project binding for everything (e.g. git fails on a bound project with no repos in it).</summary>
@@ -199,21 +208,26 @@ internal static class ToolFactories
     {
         _ when !ToolRegistry.IsEnabled(toolName) => "it has been switched off in the control panel",
         _ when thread.IsGuarded && MASTER_ONLY_TOOLS.Contains(toolName) => "it isn't available in this conversation",
-        "github" when !thread.IsAdminChat              => "it's only available in the master's own chats in the app",
-        "github" when GitHubStore.ResolveToken() is null => "no GitHub account is connected — the user can connect one on the control panel's GitHub page",
-        "github"                                         => "GitHub's CLI is still being installed — try again in a minute",
+        _ when PluginTools.Find(toolName) is { } owned => PluginTools.WhyUnavailable(owned.Plugin),
         "spawn_agent" or "wait_for_agent" or "cancel_agent" when SubagentManager.Agent is null
                                                          => "subagents aren't configured on this server",
         "spawn_agent" or "wait_for_agent" or "cancel_agent" => "subagents aren't available here (only in direct conversations, not Discord server channels or agent threads)",
+        "create_event" or "create_reminder" or "list_events" or "delete_entry" => "the calendar isn't running",
+        "list_projects" or "create_project" or "rename_project" or "bind_project" or "set_project_path" => "the projects module isn't running",
+        "create_memory" or "edit_memory" or "delete_memory" => "the brain isn't ready",
+        "generate_image" or "present_image" => "image generation isn't set up or isn't ready (ComfyUI)",
         _ => FilesystemReason(toolName, thread),
     };
 
     private static string FilesystemReason(string toolName, Thread thread) => thread.FilesystemRoot switch
     {
+        null when !FilesystemToolNames.Contains(toolName) => "it needs a module or connection that isn't available right now",
         null => "this conversation has no project bound on the server — call bind_project first",
         { } root when toolName.Equals("git", StringComparison.OrdinalIgnoreCase) => $"no git repositories were found in {root}",
         _ => "it needs a module or connection that isn't available right now",
     };
+
+    private static readonly HashSet<string> FilesystemToolNames = new(FilesystemReadToolNames.Concat(FilesystemWriteToolNames).Append("git").Append("git_clone").Append("build_project"), StringComparer.OrdinalIgnoreCase);
 
     // Tools that reach the Master's own life, so anyone else she talks to never gets them.
     private static readonly HashSet<string> MASTER_ONLY_TOOLS = new(StringComparer.OrdinalIgnoreCase)
@@ -221,12 +235,13 @@ internal static class ToolFactories
         "search_brain", "recall_memory", "memories_on", "create_memory", "edit_memory", "delete_memory", "neighbours",
         "create_event", "create_reminder", "list_events", "delete_entry", "propose_persona_edit",
         "list_projects", "create_project", "rename_project", "bind_project", "set_project_path",
-        "git", "git_clone", "github",
+        "git", "git_clone",
         "build_project",   // runs the project's own build scripts on this machine
         // Run code, read other people's conversations, or change what Ari can do: the owner only.
-        "shell", "shell_job", "run_code", "http_request", "download_file", "list_chats", "read_chat", "search_chats",
+        "shell", "shell_job", "run_code", "http_request", "download_file", "ssh", "list_chats", "read_chat", "search_chats",
         "browser", "list_skills", "read_skill", "write_skill", "delete_skill",
         "tool_docs", "write_tool", "test_tool", "read_tool", "list_my_tools", "delete_tool",
+        "plugin_docs", "write_plugin", "test_plugin", "read_plugin", "list_my_plugins", "delete_plugin",
     };
 
     internal static bool TryBuild(string toolName, Thread thread, out Tool tool, bool ignoreSettings = false)
@@ -234,6 +249,13 @@ internal static class ToolFactories
         tool = null!;
         if (!ignoreSettings && !ToolRegistry.IsEnabled(toolName)) return false;
         if (thread.IsGuarded && MASTER_ONLY_TOOLS.Contains(toolName)) return false;
+        // A plugin's tools exist only while the plugin is switched on and running.
+        if (PluginTools.Find(toolName) is { } owned)
+        {
+            if (!PluginTools.IsAvailable(owned.Plugin) || owned.Tool.Create(thread) is not { } made) return false;
+            tool = made;
+            return true;
+        }
         // Custom tools are available to everyone Ari talks to. Only the admin can add or change one, in the control panel.
         if (CustomTools.IsCustom(toolName))
         {

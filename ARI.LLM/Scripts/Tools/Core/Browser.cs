@@ -281,6 +281,40 @@ internal sealed class BrowserTool : Tool
         }
     };
 
+    // One line for the chat, after each step: what she just did. The chat turns it into a card that opens the browser pane.
+    internal override Func<string, string>? DisplayAfter => args =>
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(args) ? "{}" : args);
+            JsonElement r = doc.RootElement;
+            string A(string k) => r.TryGetProperty(k, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+            string action = A("action").ToLowerInvariant();
+            string target = A("text").Length > 0 ? A("text") : A("selector");
+            if (target.StartsWith("ref:", StringComparison.OrdinalIgnoreCase)) target = "an item";
+            if (target.Length > 40) target = target[..40] + "…";
+            string label = action switch
+            {
+                "close" => "",
+                "open" or "new_tab" => Uri.TryCreate(A("url"), UriKind.Absolute, out Uri? u) ? (u.IsFile ? $"opened {Path.GetFileName(u.LocalPath)}" : $"opened {u.Host}{(u.AbsolutePath.Length > 1 ? u.AbsolutePath : "")}") : "opened a page",
+                "screenshot" => "looked at the page",
+                "text" or "links" or "elements" => "read the page",
+                "click" => target.Length > 0 ? $"clicked {target}" : "clicked",
+                "type" or "select" or "upload" => "filled in a form",
+                "press" => $"pressed {A("key")}".TrimEnd(),
+                "scroll" => "scrolled",
+                "eval" => "ran a script on the page",
+                "wait" => "waited for the page",
+                "back" => "went back",
+                "tabs" or "switch" => "switched tabs",
+                "handover" or "ask_user" => "asked you to take over",
+                _ => action,
+            };
+            return label.Length == 0 ? "" : $"\n<!--ari-browser: {ToolCallParser.EscapeLabel(label)}-->";
+        }
+        catch { return ""; }
+    };
+
     internal override async Task<ToolResult> Execute(string argsJson)
     {
         if (!thread.IsAdminChat) return "Only the owner, chatting in the app, can use the browser.";

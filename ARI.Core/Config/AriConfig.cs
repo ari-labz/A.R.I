@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ARI.BrainVault;
-using ARI.Discord;
 using ARI.LLM;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
@@ -114,7 +113,6 @@ public class Modules
     public VoiceSynthesisConfig VoiceSynthesis { get; init; } = new();
     public VoiceConfig Voice { get; init; } = new();
     public BrainConfig Brain { get; init; }
-    public DiscordConfig Discord { get; init; }
     public ListenerConfig Listener { get; init; } = new();
     public ImageGenConfig   ImageGen  { get; init; } = new();
     public CalendarConfig   Calendar  { get; init; } = new();

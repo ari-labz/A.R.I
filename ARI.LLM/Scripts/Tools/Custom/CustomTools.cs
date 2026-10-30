@@ -46,7 +46,7 @@ public static class CustomTools
     private static int generation;
 
     // Scripts need no using lines for the everyday namespaces.
-    private const string GlobalUsings =
+    internal const string GlobalUsings =
         "global using System; global using System.Collections.Generic; global using System.IO; global using System.Linq; " +
         "global using System.Net.Http; global using System.Text; global using System.Text.Json; global using System.Text.RegularExpressions; " +
         "global using System.Threading; global using System.Threading.Tasks; global using ARI.LLM;";
@@ -55,12 +55,12 @@ public static class CustomTools
     // uses, and these are the owner's own tools. This declares the attribute the runtime honours and switches the compiler's
     // accessibility check off. (The compiler setting is an internal one, reached by reflection, so a Roslyn update could break it
     // and then the only effect is that copies of built-ins that use internals stop compiling.)
-    private const string AccessShim =
+    internal const string AccessShim =
         "[assembly: System.Runtime.CompilerServices.IgnoresAccessChecksTo(\"ARI.LLM\")] [assembly: System.Runtime.CompilerServices.IgnoresAccessChecksTo(\"ARI.Common\")] " +
         "namespace System.Runtime.CompilerServices { [System.AttributeUsage(System.AttributeTargets.Assembly, AllowMultiple = true)] " +
         "internal sealed class IgnoresAccessChecksToAttribute : System.Attribute { public IgnoresAccessChecksToAttribute(string assemblyName) { } } }";
 
-    private static CSharpCompilationOptions IgnoreAccessibility(CSharpCompilationOptions options)
+    internal static CSharpCompilationOptions IgnoreAccessibility(CSharpCompilationOptions options)
     {
         try
         {
@@ -346,7 +346,7 @@ public static class CustomTools
     }
 
     private static List<MetadataReference>? references;
-    private static List<MetadataReference> References()
+    internal static List<MetadataReference> References()
     {
         if (references is not null) return references;
         string tpa = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "";
