@@ -4,7 +4,7 @@ whisper_serve.py — ARI.Listener's speech-to-text worker.
 
 A tiny WebSocket server that receives raw PCM (16-bit LE, mono, 16 kHz), segments it into utterances with
 VAD (WebRTC VAD, energy fallback), transcribes each finished utterance with faster-whisper, and sends back
-JSON: {"type": "final", "text": "..."}. The C# ListenerSession pipes the browser mic to this and forwards
+JSON: {"type": "partial"|"final", "text": "..."} (partials every ~0.5 s while speaking). The C# ListenerSession pipes the browser mic to this and forwards
 transcripts to the awareness gate.
 
 Run: python whisper_serve.py --port 8123 --model base.en
@@ -13,6 +13,7 @@ Deps: pip install faster-whisper websockets numpy webrtcvad   (webrtcvad optiona
 import argparse
 import asyncio
 import json
+import re
 import sys
 
 import numpy as np
@@ -71,6 +72,8 @@ class Segmenter:
         self.had_speech = False
         self.utter_ms = 0
         self.speech_ms = 0        # how much of the utterance was actually speech
+        self.utterance_id = 0     # bumps on every reset, so a late partial can tell its utterance has ended
+        self.extra_ms = 0         # extra silence to wait when the latest partial sounds unfinished
 
     def _is_speech(self, frame: bytes) -> bool:
         if self.vad is not None:
@@ -95,7 +98,7 @@ class Segmenter:
                 self.utter.extend(frame)
                 self.utter_ms += FRAME_MS
                 self.silence_ms += FRAME_MS
-                if self.silence_ms >= SILENCE_MS_END:
+                if self.silence_ms >= SILENCE_MS_END + self.extra_ms:
                     if self.speech_ms >= MIN_SPEECH_MS:
                         out.append(bytes(self.utter))
                     self._reset()
@@ -111,6 +114,8 @@ class Segmenter:
         return u
 
     def _reset(self):
+        self.utterance_id += 1
+        self.extra_ms = 0
         self.utter = bytearray()
         self.silence_ms = 0
         self.had_speech = False
@@ -143,13 +148,37 @@ def transcribe(pcm: bytes) -> str:
     return " ".join(kept).strip()
 
 
+# A pause after "and", "um", "so" or a trailing comma usually isn't the end of the turn; wait this much longer.
+UNFINISHED_EXTRA_MS = 600
+UNFINISHED_TAIL = re.compile(r"(,|\b(and|but|so|or|um+|uh+|er+|like|because|the|a|to|of|with|if|that|my|your|i)\.?)\s*$", re.I)
+
+PARTIAL_EVERY_MS = 500  # re-transcribe the growing utterance this often, so Ari can start on it before it ends
+
+
 async def handle(ws, *_):
     seg = Segmenter()
     loop = asyncio.get_event_loop()
+    partial = {"task": None, "at_ms": 0}
+
+    async def send_partial(pcm: bytes, uid: int):
+        text = await loop.run_in_executor(None, transcribe, pcm)
+        # Never send a partial once its utterance has been finalised — it would arrive after the final.
+        if text and uid == seg.utterance_id and not is_junk(text):
+            seg.extra_ms = UNFINISHED_EXTRA_MS if UNFINISHED_TAIL.search(text) else 0
+            await ws.send(json.dumps({"type": "partial", "text": text}))
+
     try:
         async for msg in ws:
             if isinstance(msg, (bytes, bytearray)):
-                for utter in seg.add(bytes(msg)):
+                finals = seg.add(bytes(msg))
+                if partial.get("uid") != seg.utterance_id:
+                    partial["uid"], partial["at_ms"] = seg.utterance_id, 0
+                if not finals and seg.had_speech and seg.speech_ms >= MIN_SPEECH_MS \
+                        and seg.utter_ms - partial["at_ms"] >= PARTIAL_EVERY_MS \
+                        and (partial["task"] is None or partial["task"].done()):
+                    partial["at_ms"] = seg.utter_ms
+                    partial["task"] = asyncio.ensure_future(send_partial(bytes(seg.utter), seg.utterance_id))
+                for utter in finals:
                     text = await loop.run_in_executor(None, transcribe, utter)
                     if text and not is_junk(text):
                         log(f'[whisper_serve] transcript: "{text}"')

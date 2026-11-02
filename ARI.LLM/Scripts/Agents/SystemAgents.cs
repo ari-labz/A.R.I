@@ -120,8 +120,18 @@ internal static class SystemAgents
         STARTING POINTS:
         {starting}
 
-        Write the memory block for this conversation now.
+        {task}
         """;
+
+    internal const string WalkerFullTask = "Write the memory block for this conversation now.";
+
+    // ARI waits for the block before she says a word, so it's bounded: ~200 words is a few seconds to write; 1,300 tokens was 20+.
+    internal const string WalkerLengthRule = " Keep it to about 200 words, most relevant first; ARI can call recall_memory herself for more.";
+
+    // Earlier blocks stay in ARI's context verbatim, so retyping them costs seconds and adds nothing.
+    internal const string WalkerDeltaTask =
+        "ARI still has every memory block you wrote earlier in this conversation. Write only what the brain holds that bears on " +
+        "the latest message and is not already in those blocks. If there is nothing to add, write exactly: " + Agent.NothingNew;
 
     private static string? KeyOf(JsonObject o, string name) => o.Select(kv => kv.Key).FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
     private static JsonNode? Get(JsonObject o, string name) => KeyOf(o, name) is { } k ? o[k] : null;

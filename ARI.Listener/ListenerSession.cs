@@ -26,7 +26,9 @@ internal sealed class ListenerSession
     // Steers the model toward short, speakable replies for a live voice conversation.
     private const string SpeechContext =
         "You are in a live, spoken voice conversation. Keep replies concise, natural, and easy to say aloud. " +
-        "Do not use markdown, lists, headings, or code blocks — plain spoken sentences only.";
+        "Do not use markdown, lists, headings, or code blocks — plain spoken sentences only. " +
+        "You answer straight away, without thinking first. If something needs research, careful reasoning or several tools, " +
+        "say in a few words that you're on it and hand it to spawn_agent, then keep talking; you'll get the result and can tell them.";
     private const int RECONNECT_DELAY_MS = 750;
     private const int WHISPER_CONNECT_TIMEOUT_SEC = 60;
     private const int BROWSER_BUFFER_SIZE_BYTES = 16 * 1024;
@@ -43,6 +45,21 @@ internal sealed class ListenerSession
 
     public async Task RunAsync(CancellationToken ct)
     {
+        // Start the voice engine now, while the user is still deciding what to say, so her first reply doesn't
+        // wait on Python and the model loading (it stops itself after 10 idle minutes).
+        if (Modules.Voice is { } voice)
+            _ = Task.Run(async () => { try { await voice.Synthesise("Hi.", ct); } catch { /* the first real sentence will retry */ } }, ct);
+
+        // A background job this conversation started (spawn_agent) wakes the thread when it finishes; say it out
+        // loud rather than leaving it in the chat. Only the opening lines are spoken — the full result is on screen.
+        Action<string, string> onWoke = (threadKey, reply) =>
+        {
+            if (threadKey == ctx.ThreadKey && browser.State == WebSocketState.Open && !ct.IsCancellationRequested)
+                _ = Task.Run(() => SpeakAsync(reply, ct), ct);
+        };
+        llm.ThreadWoke += onWoke;
+        ct.Register(() => llm.ThreadWoke -= onWoke);
+
         if (!worker.Running)
         {
             await SendJson(new { type = "error", message = "transcription unavailable" }, ct);
@@ -145,7 +162,10 @@ internal sealed class ListenerSession
         activeSteering = null;
 
         transcript.Add(text!);
-        bool addressed = await llm.EvaluateAwareness(text!, BuildAwarenessContext(), ct);
+        // The web orb and the desktop client are one person talking to Ari, so everything is addressed to her;
+        // the awareness gate (a model call before anything else can start) is only for shared rooms like Discord.
+        bool oneToOne  = ctx.Source is "web" or "client";
+        bool addressed = oneToOne || await llm.EvaluateAwareness(text!, BuildAwarenessContext(), ct);
         logger?.LogInformation("[Listener] ({Src}/{User}) {Verdict}: \"{Text}\"",
             ctx.Source, ctx.UserId ?? "?", addressed ? "ADDRESSED" : "overheard", text);
         await SendJson(new { type = "transcript", text, addressed }, ct);
@@ -166,6 +186,35 @@ internal sealed class ListenerSession
         activeSteering = steering;
 
         _ = Task.Run(() => RespondAsync(transcript, steering, cts.Token), cts.Token);
+    }
+
+    private const int SPOKEN_REPORT_MAX_CHARS = 300;
+
+    // Speaks a finished reply that didn't come from a live turn (a woken thread): the first sentences only.
+    private async Task SpeakAsync(string reply, CancellationToken ct)
+    {
+        if (Modules.Voice is null || string.IsNullOrWhiteSpace(reply)) return;
+        List<string> chunks = [];
+        SentenceChunker chunker = new(chunks.Add);
+        chunker.Feed(reply.Length > SPOKEN_REPORT_MAX_CHARS ? reply[..SPOKEN_REPORT_MAX_CHARS] : reply);
+        chunker.Flush();
+        try
+        {
+            await SendJson(new { type = "speaking" }, ct);
+            int spoken = 0;
+            foreach (string chunk in chunks)
+            {
+                if (spoken > 0 && spoken + chunk.Length > SPOKEN_REPORT_MAX_CHARS) break;
+                spoken += chunk.Length;
+                await SendJson(new { type = "say", text = chunk }, ct);
+                byte[] wav = await Modules.Voice.Synthesise(chunk, ct);
+                if (wav.Length > 0 && browser.State == WebSocketState.Open)
+                    await browser.SendAsync(wav, WebSocketMessageType.Binary, true, ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { logger?.LogWarning(ex, "[Listener] speaking a finished background job failed."); }
+        finally { await SendJson(new { type = "done" }, ct); }
     }
 
     private async Task RespondAsync(string userText, SpeechSteeringContext steering, CancellationToken ct)

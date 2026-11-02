@@ -460,6 +460,9 @@ public class Server : IDisposable
             // these bound the per-slot rollback state and the cross-turn prompt cache — the two biggest
             // discretionary RAM draws once several slots run in parallel.
             $"--ctx-checkpoints {CtxCheckpoints}",
+            // Default spacing is 8192 tokens, so a change anywhere before the newest message could fall back to the
+            // start of the prompt. Closer checkpoints keep re-reads to the changed part (hybrid models can't rewind).
+            "--checkpoint-min-step 1024",
             $"--cache-ram {CacheRamMib}",
             "--n-predict -1",
             // Sampler defaults for this server — the catch-all every agent falls back to when it has no

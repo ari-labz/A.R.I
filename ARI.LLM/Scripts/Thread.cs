@@ -429,6 +429,17 @@ public class Thread
     /// <summary>The context window's start, exposed so a saved thread can be restored with the same window (see PersistedThreads).</summary>
     internal int ContextStart { get => contextStartIndex; set => contextStartIndex = value; }
 
+    /// <summary>The context start when Dialogue last got a full memory block, or -1. While the window hasn't moved
+    /// since, every block sent after it is still in view, so Recall only has to add what's new.</summary>
+    internal int MemoryBlockStart = -1;
+
+    /// <summary>Set by the pipeline for one turn: Recall was asked only for what's new since its last block.</summary>
+    internal bool MemoryDeltaThisTurn;
+
+    /// <summary>Per-thread context (platform, brief, privacy policy, live capabilities) sent as the conversation's
+    /// opening message, after the shared system prompt. Rebuilt every turn by the agent.</summary>
+    internal string? OpeningContext;
+
     internal List<ThreadMessage> GetChatHistory(int maxMessages = 0, int maxChars = 0)
     {
         if (contextStartIndex > History.Count) contextStartIndex = 0;
@@ -466,7 +477,8 @@ public class Thread
                 Role:        author == "ARI" ? "assistant" : "user",
                 Username:    author,
                 Content:     content,
-                ToolBatches: toolBatches), i, itemLen,
+                ToolBatches: toolBatches,
+                Source:      item as Prompt), i, itemLen,
                 // A turn is complete when an ariResponse closes. A Response only contributes
                 // ContextText once it is Complete, so any Response seen here is a closed one.
                 EndsTurn: item is Response));

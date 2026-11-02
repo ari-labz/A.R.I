@@ -29,6 +29,8 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly ConcurrentDictionary<string, PipelineGraph> subGraphs = new(StringComparer.OrdinalIgnoreCase);
     private readonly CodePipeline?     codePipeline;
     private readonly SpeechPipeline?   speechPipeline;
+    // Voice runs the same graph as chats (Recall in front, memory that adds up), with the talking agent replying.
+    private readonly GraphPipeline?    speechGraph;
     private readonly GraphPipeline?    graphPipeline;
     private readonly ConcurrentDictionary<string, CustomAgent> customAgents = new(StringComparer.OrdinalIgnoreCase);
     private readonly string            pipelinesPath;
@@ -225,7 +227,18 @@ public class LLMModule : ILLMModule, IDisposable
         if (rawAgents.TryGetValue("Dialogue", out JsonElement dialogueEl))
         {
             textingAgent = Deserialize<TextingAgent>(dialogueEl);
-            talkingAgent = Deserialize<TalkingAgent>(dialogueEl);
+            // Voice uses its own Agents.json entry when there is one; otherwise Dialogue's, with thinking off so she
+            // speaks within a couple of seconds. Hard requests go to a thinking subagent (see SpeechContext).
+            if (rawAgents.TryGetValue("Voice", out JsonElement voiceEl))
+                talkingAgent = Deserialize<TalkingAgent>(voiceEl);
+            else
+            {
+                talkingAgent = Deserialize<TalkingAgent>(dialogueEl);
+                talkingAgent.Think = false;
+                // A slot of its own keeps the voice prompt cached while chats and coding use theirs.
+                if (talkingAgent.Server?.Slots.FirstOrDefault(sl => sl.Name.Equals("Voice", StringComparison.OrdinalIgnoreCase)) is { } voiceSlot)
+                    talkingAgent.Slot = voiceSlot;
+            }
             agentMap["Dialogue"] = textingAgent;
         }
 
@@ -306,6 +319,12 @@ public class LLMModule : ILLMModule, IDisposable
         if (textingAgent is not null)
         {
             graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers);
+            if (talkingAgent is not null)
+            {
+                speechGraph = new GraphPipeline(talkingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers);
+                speechGraph.ThreadBufferFull     += key => NotifyWatchers(key);
+                speechGraph.ThreadBecameInactive += key => NotifyWatchers(key);
+            }
             graphPipeline.ThreadBufferFull     += key => NotifyWatchers(key);
             graphPipeline.ThreadBecameInactive += key => NotifyWatchers(key);
             ReloadPipelines();
@@ -440,6 +459,11 @@ public class LLMModule : ILLMModule, IDisposable
     {
         T agent = JsonSerializer.Deserialize<T>(el.GetRawText(), JsonOptions)!;
 
+        // The Agents page saves sampling flat on the entry (Temperature, TopK, ...), not as a nested
+        // SamplerSettings block, so without this every agent silently ran on its server's defaults.
+        if (agent.SamplerSettings is null)
+            agent.SamplerSettings = JsonSerializer.Deserialize<SamplerSettings>(el.GetRawText(), JsonOptions);
+
         if (TryGetServer(agent.ServerName, out Server? bound))
         {
             agent.Endpoint    = bound.FullEndpoint;
@@ -530,6 +554,10 @@ public class LLMModule : ILLMModule, IDisposable
         // Image/video generation tools are always hot when the module is ready — no request_tools hop.
         if (Modules.ImageGen?.IsReady == true && type is ThreadPipeline.Dialogue or ThreadPipeline.Speech)
             ToolFactories.LoadGroup("image_tools", thread);
+        // Voice hands anything slow to a subagent; loading spawn_agent mid-turn would change the tool list and
+        // re-read the prompt, so it's there from the start.
+        if (type is ThreadPipeline.Speech)
+            ToolFactories.LoadGroup("subagent_tools", thread);
         // hand_to_coder is the net under the deterministic Code routing: if a coding request lands on a Dialogue
         // thread (the gate never fired), she can pass it to the Coder instead of improvising. Hot, like
         // propose_persona_edit — discovering it via list_tools is not something to rely on mid-request.
@@ -845,6 +873,7 @@ public class LLMModule : ILLMModule, IDisposable
         await Task.WhenAll(boots);
 
         dreamOrchestrator?.Start();
+        _ = WarmDialogueAsync();
 
         async Task BootOne(Server server, Model? model)
         {
@@ -888,6 +917,36 @@ public class LLMModule : ILLMModule, IDisposable
     {
         int idx = _servers.FindIndex(s => s.Id == updated.Id);
         if (idx >= 0) _servers[idx] = updated;
+    }
+
+    /// <summary>Reads Dialogue's shared system prompt and tools into its slot right after boot, so the first message of
+    /// the session (and every new conversation, which shares that prefix) doesn't spend ~50 s reading it.</summary>
+    private async Task WarmDialogueAsync()
+    {
+        if (textingAgent?.Server is not { Status: ServerStatus.Online }) return;
+        // A chat's tool list includes the image tools once image generation is ready, and the tool list is part of the
+        // shared prefix — so wait for it (bounded) or the warm prefix won't match a real chat's.
+        // The module may not even be registered yet at this point, so wait for "ready" rather than "not unready".
+        for (int waited = 0; Modules.ImageGen?.IsReady != true && waited < 120; waited += 2)
+            await Task.Delay(2000);
+        await Task.Delay(2000);   // let anything else that comes up with it settle
+        await Warm(textingAgent, ThreadPipeline.Dialogue, "warmup-shared-prefix");
+        if (talkingAgent is not null) await Warm(talkingAgent, ThreadPipeline.Speech, "warmup-voice-prefix");
+    }
+
+    private async Task Warm(Agent agent, ThreadPipeline type, string key)
+    {
+        try
+        {
+            Thread thread = GetOrCreateThread(type, key);
+            // An owner's chat: its tool list (part of the shared prefix) must match what real chats are given.
+            thread.IsAdminChat     = true;
+            thread.HasMemoryAccess = true;
+            ToolFactories.SyncPinned(thread);   // same as ThreadsController does for every owner message
+            await agent.Prompt(thread, ".", new PromptOptions { Username = "ARI", WarmOnly = true });
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Warming {Agent}'s shared prompt failed; the first message will read it instead.", agent.Name); }
+        finally { threads.TryRemove(key, out _); }
     }
 
     public async Task RestartAllServersAsync()
@@ -1244,6 +1303,11 @@ public class LLMModule : ILLMModule, IDisposable
             agent = "Dialogue";
         }
 
+        // Voice and typing can share one conversation: a spoken turn (it streams text to the speaker) is answered by the
+        // talking agent, a typed one by Dialogue, whichever the thread was last.
+        if (agent is not "Code")
+            agent = onTextDelta is not null ? "Speech" : agent == "Speech" ? "Dialogue" : agent;
+
         switch (agent)
         {
             case "Code":
@@ -1255,7 +1319,7 @@ public class LLMModule : ILLMModule, IDisposable
             {
                 Thread speechThread = Recategorise(ThreadPipeline.Speech, threadKey, platformContext);
                 speechPipeline?.SetSteering(threadKey, steering);
-                return await (speechPipeline ?? (Pipeline)graphPipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath, onTextDelta);
+                return await (speechGraph ?? speechPipeline ?? (Pipeline)graphPipeline!).ExecuteAsync(speechThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments, localPath, onTextDelta);
             }
             default:
             {

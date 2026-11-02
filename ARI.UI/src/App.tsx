@@ -908,9 +908,10 @@ export default function App() {
         openThread(key).catch(() => {})
     }, [pushThread, connState, openThread])
 
-    // Create a Speech thread, open it into the orb view, and start streaming the mic to ARI.Listener.
+    // Talk in the conversation that's open (so she knows what you were just discussing), or a new Speech thread if
+    // none is; open it into the orb view and start streaming the mic to ARI.Listener.
     const beginSpeech = useCallback(async () => {
-        const key = await createThread(selectedProject, "speech")
+        const key = activeThread ?? await createThread(selectedProject, "speech")
         await openThread(key, false, null, false, null) // clears any previous listener
         loadThreads()
         try {
@@ -929,7 +930,7 @@ export default function App() {
             console.warn("[Listener] mic start failed", err)
             setSpeechCaption("Microphone unavailable")
         }
-    }, [selectedProject, openThread, loadThreads])
+    }, [selectedProject, activeThread, openThread, loadThreads])
 
     // ── new chat ──────────────────────────────────────────
     function newChat() {
