@@ -24,8 +24,13 @@ public class SpeechQueue : IDisposable
 
     public void Enqueue(string text) => queue.Writer.TryWrite(text);
 
+    private int disposed;
+
+    // Called when the voice is switched and again at shutdown; the second call must be a no-op, or shutdown
+    // throws on the already-disposed token source and skips the rest of its cleanup (orphaning llama-server).
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref disposed, 1) == 1) return;
         cts.Cancel();
         queue.Writer.Complete();
         try { worker.Wait(); }
