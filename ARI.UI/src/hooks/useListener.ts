@@ -1,9 +1,9 @@
 // Browser mic client for ARI.Listener: captures the microphone, downsamples to 16 kHz mono 16-bit PCM,
 // and streams it to /api/v1/listener/stream. Receives back {type:"transcript", text, addressed} events, plus
 // Ari's spoken reply as binary WAV frames. While she speaks, the playback is analysed into frequency bands
-// (low → high) so the orb can light up like a radial equaliser.
+// (low → high) so the HUD can react to her voice.
 
-import { ORB_BANDS } from "ari-orb"
+import { HUD_BANDS } from "ari-hud"
 
 export interface ListenerEvent {
     type: string          // "ready" | "partial" | "transcript" | "error"
@@ -14,9 +14,11 @@ export interface ListenerEvent {
 
 export interface ListenerHandle {
     stop: () => void
+    /** Muted: the mic keeps running (so unmuting is instant) but nothing is sent, so she hears nothing. */
+    setMuted: (muted: boolean) => void
 }
 
-// Frequency band edges (Hz). Voice energy lives ~80 Hz–6 kHz; these split it low→high across the orb.
+// Frequency band edges (Hz). Voice energy lives ~80 Hz–6 kHz; these split it low→high.
 const BAND_EDGES_HZ = [50, 200, 500, 1200, 3000, 8000]
 
 function clampToInt16(f: number): number {
@@ -41,7 +43,7 @@ function downsampleToInt16(input: Float32Array, inRate: number): ArrayBuffer {
 
 function computeBands(freq: Uint8Array, sampleRate: number, fftSize: number, out: number[]): void {
     const binHz = sampleRate / fftSize
-    for (let b = 0; b < ORB_BANDS; b++) {
+    for (let b = 0; b < HUD_BANDS; b++) {
         const i0 = Math.max(0, Math.floor(BAND_EDGES_HZ[b] / binHz))
         const i1 = Math.min(freq.length - 1, Math.ceil(BAND_EDGES_HZ[b + 1] / binHz))
         let sum = 0, n = 0
@@ -51,11 +53,13 @@ function computeBands(freq: Uint8Array, sampleRate: number, fftSize: number, out
     }
 }
 
-// `levels` is an optional shared ref (length ORB_BANDS) the analyser writes each frame; the orb reads it.
+// `levels` is an optional shared ref (length HUD_BANDS) the playback analyser writes each frame; `mic` gets the
+// microphone's loudness (0..1) for the call bar's meter. The HUD reads both.
 export async function startListening(
     threadKey: string,
     onEvent: (e: ListenerEvent) => void,
     levels?: { current: number[] },
+    mic?: { current: number },
 ): Promise<ListenerHandle> {
     const wsProto = location.protocol === "https:" ? "wss" : "ws"
     const ws = new WebSocket(`${wsProto}://${location.host}/api/v1/listener/stream?source=web&threadKey=${encodeURIComponent(threadKey)}`)
@@ -76,15 +80,22 @@ export async function startListening(
     const processor = ctx.createScriptProcessor(4096, 1, 1)
     const inRate = ctx.sampleRate
 
+    let muted = false
     processor.onaudioprocess = ev => {
-        if (ws.readyState !== WebSocket.OPEN) return
-        const pcm = downsampleToInt16(ev.inputBuffer.getChannelData(0), inRate)
+        const input = ev.inputBuffer.getChannelData(0)
+        if (mic) {
+            let sum = 0
+            for (let i = 0; i < input.length; i++) sum += input[i] * input[i]
+            mic.current = muted ? 0 : Math.min(1, Math.sqrt(sum / input.length) * 6)
+        }
+        if (muted || ws.readyState !== WebSocket.OPEN) return
+        const pcm = downsampleToInt16(input, inRate)
         if (pcm.byteLength) ws.send(pcm)
     }
     source.connect(processor)
     processor.connect(ctx.destination) // required for the processor to run; it emits no audio itself
 
-    // Analyser sits between Ari's playback and the speakers (not the mic), so the orb reacts to her voice only.
+    // Analyser sits between Ari's playback and the speakers (not the mic), so the HUD reacts to her voice only.
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 1024
     analyser.smoothingTimeConstant = 0.75
@@ -143,6 +154,7 @@ export async function startListening(
         document.removeEventListener("pointerdown", resume)
         document.removeEventListener("keydown", resume)
         if (levels) levels.current.fill(0)
+        if (mic) mic.current = 0
         flushAudio()
         try { processor.disconnect(); source.disconnect() } catch { /* ignore */ }
         stream.getTracks().forEach(t => t.stop())
@@ -153,5 +165,5 @@ export async function startListening(
         } catch { /* ignore */ }
     }
 
-    return { stop }
+    return { stop, setMuted: m => { muted = m } }
 }

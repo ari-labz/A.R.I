@@ -2305,11 +2305,47 @@
    "description": "#sidebar:not(.collapsed) (colour) — app.css",
    "value": "rgba(0,0,0,.35)"
   },
-  "orb-label-colour": {
-   "title": "Orb label colour",
-   "group": "Orb label",
-   "description": ".orb-label (colour) — app.css",
-   "value": "#8ec6de"
+  "hud-caption-colour": {
+   "title": "HUD caption",
+   "group": "HUD",
+   "description": "the caption under Ari's face (.hud-caption) — app.css",
+   "value": "#cadde2"
+  },
+  "hud-dim-colour": {
+   "title": "HUD dim text",
+   "group": "HUD",
+   "description": "muted HUD text and idle meter bars — app.css",
+   "value": "#7f979d"
+  },
+  "hud-accent-colour": {
+   "title": "HUD accent",
+   "group": "HUD",
+   "description": "window dots, meter accents (ARI teal) — app.css",
+   "value": "#5fa8b4"
+  },
+  "hud-panel-colour": {
+   "title": "HUD window background",
+   "group": "HUD",
+   "description": "windows Ari opens (.hud-win) — app.css",
+   "value": "rgba(22,32,36,.92)"
+  },
+  "hud-panel-colour-2": {
+   "title": "HUD window title bar",
+   "group": "HUD",
+   "description": "window title bars — app.css",
+   "value": "#1b282d"
+  },
+  "hud-line-colour": {
+   "title": "HUD borders",
+   "group": "HUD",
+   "description": "window and call bar borders — app.css",
+   "value": "#24343a"
+  },
+  "hud-end-colour": {
+   "title": "HUD hang up",
+   "group": "HUD",
+   "description": "the hang-up button — app.css",
+   "value": "#d0574f"
   },
   "btn-begin-speech-colour": {
    "title": "Btn begin speech colour",

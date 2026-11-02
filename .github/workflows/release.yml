@@ -76,7 +76,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          (cd ARI.Orb && bun install)   # provides "three" for the UI build (file: dep of ARI.UI)
           (cd ARI.UI && bun install)
           (cd ARI.Console && bun install)
 

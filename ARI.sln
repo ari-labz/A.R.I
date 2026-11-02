@@ -38,13 +38,13 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.UI", "ARI.UI", "{A1B2C3
 		ARI.UI\dev.sh = ARI.UI\dev.sh
 	EndProjectSection
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.Orb", "ARI.Orb", "{D4E5F6A7-B8C9-0123-DEF4-234567890123}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ARI.HUD", "ARI.HUD", "{D4E5F6A7-B8C9-0123-DEF4-234567890123}"
 	ProjectSection(SolutionItems) = preProject
-		ARI.Orb\package.json = ARI.Orb\package.json
-		ARI.Orb\tsconfig.json = ARI.Orb\tsconfig.json
-		ARI.Orb\src\index.ts = ARI.Orb\src\index.ts
-		ARI.Orb\src\renderer.ts = ARI.Orb\src\renderer.ts
-		ARI.Orb\src\amplitude.ts = ARI.Orb\src\amplitude.ts
+		ARI.HUD\package.json = ARI.HUD\package.json
+		ARI.HUD\tsconfig.json = ARI.HUD\tsconfig.json
+		ARI.HUD\src\index.ts = ARI.HUD\src\index.ts
+		ARI.HUD\src\face.ts = ARI.HUD\src\face.ts
+		ARI.HUD\src\amplitude.ts = ARI.HUD\src\amplitude.ts
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{0DAA7B43-52F3-4E18-B2F9-C86162C35A30}"

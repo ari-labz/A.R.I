@@ -1631,21 +1631,89 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
     #main.active #main-logo { width: 60px; }
 }
 
-/* ── Speech / Orb overlay (issue #92) ───────────────────────────────────── */
-/* voice mode gets an immersive dark pool so the additive-glow orb reads; it fades to the app bg at the edges */
-.orb-stage {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 30px; width: 100%; height: 100%; min-height: 0; flex: 1;
-    user-select: none;
+/* ── Speech HUD ──────────────────────────────────────────────────────────── */
+/* Ari's face fills the stage; windows she opens tile the space above the call bar and her face eases into the
+   bottom-right corner. The stage sits on voice mode's dark pool, so the face's additive glow reads. */
+.hud-stage {
+    --hud-ease: cubic-bezier(.65, 0, .35, 1);
+    position: relative; flex: 1; min-height: 0; width: 100%; height: 100%;
+    overflow: hidden; user-select: none;
 }
-.orb {
-    position: relative; width: 425px; height: 425px; max-width: 86vmin; max-height: 86vmin;
-    cursor: pointer;
+.hud-face {
+    position: absolute; z-index: 2; aspect-ratio: 1; cursor: grab; touch-action: none;
+    width: min(62%, 72vh, 560px); left: 50%; top: 45%; transform: translate(-50%, -50%);
+    transition: left .9s var(--hud-ease), top .9s var(--hud-ease), width .9s var(--hud-ease), transform .9s var(--hud-ease);
 }
-.orb-canvas { width: 100%; height: 100%; display: block; }
-.orb-label {
-    font-size: 15px; font-weight: 500; letter-spacing: 0.5px;
-    color: var(--col-orb-label-colour);
+.hud-face:active { cursor: grabbing; }
+.hud-stage.docked .hud-face { width: 132px; left: calc(100% - 144px); top: calc(100% - 144px); transform: translate(0, 0); }
+
+.hud-wins { position: absolute; left: 16px; right: 16px; top: 56px; bottom: 156px; z-index: 1; pointer-events: none; }
+.hud-win {
+    position: absolute; pointer-events: auto; display: flex; flex-direction: column; overflow: hidden;
+    background: var(--col-hud-panel-colour); border: 1px solid var(--col-hud-line-colour); border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.35); transform-origin: 100% 100%;
+    transition: left .6s var(--hud-ease), top .6s var(--hud-ease), width .6s var(--hud-ease), height .6s var(--hud-ease),
+                opacity .35s var(--hud-ease), transform .45s var(--hud-ease);
+}
+.hud-win.hidden-state { opacity: 0; transform: scale(.88) translate(4%, 6%); }
+.hud-win header {
+    display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px;
+    background: var(--col-hud-panel-colour-2); border-bottom: 1px solid var(--col-hud-line-colour);
+}
+.hud-win header i { width: 7px; height: 7px; border-radius: 50%; background: var(--col-hud-accent-colour); flex: none; }
+.hud-win header b {
+    flex: 1; min-width: 0; font-size: 13px; font-weight: 600; letter-spacing: .03em; text-transform: capitalize;
+    color: var(--col-hud-caption-colour); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hud-win header button {
+    width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+    color: var(--col-hud-dim-colour); font-size: 16px; line-height: 24px;
+}
+.hud-win header button:hover { color: var(--col-hud-caption-colour); background: var(--col-hud-line-colour); }
+.hud-win-body { flex: 1; min-height: 0; overflow: auto; color: var(--col-hud-caption-colour); }
+.hud-win-body img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* A visual's frame fills its window instead of growing to its page height. */
+.hud-win-body .ari-visual { height: 100%; }
+.hud-win-body .ari-visual iframe { height: 100% !important; }
+
+.hud-caption {
+    position: absolute; left: 16px; right: 16px; bottom: 92px; z-index: 3; margin: 0; min-height: 22px;
+    text-align: center; font-size: 15px; font-weight: 500; letter-spacing: .3px; text-wrap: balance;
+    color: var(--col-hud-caption-colour);
+    transition: left .9s var(--hud-ease), right .9s var(--hud-ease);
+}
+.hud-stage.docked .hud-caption { left: 160px; right: 160px; }
+
+.hud-callbar {
+    position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 3;
+    display: flex; align-items: center; gap: 14px; padding: 8px 10px 8px 16px; border-radius: 999px;
+    background: var(--col-hud-panel-colour); border: 1px solid var(--col-hud-line-colour); backdrop-filter: blur(8px);
+}
+.hud-meter { display: flex; gap: 3px; align-items: center; height: 20px; width: 62px; }
+.hud-meter i { width: 3px; height: 3px; border-radius: 2px; background: var(--col-hud-dim-colour); transition: height .08s; }
+.hud-meter i.on { background: var(--col-hud-caption-colour); }
+.hud-round {
+    width: 46px; height: 46px; padding: 0; display: grid; place-items: center; border-radius: 50%; cursor: pointer;
+    background: var(--col-hud-panel-colour-2); border: 1px solid var(--col-hud-line-colour); color: var(--col-hud-caption-colour);
+}
+.hud-round:hover { border-color: var(--col-hud-accent-colour); }
+.hud-round.active { background: var(--col-hud-caption-colour); color: var(--col-hud-panel-colour-2); }
+.hud-round svg, .hud-call svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.hud-hangup { width: 54px; background: var(--col-hud-end-colour); border-color: var(--col-hud-end-colour); color: #fff; }
+.hud-hangup:hover { filter: brightness(1.1); border-color: var(--col-hud-end-colour); }
+.hud-call {
+    display: flex; align-items: center; gap: 8px; padding: 9px 18px; border: 0; border-radius: 999px; cursor: pointer;
+    background: var(--col-hud-caption-colour); color: var(--col-hud-panel-colour-2); font: inherit; font-weight: 600;
+}
+
+@media (max-width: 640px) {
+    .hud-stage.docked .hud-face { width: 96px; left: calc(100% - 106px); top: calc(100% - 178px); }
+    .hud-stage.docked .hud-caption { left: 16px; right: 112px; }
+    .hud-wins { bottom: 190px; }
+    .hud-meter { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .hud-face, .hud-win, .hud-caption { transition: none; }
 }
 
 /* Begin button that replaces the composer when Talk is selected */

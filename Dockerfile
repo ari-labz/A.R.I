@@ -91,7 +91,6 @@ RUN set -eux; \
         arm64) rid=linux-arm64 ;; \
         *)     rid=linux-x64 ;; \
     esac; \
-    (cd ARI.Orb && /root/.bun/bin/bun install); \
     (cd ARI.UI  && /root/.bun/bin/bun install); \
     dotnet publish ARI.Core/ARI.Core.csproj -c Release -r "$rid" --self-contained true \
         -p:AppInstallRoot=/tmp/build -o /out; \

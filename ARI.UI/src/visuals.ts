@@ -9,9 +9,10 @@ const CSP = "default-src 'none'; script-src 'unsafe-inline' https://cdnjs.cloudf
             "style-src 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
             "img-src data: blob:; font-src data: https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; connect-src 'none'; form-action 'none'"
 
-// The frame follows the app's own theme (not the machine's): light text when the chat is dark, dark text when it is light.
-function baseStyle(): string {
-    const m = getComputedStyle(document.body).color.match(/\d+/g)?.map(Number) ?? [16, 22, 24]
+// The frame follows the text colour where it sits (not the machine's theme): light text in a dark chat or a HUD
+// window, dark text in a light chat.
+function baseStyle(host: HTMLElement): string {
+    const m = getComputedStyle(host).color.match(/\d+/g)?.map(Number) ?? [16, 22, 24]
     const light = (m[0] * 299 + m[1] * 587 + m[2] * 114) / 1000 > 140
     return `<style>html,body{margin:0;background:transparent;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:${light ? "#CADDE2" : "#101618"}}svg{max-width:100%;height:auto}</style>`
 }
@@ -20,11 +21,11 @@ const cache = new Map<string, string>()
 let nextId = 1
 const frames = new Map<string, HTMLIFrameElement>()
 
-function wrap(html: string, id: string): string {
+function wrap(html: string, id: string, host: HTMLElement): string {
     // Report the page's height to the parent so the frame grows to fit it.
     const report = `<script>(function(){function s(){parent.postMessage({ariVisual:"${id}",height:Math.ceil(document.documentElement.scrollHeight)},"*")}` +
                    `addEventListener("load",s);new ResizeObserver(s).observe(document.documentElement);setTimeout(s,300)})()</script>`
-    const head = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}">${baseStyle()}`
+    const head = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}">${baseStyle(host)}`
     return /<html[\s>]/i.test(html)
         ? html.replace(/<head[^>]*>/i, m => m + head).replace(/<\/body>/i, report + "</body>") + (/<\/body>/i.test(html) ? "" : report)
         : `<!doctype html><html><head>${head}</head><body>${html}${report}</body></html>`
@@ -47,7 +48,7 @@ async function mount(el: HTMLElement) {
         frame.setAttribute("referrerpolicy", "no-referrer")
         frame.title = el.dataset.visualName ?? "Visual"
         frame.style.cssText = "width:100%;height:260px;border:0;display:block;background:transparent;color-scheme:normal"
-        frame.srcdoc = wrap(html, id)
+        frame.srcdoc = wrap(html, id, el)
         frames.set(id, frame)
         el.replaceChildren(frame)
     } catch {

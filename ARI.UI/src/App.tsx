@@ -9,6 +9,7 @@ import {
 } from "./hooks/useThreads"
 import { usePipelines } from "./hooks/usePipelines"
 import { startListening, type ListenerHandle } from "./hooks/useListener"
+import { HUD_BANDS } from "ari-hud"
 import { env } from "./env"
 import { playResponseChime } from "./notify"
 import LoginScreen from "./components/LoginScreen"
@@ -155,7 +156,12 @@ export default function App() {
     const [selectedPipeline, setSelectedPipeline]  = useState<string | null>(null)
     const [speechMode,       setSpeechMode]        = useState(false)
     const [speechCaption,    setSpeechCaption]     = useState<string | null>(null)
-    const [speechOrbState,   setSpeechOrbState]    = useState<"listening" | "thinking" | "speaking">("listening")
+    const [speechState,      setSpeechState]       = useState<"listening" | "thinking" | "speaking">("listening")
+    const [speechInCall,     setSpeechInCall]      = useState(false)
+    const [speechMuted,      setSpeechMuted]       = useState(false)
+    const [speechCallStart,  setSpeechCallStart]   = useState(0)
+    const speechLevels = useRef<number[]>(new Array(HUD_BANDS).fill(0))
+    const speechMic    = useRef(0)
     const listenerRef = useRef<ListenerHandle | null>(null)
     const [connState, setConnState] = useState<"connecting" | "connected" | "failed">("connecting")
     const pipelines = usePipelines()
@@ -202,7 +208,9 @@ export default function App() {
         listenerRef.current?.stop()
         listenerRef.current = null
         setSpeechCaption(null)
-        setSpeechOrbState("listening")
+        setSpeechState("listening")
+        setSpeechInCall(false)
+        setSpeechMuted(false)
     }
 
     const [safetyMode,     setSafetyMode]     = useState(false)
@@ -909,23 +917,25 @@ export default function App() {
     }, [pushThread, connState, openThread])
 
     // Talk in the conversation that's open (so she knows what you were just discussing), or a new Speech thread if
-    // none is; open it into the orb view and start streaming the mic to ARI.Listener.
+    // none is; open it into the HUD and start streaming the mic to ARI.Listener.
     const beginSpeech = useCallback(async () => {
         const key = activeThread ?? await createThread(selectedProject, "speech")
         await openThread(key, false, null, false, null) // clears any previous listener
         loadThreads()
         try {
+            setSpeechCallStart(Date.now())
             listenerRef.current = await startListening(key, e => {
                 switch (e.type) {
                     case "transcript":
                         if (e.text) setSpeechCaption(e.addressed ? e.text : `(overheard) ${e.text}`)
                         break
-                    case "thinking":  setSpeechOrbState("thinking"); break
-                    case "speaking":  setSpeechOrbState("speaking"); break
+                    case "thinking":  setSpeechState("thinking"); break
+                    case "speaking":  setSpeechState("speaking"); break
                     case "say":       if (e.text) setSpeechCaption(e.text); break  // Ari's reply
-                    case "done":      setSpeechOrbState("listening"); break
+                    case "done":      setSpeechState("listening"); break
                 }
-            })
+            }, speechLevels, speechMic)
+            setSpeechInCall(true)
         } catch (err) {
             console.warn("[Listener] mic start failed", err)
             setSpeechCaption("Microphone unavailable")
@@ -1427,7 +1437,14 @@ export default function App() {
                     speechMode={speechMode}
                     onBeginSpeech={beginSpeech}
                     speechCaption={speechCaption}
-                    speechOrbState={speechOrbState}
+                    speechState={speechState}
+                    speechInCall={speechInCall}
+                    speechMuted={speechMuted}
+                    speechCallStart={speechCallStart}
+                    onSpeechMute={() => { const m = !speechMuted; setSpeechMuted(m); listenerRef.current?.setMuted(m) }}
+                    onHangUp={() => { stopListening(); newChat() }}
+                    speechLevels={speechLevels}
+                    speechMic={speechMic}
                 />
             )}
             {toasts.map(t => (
