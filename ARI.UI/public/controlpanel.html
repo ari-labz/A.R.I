@@ -694,7 +694,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     <div id="tab-voices" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title">Trained Voices</div>
-        <div id="voices-list" style="margin-top:8px;"><span style="font-size:12px;color:var(--text-dim)">Loading…</span></div>
+        <div id="voices-list" style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;"><span style="font-size:12px;color:var(--text-dim)">Loading…</span></div>
       </div>
     </div>
 
@@ -745,10 +745,22 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     <div id="tab-voice" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title">Train for</div>
-        <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:4px;max-width:400px;">
-          <div class="vs-train-engine-card" data-engine="StyleTTS2" id="vs-te-styletts2" style="border:2px solid var(--accent,var(--col-control-panel-vs-te-styletts2-colour));border-radius:8px;padding:14px 16px;cursor:pointer;background:var(--accent,var(--col-control-panel-vs-te-styletts2-colour))22;transition:all .15s;">
-            <div style="font-weight:600;font-size:14px;margin-bottom:4px;">StyleTTS2</div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:4px;max-width:760px;">
+          <div class="vs-train-engine-card" data-engine="StyleTTS2" id="vs-te-styletts2" style="border:2px solid var(--accent,var(--col-control-panel-vs-te-styletts2-colour));border-radius:12px;padding:16px 14px;cursor:pointer;display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;">
+            <img src="/images/voice-engines/styletts2.png" alt="" style="width:84px;height:84px;object-fit:contain;pointer-events:none;user-select:none;">
+            <div style="font-weight:600;font-size:14px;">StyleTTS2</div>
             <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">Diffusion-based synthesis with phoneme-level training. Long training runs with checkpoint saves.</div>
+          </div>
+          <div class="vs-train-engine-card vs-train-engine-card-off" data-engine="IndexTTS" id="vs-te-indextts" style="border:2px solid transparent;border-radius:12px;padding:16px 14px;cursor:default;display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;opacity:.6;">
+            <img src="/images/voice-engines/indextts.png" alt="" style="width:84px;height:84px;object-fit:contain;pointer-events:none;user-select:none;">
+            <div style="font-weight:600;font-size:14px;">IndexTTS</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">Clones a voice from a short reference clip.</div>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">No training needed</div>
+          </div>
+          <div class="vs-train-engine-card" data-engine="KokoroRVC" id="vs-te-kokororvc" style="border:2px solid transparent;border-radius:12px;padding:16px 14px;cursor:pointer;display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;">
+            <img src="/images/voice-engines/kokororvc.png" alt="" style="width:84px;height:84px;object-fit:contain;pointer-events:none;user-select:none;">
+            <div style="font-weight:600;font-size:14px;">KokoroRVC</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.4;">Kokoro speaks, RVC turns it into your voice. Trains from ~10 minutes of clips, no transcripts; fast enough for live voice.</div>
           </div>
         </div>
       </div>
@@ -782,6 +794,7 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
           <label class="vs-label">Engine
             <select id="vs-engine" class="vs-input">
               <option value="StyleTTS2">StyleTTS2</option>
+              <option value="KokoroRVC">KokoroRVC</option>
             </select>
           </label>
           <label class="vs-label">Voice name<input type="text" id="vs-model-name" class="vs-input" placeholder="e.g. MyVoice" autocomplete="off" /></label>
@@ -833,10 +846,10 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
               <span id="vs-loss-live-dot" class="live-dot" style="display:none;"></span>
             </div>
             <div style="display:flex;gap:12px;align-items:center;">
-              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:var(--col-control-panel-line-764-background);display:inline-block;"></span>Val</span>
-              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:var(--col-control-panel-line-765-background);display:inline-block;"></span>F0</span>
-              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:var(--col-control-panel-line-766-background);display:inline-block;"></span>Sty</span>
-              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:var(--col-control-panel-line-767-background);display:inline-block;"></span>Diff</span>
+              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:var(--col-control-panel-line-764-background);display:inline-block;"></span><span class="vs-loss-label">Val</span></span>
+              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:var(--col-control-panel-line-765-background);display:inline-block;"></span><span class="vs-loss-label">F0</span></span>
+              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:var(--col-control-panel-line-766-background);display:inline-block;"></span><span class="vs-loss-label">Sty</span></span>
+              <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim);"><span style="width:8px;height:8px;border-radius:50%;background:var(--col-control-panel-line-767-background);display:inline-block;"></span><span class="vs-loss-label">Diff</span></span>
             </div>
           </div>
           <div style="position:relative;height:130px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--col-control-panel-line-770-background);">
@@ -6365,7 +6378,7 @@ async function vsSwitchEngineModel(engine, modelName) {
 }
 
 // Wire up Voice Synthesis "Train for" engine cards
-const vsTrainCards = document.querySelectorAll('.vs-train-engine-card');
+const vsTrainCards = document.querySelectorAll('.vs-train-engine-card:not(.vs-train-engine-card-off)');
 vsTrainCards.forEach(card => {
     card.addEventListener('click', () => {
         vsEngine.value = card.dataset.engine;
@@ -6379,11 +6392,12 @@ vsEngine.addEventListener('change', () => {
     vsQuantLabel.style.display = isOrpheus ? '' : 'none';
     vsSaveFreqLabel.style.display = isOrpheus ? 'none' : '';
     vsEpochs.value = isOrpheus ? '3' : '100';
-    vsTrainBtn.textContent = 'Transcribe & Review';
+    vsTrainBtn.textContent = vsEngine.value === 'KokoroRVC' ? 'Start training' : 'Transcribe & Review';
     document.getElementById('vs-dropzone-text').innerHTML =
         'Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip<br>Include matching .txt files to skip transcription</span>';
     vsTranscriptSec.style.display = 'none';
     vsSetActiveCard(vsTrainCards, vsEngine.value);
+    vsLossSetEngine(vsEngine.value);
     vsFilterSavedRuns();
 });
 
@@ -6613,17 +6627,27 @@ function vsLossReset(showEmpty = false) { vsLossPoints = []; vsLossPauseAt = [];
 // drew at instead of stretching to fill. Redraw whenever the wrapper's own size actually changes.
 new ResizeObserver(() => vsLossDraw()).observe(vsLossCanvas.parentElement);
 
+// Each engine reports its own four losses in the same four slots (val, f0, sty, diff); only the names differ.
+const VS_LOSS_LABELS = { StyleTTS2: ['Val', 'F0', 'Sty', 'Diff'], KokoroRVC: ['Mel', 'Gen', 'FM', 'KL'] };
+let vsLossEngine = 'StyleTTS2';
+function vsLossSetEngine(engine) {
+    vsLossEngine = VS_LOSS_LABELS[engine] ? engine : 'StyleTTS2';
+    document.querySelectorAll('.vs-loss-label').forEach((el, k) => el.textContent = VS_LOSS_LABELS[vsLossEngine][k]);
+}
+
 function vsLossPush(point) {
+    if (point.engine && point.engine !== vsLossEngine) vsLossSetEngine(point.engine);
+    const L = VS_LOSS_LABELS[vsLossEngine] ?? VS_LOSS_LABELS.StyleTTS2;
     vsLossPoints.push(point);
     vsLossWrap.style.display = '';
     vsLossLiveDot.style.display = '';
     vsLossStatus.innerHTML = `
         <span id="vs-loss-live-dot-status" class="live-dot" style="width:6px;height:6px;margin:0 4px 0 0;flex-shrink:0;"></span>
         <span style="color:var(--text-dim);">Epoch <b style="color:var(--text)">${point.epoch}</b></span>
-        <span style="margin-left:12px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--col-control-panel-line-5306-background);display:inline-block;"></span><span style="color:var(--text-dim)">Val</span> <b style="color:var(--text)">${point.val.toFixed(4)}</b></span>
-        <span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--col-control-panel-line-5307-background);display:inline-block;"></span><span style="color:var(--text-dim)">F0</span> <b style="color:var(--text)">${point.f0.toFixed(4)}</b></span>
-        ${point.sty != null ? `<span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--col-control-panel-line-5308-background);display:inline-block;"></span><span style="color:var(--text-dim)">Sty</span> <b style="color:var(--text)">${point.sty.toFixed(4)}</b></span>` : ''}
-        ${point.diff != null ? `<span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--col-control-panel-line-5309-background);display:inline-block;"></span><span style="color:var(--text-dim)">Diff</span> <b style="color:var(--text)">${point.diff.toFixed(4)}</b></span>` : ''}`;
+        <span style="margin-left:12px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--col-control-panel-line-5306-background);display:inline-block;"></span><span style="color:var(--text-dim)">${L[0]}</span> <b style="color:var(--text)">${point.val.toFixed(4)}</b></span>
+        <span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--col-control-panel-line-5307-background);display:inline-block;"></span><span style="color:var(--text-dim)">${L[1]}</span> <b style="color:var(--text)">${point.f0.toFixed(4)}</b></span>
+        ${point.sty != null ? `<span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--col-control-panel-line-5308-background);display:inline-block;"></span><span style="color:var(--text-dim)">${L[2]}</span> <b style="color:var(--text)">${point.sty.toFixed(4)}</b></span>` : ''}
+        ${point.diff != null ? `<span style="margin-left:8px;display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:var(--col-control-panel-line-5309-background);display:inline-block;"></span><span style="color:var(--text-dim)">${L[3]}</span> <b style="color:var(--text)">${point.diff.toFixed(4)}</b></span>` : ''}`;
     vsLossDraw();
 }
 
@@ -6917,7 +6941,12 @@ vsTrainBtn.addEventListener('click', async () => {
         const txtStems = new Set(txtFiles.map(f => stemOf(f.name)));
         const allHaveTxt = audioNames.length > 0 && audioNames.every(f => txtStems.has(stemOf(f.name)));
 
-        if (allHaveTxt) {
+        if (engine === 'KokoroRVC') {
+            // RVC learns the sound of the voice, not words: no transcripts, straight to training.
+            vsAppendLog(`KokoroRVC trains on the audio alone — skipping transcription`);
+            vsTranscriptSec.style.display = 'none';
+            vsStartTrainingJob({ modelName, stagingPath, engine, epochs: +vsEpochs.value, saveEveryNEpochs: +vsSaveFreq.value, transcripts: {} }, modelName);
+        } else if (allHaveTxt) {
             // All audio has matching txt — skip Whisper and review, go straight to training
             vsAppendLog(`All ${audioNames.length} audio files have matching transcriptions — skipping Whisper`);
             const transcripts = {};
@@ -6928,7 +6957,7 @@ vsTrainBtn.addEventListener('click', async () => {
             vsAppendLog(`Starting training with ${Object.keys(transcripts).length} provided transcriptions`);
             vsTranscriptSec.style.display = 'none';
             const trainBody = { modelName, stagingPath, engine, epochs: +vsEpochs.value, transcripts };
-            if (engine === 'StyleTTS2') trainBody.saveEveryNEpochs = +vsSaveFreq.value;
+            if (engine === 'StyleTTS2' || engine === 'KokoroRVC') trainBody.saveEveryNEpochs = +vsSaveFreq.value;
             vsStartTrainingJob(trainBody, modelName);
         } else {
             // Start transcription with Whisper
@@ -6995,7 +7024,7 @@ vsConfirmTrainBtn.addEventListener('click', () => {
     const audioPath = vsTrWorkDir + '/wavs';
     const trainBody = { modelName, stagingPath: audioPath, engine, epochs: +vsEpochs.value, transcripts };
     if (engine === 'Orpheus') trainBody.quantType = vsQuant.value;
-    if (engine === 'StyleTTS2') trainBody.saveEveryNEpochs = +vsSaveFreq.value;
+    if (engine === 'StyleTTS2' || engine === 'KokoroRVC') trainBody.saveEveryNEpochs = +vsSaveFreq.value;
     vsStartTrainingJob(trainBody, modelName);
 });
 
@@ -7419,6 +7448,7 @@ async function vsStartResume(modelName, retrain = false) {
     if (!retrain) {
         try {
             const engine = btn?.dataset.engine ?? 'StyleTTS2';
+            vsLossSetEngine(engine);
             const hr = await cpFetch(`/api/v1/admin/voice/models/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}/lossHistory`);
             if (hr.ok) {
                 const { points, pauses } = await hr.json();
@@ -7446,6 +7476,8 @@ async function vsDismissResume(modelName, engine) {
 }
 
 // ── Voices tab ───────────────────────────────────────────
+// Each voice engine's emblem, shown on its voices' cards (images/voice-engines/<file>.png).
+const VOICE_ENGINE_ICONS = { StyleTTS2: 'styletts2', IndexTTS: 'indextts', KokoroRVC: 'kokororvc' };
 async function loadVoicesList() {
     const container = document.getElementById('voices-list');
     if (!container) return;
@@ -7455,7 +7487,7 @@ async function loadVoicesList() {
         const { model: activeModel, engine: activeEngine, defaultModel } = await ar.json();
         const trained = models.filter(m => m.hasModel || m.hasResume);
         if (!trained.length) {
-            container.innerHTML = '<div style="font-size:13px;color:var(--text-dim);padding:12px 0;">No trained voices yet. Use Voice Synthesis to train one.</div>';
+            container.innerHTML = '<div style="grid-column:1/-1;font-size:13px;color:var(--text-dim);padding:12px 0;">No trained voices yet. Use Voice Synthesis to train one.</div>';
             return;
         }
         container.innerHTML = trained.map(m => {
@@ -7467,16 +7499,25 @@ async function loadVoicesList() {
             const badges = [
                 isDefault ? '<span style="background:var(--accent,var(--col-control-panel-line-6151-colour))44;color:var(--text);font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--accent,var(--col-control-panel-line-6151-colour))">default</span>' : '',
             ].filter(Boolean).join(' ');
+            const icon = VOICE_ENGINE_ICONS[m.engine];
+            const avatarUrl = m.avatarVersion != null ? `/api/v1/admin/voice/models/${encodeURIComponent(m.engine)}/${encodeURIComponent(m.name)}/avatar?v=${m.avatarVersion}` : null;
             return `
-            <div style="padding:12px 14px;margin-bottom:8px;border-radius:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;${isActive ? 'background:var(--col-control-panel-line-6154-background);border:1.5px solid var(--col-control-panel-line-6154-border);' : 'border:1px solid var(--border);'}">
-              <div style="flex:1;min-width:0">
-                <div style="display:flex;align-items:center;gap:8px;">
-                  <span style="font-size:14px;font-weight:600;color:var(--text)">${escHtml(m.name)}</span>
+            <div class="voice-card" style="padding:16px 14px 14px;border-radius:12px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;${isActive ? 'background:var(--col-control-panel-line-6154-background);border:1.5px solid var(--col-control-panel-line-6154-border);' : 'border:1px solid var(--border);'}">
+              <div class="voices-avatar" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" title="Change picture" style="position:relative;width:96px;height:96px;cursor:pointer;">
+                ${avatarUrl
+                    ? `<img src="${avatarUrl}" alt="${escHtml(m.name)}" style="width:96px;height:96px;object-fit:cover;border-radius:50%;pointer-events:none;user-select:none;">`
+                    : icon ? `<img src="/images/voice-engines/${icon}.png" alt="${escHtml(m.engine)}" style="width:96px;height:96px;object-fit:contain;pointer-events:none;user-select:none;">` : ''}
+                ${avatarUrl ? `<button class="voices-avatar-remove" title="Remove picture" style="position:absolute;top:0;right:0;width:22px;height:22px;border-radius:50%;border:1px solid var(--border);background:var(--bg,#101618);color:var(--text-dim);font-size:13px;line-height:18px;padding:0;cursor:pointer;">×</button>` : ''}
+              </div>
+              <div style="min-width:0;max-width:100%">
+                <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;">
+                  <span class="voices-name" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" title="Click to rename" style="font-size:14px;font-weight:600;color:var(--text);overflow-wrap:anywhere;cursor:text;">${escHtml(m.name)}</span>
                   ${badges}
                 </div>
                 <div style="font-size:11px;color:var(--text-dim);margin-top:3px;">${escHtml(m.engine)}${epochInfo ? ' · ' + epochInfo : ''}</div>
               </div>
-              <div style="display:flex;gap:8px;flex-shrink:0;">
+              <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:auto;">
+                ${isActive ? `<span style="font-size:12px;padding:5px 10px;color:var(--text-dim);">Active</span>` : ''}
                 ${m.hasModel && !isActive ? `<button class="voices-setactive-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;background:var(--col-control-panel-voices-setactive-btn-background);border:none;border-radius:6px;color:var(--col-control-panel-voices-setactive-btn-text);cursor:pointer;">Set Active</button>` : ''}
                 ${m.hasResume ? `<button class="vs-btn-outline voices-resume-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;">Resume</button>` : ''}
                 ${m.hasResume ? `<button class="vs-btn-outline voices-retrain-btn" data-model="${escHtml(m.name)}" data-engine="${escHtml(m.engine)}" style="font-size:12px;padding:5px 14px;">Retrain</button>` : ''}
@@ -7496,7 +7537,78 @@ async function loadVoicesList() {
         container.querySelectorAll('.voices-delete-btn').forEach(btn => {
             btn.addEventListener('click', () => voicesDeleteModel(btn.dataset.model, btn.dataset.engine));
         });
+        container.querySelectorAll('.voices-avatar').forEach(el => {
+            el.addEventListener('click', () => voicesPickAvatar(el.dataset.model, el.dataset.engine));
+        });
+        container.querySelectorAll('.voices-avatar-remove').forEach(btn => {
+            btn.addEventListener('click', e => { e.stopPropagation(); const a = btn.closest('.voices-avatar'); voicesRemoveAvatar(a.dataset.model, a.dataset.engine); });
+        });
+        container.querySelectorAll('.voices-name').forEach(el => {
+            el.addEventListener('click', () => voicesStartRename(el));
+        });
     } catch(err) { container.innerHTML = `<div style="color:var(--col-control-panel-line-6182-text);font-size:13px;">Failed to load voices: ${escHtml(err.message)}</div>`; }
+}
+
+function voiceModelUrl(engine, modelName) {
+    return `/api/v1/admin/voice/models/${encodeURIComponent(engine)}/${encodeURIComponent(modelName)}`;
+}
+
+// A picture of the voice's own replaces the engine's icon on its card.
+function voicesPickAvatar(modelName, engine) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp,image/gif';
+    input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        const form = new FormData();
+        form.append('file', file);
+        try {
+            const r = await cpFetch(`${voiceModelUrl(engine, modelName)}/avatar`, { method: 'POST', body: form });
+            if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+            await loadVoicesList();
+        } catch (err) { alert('Could not set the picture: ' + err.message); }
+    });
+    input.click();
+}
+
+async function voicesRemoveAvatar(modelName, engine) {
+    try {
+        const r = await cpFetch(`${voiceModelUrl(engine, modelName)}/avatar`, { method: 'DELETE' });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+        await loadVoicesList();
+    } catch (err) { alert('Could not remove the picture: ' + err.message); }
+}
+
+// Click a voice's name to edit it in place: Enter or clicking away saves, Escape cancels.
+function voicesStartRename(nameEl) {
+    const { model: oldName, engine } = nameEl.dataset;
+    const input = document.createElement('input');
+    input.value = oldName;
+    input.style.cssText = 'font-size:14px;font-weight:600;width:100%;max-width:180px;text-align:center;padding:2px 6px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text);';
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async save => {
+        if (done) return;
+        done = true;
+        const newName = input.value.trim();
+        if (!save || !newName || newName === oldName) { await loadVoicesList(); return; }
+        try {
+            const r = await cpFetch(`${voiceModelUrl(engine, oldName)}/rename`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ newName })
+            });
+            if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+        } catch (err) { alert('Could not rename: ' + err.message); }
+        await loadVoicesList();
+        await loadVoiceModels();
+    };
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') finish(true);
+        else if (e.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
 }
 
 async function voicesSetActive(modelName, engine) {

@@ -483,7 +483,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         _logger.LogInformation("Calendar stopped.");
     }
 
-    private static readonly string[] KnownEngines = ["StyleTTS2", "IndexTTS"];
+    private static readonly string[] KnownEngines = ["StyleTTS2", "IndexTTS", "KokoroRVC"];
 
     private static void MigrateVoicesDirectory(string voicesPath, ILogger logger)
     {
@@ -520,6 +520,7 @@ public class ARI : BackgroundService, IModuleLifecycle
     {
         ["StyleTTS2"] = 8021,
         ["IndexTTS"] = 8026,
+        ["KokoroRVC"] = 8027,
     };
 
     private async Task<ITtsSynthesiser?> CreateModuleSynthesiser(string engine, string voiceDir, string dataDir, ILogger voiceLogger)

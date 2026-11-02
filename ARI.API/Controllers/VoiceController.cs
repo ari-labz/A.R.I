@@ -127,7 +127,7 @@ public class VoiceController(
 
     /// <summary>Start a training job from a previously uploaded staging path.</summary>
     [HttpPost("training")]
-    public IActionResult StartTraining([FromBody] TrainRequest req)
+    public async Task<IActionResult> StartTraining([FromBody] TrainRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.ModelName))
             return BadRequest(new { error = "modelName is required." });
@@ -146,11 +146,13 @@ public class VoiceController(
                 return StatusCode(503, new { error = "Voice module is still installing. Please wait." });
 
             string engine = req.Engine ?? "StyleTTS2";
-            int port = engine switch { "IndexTTS" => 8026, _ => 8021 };
+            int port = engine switch { "IndexTTS" => 8026, "KokoroRVC" => 8027, _ => 8021 };
             string baseUrl = $"http://localhost:{port}";
 
             // Copy staging data into voice dir so it survives for resume
             string voiceDir = Path.Combine(vsConfig.VoicesPath, engine, req.ModelName);
+            Directory.CreateDirectory(voiceDir);
+            await EnsureEngineServer(engine, port, voiceDir);
             string dataDir = Path.Combine(voiceDir, "Data");
             Directory.CreateDirectory(dataDir);
             foreach (string file in Directory.GetFiles(req.StagingPath))
@@ -499,6 +501,7 @@ public class VoiceController(
                     epochs       = settings?.Epochs,
                     saveEveryN   = settings?.SaveEveryNEpochs,
                     latestEpoch  = LatestSavedEpoch(dir),
+                    avatarVersion = FindAvatar(dir) is { } avatar ? new DateTimeOffset(System.IO.File.GetLastWriteTimeUtc(avatar)).ToUnixTimeSeconds() : (long?)null,
                 });
             }
         }
@@ -523,6 +526,134 @@ public class VoiceController(
         return Ok(new { ok = true, deleted = modelName, engine });
     }
 
+    [HttpPost("models/{engine}/{id}/rename")]
+    public async Task<IActionResult> RenameModel(string engine, [FromRoute(Name = "id")] string modelName, [FromBody] RenameModelRequest req)
+    {
+        string newName = (req.NewName ?? "").Trim();
+        if (!SafeNames.IsSafe(newName))
+            return BadRequest(new { error = "That name is not allowed." });
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+        if (newName == modelName)
+            return Ok(new { ok = true, engine, name = newName });
+        if (voiceTraining?.Current is { IsRunning: true } job && job.ModelName == modelName)
+            return Conflict(new { error = "Pause or stop this model's training before renaming it." });
+
+        string dir    = Path.Combine(vsConfig.VoicesPath, engine, modelName);
+        string newDir = Path.Combine(vsConfig.VoicesPath, engine, newName);
+        if (!Directory.Exists(dir))
+            return NotFound(new { error = $"Model '{modelName}' not found." });
+        bool caseOnly = string.Equals(modelName, newName, StringComparison.OrdinalIgnoreCase);
+        if (Directory.Exists(newDir) && !caseOnly)
+            return Conflict(new { error = $"A {engine} model called '{newName}' already exists." });
+
+        MoveDirectory(dir, newDir);
+
+        // RVC keeps its training checkpoint under rvc/logs/<name>, keyed by the model name; move it too so resume still finds it.
+        if (engine == "KokoroRVC")
+        {
+            string logs   = Path.Combine(Paths.VoiceModules, engine, "rvc", "logs");
+            string oldExp = Path.Combine(logs, RvcExperimentName(modelName));
+            string newExp = Path.Combine(logs, RvcExperimentName(newName));
+            if (Directory.Exists(oldExp) && oldExp != newExp)
+            {
+                if (Directory.Exists(newExp) && !string.Equals(oldExp, newExp, StringComparison.OrdinalIgnoreCase))
+                    Directory.Delete(newExp, recursive: true);
+                MoveDirectory(oldExp, newExp);
+            }
+        }
+
+        string settingsFile = Path.Combine(newDir, "training.json");
+        if (System.IO.File.Exists(settingsFile))
+        {
+            try
+            {
+                JsonNode? node = JsonNode.Parse(System.IO.File.ReadAllText(settingsFile));
+                if (node is JsonObject obj)
+                {
+                    obj["ModelName"] = newName;
+                    System.IO.File.WriteAllText(settingsFile, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                }
+            }
+            catch (Exception ex) { logger.LogWarning("[Voice] Could not update {File}: {Error}", settingsFile, ex.Message); }
+        }
+
+        if (persistentData.GetDefaultVoiceModel(engine) == modelName)
+            persistentData.SetDefaultVoiceModel(engine, newName);
+        if (voiceService is { } voice && voice.ActiveEngine == engine && voice.ActiveModel == modelName)
+        {
+            try { await voice.SwitchEngine(engine, newName); }
+            catch (Exception ex) { logger.LogWarning("[Voice] Renamed model but could not reload it: {Error}", ex.Message); }
+        }
+
+        logger.LogInformation("[Voice] Renamed {Engine} model '{Old}' to '{New}'", engine, modelName, newName);
+        return Ok(new { ok = true, engine, name = newName });
+    }
+
+    // Same rule as KokoroRVC's train.py uses for its experiment folder.
+    private static string RvcExperimentName(string name) => Regex.Replace(name, "[^A-Za-z0-9_-]+", "_");
+
+    // Directory.Move refuses a rename that only changes case on a case-insensitive disk, so go through a temporary name.
+    private static void MoveDirectory(string from, string to)
+    {
+        if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase))
+        {
+            string temp = to + ".renaming";
+            Directory.Move(from, temp);
+            Directory.Move(temp, to);
+        }
+        else Directory.Move(from, to);
+    }
+
+    private static readonly Dictionary<string, string> AvatarTypes = new()
+    {
+        [".png"] = "image/png", [".jpg"] = "image/jpeg", [".jpeg"] = "image/jpeg", [".webp"] = "image/webp", [".gif"] = "image/gif",
+    };
+    private const long MAX_AVATAR_BYTES = 8 * 1024 * 1024;
+
+    private static string? FindAvatar(string dir)
+        => AvatarTypes.Keys.Select(ext => Path.Combine(dir, "avatar" + ext)).FirstOrDefault(System.IO.File.Exists);
+
+    [HttpGet("models/{engine}/{id}/avatar")]
+    public IActionResult GetAvatar(string engine, [FromRoute(Name = "id")] string modelName)
+    {
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return NotFound();
+        string? path = FindAvatar(Path.Combine(vsConfig.VoicesPath, engine, modelName));
+        return path is null ? NotFound() : PhysicalFile(path, AvatarTypes[Path.GetExtension(path)]);
+    }
+
+    [HttpPost("models/{engine}/{id}/avatar")]
+    [RequestSizeLimit(MAX_AVATAR_BYTES + 64 * 1024)]
+    public async Task<IActionResult> SetAvatar(string engine, [FromRoute(Name = "id")] string modelName, IFormFile file)
+    {
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+        string dir = Path.Combine(vsConfig.VoicesPath, engine, modelName);
+        if (!Directory.Exists(dir))
+            return NotFound(new { error = $"Model '{modelName}' not found." });
+        string ext = Path.GetExtension(file?.FileName ?? "").ToLowerInvariant();
+        if (file is null || file.Length == 0 || !AvatarTypes.ContainsKey(ext))
+            return BadRequest(new { error = "Pick a PNG, JPG, WebP or GIF image." });
+        if (file.Length > MAX_AVATAR_BYTES)
+            return BadRequest(new { error = "That image is too big (8 MB max)." });
+
+        while (FindAvatar(dir) is { } old) System.IO.File.Delete(old);
+        await using (FileStream fs = System.IO.File.Create(Path.Combine(dir, "avatar" + ext)))
+            await file.CopyToAsync(fs);
+        return Ok(new { ok = true });
+    }
+
+    [HttpDelete("models/{engine}/{id}/avatar")]
+    public IActionResult DeleteAvatar(string engine, [FromRoute(Name = "id")] string modelName)
+    {
+        if (string.IsNullOrEmpty(vsConfig.VoicesPath))
+            return StatusCode(503, new { error = "VoiceSynthesis not configured." });
+        string dir = Path.Combine(vsConfig.VoicesPath, engine, modelName);
+        while (FindAvatar(dir) is { } old) System.IO.File.Delete(old);
+        return Ok(new { ok = true });
+    }
+
     [HttpDelete("models/{engine}/{id}/resume")]
     public IActionResult DismissResume(string engine, [FromRoute(Name = "id")] string modelName)
     {
@@ -543,11 +674,29 @@ public class VoiceController(
         return Ok(new { ok = true, dismissed = modelName, engine });
     }
 
+    // Training talks to the engine's own server, which only runs while that engine is the active voice. For any other
+    // engine, start its server here (no idle stop, so it outlives a long run). StyleTTS2 is left out: it needs its own
+    // startup arguments and is started by the voice module.
+    private static readonly Dictionary<string, VoiceModuleSynthesiser> trainingServers = new();
+
+    private async Task EnsureEngineServer(string engine, int port, string voiceDir)
+    {
+        if (engine == "StyleTTS2") return;
+        using (HttpClient probe = new() { Timeout = TimeSpan.FromSeconds(2) })
+            try { if ((await probe.GetAsync($"http://localhost:{port}/health")).IsSuccessStatusCode) return; } catch { /* not running */ }
+
+        logger.LogInformation("[Voice] Starting the {Engine} server for training.", engine);
+        await new VoiceModuleSetupService(engine, logger).Install();
+        VoiceModuleSynthesiser server = new(Path.Combine(Paths.VoiceModules, engine), voiceDir, port, logger);
+        await server.Start();
+        lock (trainingServers) trainingServers[engine] = server;
+    }
+
     [HttpPost("training/stop")]
     public async Task<IActionResult> StopTraining([FromQuery] string modelName, [FromQuery] string? engine = "StyleTTS2")
     {
         engine ??= "StyleTTS2";
-        int port = engine switch { "IndexTTS" => 8026, _ => 8021 };
+        int port = engine switch { "IndexTTS" => 8026, "KokoroRVC" => 8027, _ => 8021 };
         try
         {
             using HttpClient http = new();
@@ -588,7 +737,27 @@ public class VoiceController(
         }
 
         // Legacy layout: loose epoch_2nd_NNNNN.pth files directly in the model dir
-        return LatestEpochFromLooseFiles(modelDir);
+        return LatestEpochFromLooseFiles(modelDir) ?? LatestEpochFromTrainLog(modelDir);
+    }
+
+    // KokoroRVC keeps no per-epoch files; its Train.log says where the playable voice came from: the epoch it last
+    // paused at, or the last epoch of a finished run.
+    private static int? LatestEpochFromTrainLog(string dir)
+    {
+        string log = Path.Combine(dir, "Train.log");
+        if (!System.IO.File.Exists(log)) return null;
+        int? saved = null, lastEpoch = null;
+        try
+        {
+            foreach (string line in System.IO.File.ReadLines(log))
+            {
+                if (Regex.Match(line, @"^Epoch \[(\d+)/\d+\]") is { Success: true } e) lastEpoch = int.Parse(e.Groups[1].Value);
+                else if (Regex.Match(line, @"Paused at epoch (\d+)") is { Success: true } p) saved = int.Parse(p.Groups[1].Value);
+                else if (line.StartsWith("Done:", StringComparison.Ordinal)) saved = lastEpoch;
+            }
+        }
+        catch (IOException) { /* being written to; try again next refresh */ }
+        return saved;
     }
 
     private static int? LatestEpochFromLooseFiles(string dir) =>
@@ -683,7 +852,7 @@ public class VoiceController(
     }
 
     [HttpPost("training/resume")]
-    public IActionResult ResumeTraining([FromBody] ResumeRequest req)
+    public async Task<IActionResult> ResumeTraining([FromBody] ResumeRequest req)
     {
         if (!SafeNames.IsSafe(req.ModelName) || (req.Engine is not null && !SafeNames.IsSafe(req.Engine)))
             return BadRequest(new { error = "That name is not allowed." });
@@ -734,7 +903,8 @@ public class VoiceController(
         TrainingJob job;
         try
         {
-            int port = engine switch { "IndexTTS" => 8026, _ => 8021 };
+            int port = engine switch { "IndexTTS" => 8026, "KokoroRVC" => 8027, _ => 8021 };
+            await EnsureEngineServer(engine, port, Path.Combine(vsConfig.VoicesPath, engine, settings.ModelName));
             VoiceModuleTrainer trainer = new(
                 baseUrl:      $"http://localhost:{port}",
                 audioPath:    settings.AudioPath,
@@ -960,6 +1130,7 @@ public record SpeakRequest(string Text, string? CheckpointPath = null,
     int DiffusionSteps = 5, float Alpha = 0.3f, float Beta = 0.7f, float EmbeddingScale = 1.0f,
     float Speed = 1.0f, float PauseScale = 1.0f);
 public record SwitchEngineRequest(string Engine, string ModelName);
+public record RenameModelRequest(string? NewName);
 public record SplitSentencesRequest(string Text);
 public record ResumeRequest(string ModelName, string? Engine = null, int? Epochs = null, int? SaveEveryNEpochs = null, bool Retrain = false);
 public record DatasetProcessRequest(string StageId, bool Demucs = true);
