@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using ARI.Common;
 using ARI.LLM;
@@ -10,7 +11,8 @@ namespace ARI.Listener;
 
 /// <summary>
 /// One audio connection: pumps PCM from the browser to the Whisper worker, receives final transcripts,
-/// runs the awareness gate on each, and echoes {transcript, addressed} back to the browser.
+/// decides whether each was meant for Ari (wake word, follow-up window, or the awareness gate), and echoes
+/// {transcript, addressed} back to the browser; {attending} goes out the moment her name is heard.
 /// </summary>
 internal sealed class ListenerSession
 {
@@ -25,10 +27,39 @@ internal sealed class ListenerSession
 
     // Steers the model toward short, speakable replies for a live voice conversation.
     private const string SpeechContext =
-        "You are in a live, spoken voice conversation. Keep replies concise, natural, and easy to say aloud. " +
+        "You are in a live, spoken voice conversation. Answer in a sentence or two unless they ask for more, easy to say aloud. " +
+        "Keep the wit dry and light: one quip at most, only when it fits. Don't guess at who they're with, why they're asking or what they're doing. " +
         "Do not use markdown, lists, headings, or code blocks — plain spoken sentences only. " +
         "You answer straight away, without thinking first. If something needs research, careful reasoning or several tools, " +
         "say in a few words that you're on it and hand it to spawn_agent, then keep talking; you'll get the result and can tell them.";
+    // Her name anywhere in a line wakes her straight away, like a smart speaker's wake word. Whisper spells it a few
+    // ways, and after "hey" it often blurs into "Hey RE" / "Hey RA", so those count too.
+    private static readonly Regex WakeWord = new(@"\b(ari|arie|arri|ary|aree)\b|\bhey,?\s+(re|ra|ree|r\.e|harry)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // The misheard forms, so she's told "Hey Ari" rather than puzzling over "Hey RE(?)".
+    private static readonly Regex MisheardName = new(@"\bhey(\(\?\))?,?\s+(re|ra|ree|r\.e|harry)\b[,.]?(\(\?\))?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // Right after she speaks, a reply needs no wake word (a smart speaker's follow-up mode). It counts from when her
+    // reply is sent, and her audio is still playing for a few seconds after that.
+    private static readonly TimeSpan FOLLOW_UP_WINDOW = TimeSpan.FromSeconds(12);
+    private DateTime followUpUntil = DateTime.MinValue;
+    // While she's thinking or speaking, talking back to her counts as a follow-up too (answering over her).
+    // A count, not a flag: a reply over her cancels her answer and starts another, and the two overlap briefly.
+    private int responding;
+    private bool InFollowUp => Volatile.Read(ref responding) > 0 || DateTime.UtcNow < followUpUntil;
+    // When a partial of the line still being spoken had her name: Whisper's final pass sometimes spells it
+    // differently ("Hey RE"), and the line was still meant for her. Lapses if that line never finishes.
+    private DateTime wokeAt = DateTime.MinValue;
+    private static readonly TimeSpan WAKE_HOLD = TimeSpan.FromSeconds(15);
+    private bool WokeThisLine => DateTime.UtcNow - wokeAt < WAKE_HOLD;
+    // Likewise a line that began inside the follow-up window stays a follow-up, however long Whisper takes to finish it.
+    private DateTime followUpLineAt = DateTime.MinValue;
+    private bool FollowUpLine => DateTime.UtcNow - followUpLineAt < WAKE_HOLD;
+    // A line without her name may still be someone talking to another person or the TV: she can choose not to answer.
+    private const string MaybeNotForYou =
+        $"\n[Voice: this didn't use your name and the microphone hears the whole room. If it wasn't meant for you, reply with only {SILENT}.]";
+    // What she replies to stay quiet; never spoken.
+    private const string SILENT = "[silent]";
+    private static readonly Regex SilentReply = new(@"^\W*silent\W*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private const int RECONNECT_DELAY_MS = 750;
     private const int WHISPER_CONNECT_TIMEOUT_SEC = 60;
     private const int BROWSER_BUFFER_SIZE_BYTES = 16 * 1024;
@@ -150,12 +181,14 @@ internal sealed class ListenerSession
 
     private async Task HandleWhisperMessage(string json, CancellationToken ct)
     {
-        string? type, text;
+        string? type, text, clarity, marked;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(json);
-            type = doc.RootElement.TryGetProperty("type", out JsonElement t) ? t.GetString() : null;
-            text = doc.RootElement.TryGetProperty("text", out JsonElement x) ? x.GetString() : null;
+            type    = doc.RootElement.TryGetProperty("type", out JsonElement t) ? t.GetString() : null;
+            text    = doc.RootElement.TryGetProperty("text", out JsonElement x) ? x.GetString() : null;
+            clarity = doc.RootElement.TryGetProperty("clarity", out JsonElement c) ? c.GetString() : null;
+            marked  = doc.RootElement.TryGetProperty("marked", out JsonElement m) ? m.GetString() : null;
         }
         catch { return; }
 
@@ -163,6 +196,11 @@ internal sealed class ListenerSession
         // Also feed them into the active steering context so Ari can keep thinking as the user speaks.
         if (type == "partial" && !string.IsNullOrWhiteSpace(text))
         {
+            // Her name, or a reply in the follow-up window, shows she's listening the moment it's heard.
+            if (WakeWord.IsMatch(text!)) wokeAt = DateTime.UtcNow;
+            if (InFollowUp && !FollowUpLine) followUpLineAt = DateTime.UtcNow;
+            if (WokeThisLine || FollowUpLine)
+                await SendJson(new { type = "attending" }, ct);
             await SendJson(new { type = "partial", text }, ct);
             activeSteering?.AddPartial(text!);
             return;
@@ -175,15 +213,33 @@ internal sealed class ListenerSession
         activeSteering = null;
 
         transcript.Add(text!);
-        // The web orb and the desktop client are one person talking to Ari, so everything is addressed to her;
-        // the awareness gate (a model call before anything else can start) is only for shared rooms like Discord.
-        bool oneToOne  = ctx.Source is "web" or "client";
-        bool addressed = oneToOne || await llm.EvaluateAwareness(text!, BuildAwarenessContext(), ct);
-        logger?.LogInformation("[Listener] ({Src}/{User}) {Verdict}: \"{Text}\"",
-            ctx.Source, ctx.UserId ?? "?", addressed ? "ADDRESSED" : "overheard", text);
+        // Her name or the follow-up window answers at once; anything else (the TV, someone else in the room, the user
+        // talking to someone) goes through the awareness gate, which judges whether it was meant for her.
+        string why = WokeThisLine || WakeWord.IsMatch(text!) ? "wake word" : FollowUpLine || InFollowUp ? "follow-up" : "gate";
+        wokeAt = followUpLineAt = DateTime.MinValue;
+        bool addressed = why != "gate" || await llm.EvaluateAwareness(text!, BuildAwarenessContext(), ct);
+        logger?.LogInformation("[Listener] ({Src}/{User}) {Verdict} ({Why}): \"{Text}\"",
+            ctx.Source, ctx.UserId ?? "?", addressed ? "ADDRESSED" : "overheard", why, text);
         await SendJson(new { type = "transcript", text, addressed }, ct);
 
-        if (addressed) StartResponse(text!, ct);
+        if (addressed)
+        {
+            string heard = MisheardName.Replace(text!, "Hey Ari"), heardMarked = marked is null ? null : MisheardName.Replace(marked, "Hey Ari");
+            StartResponse(WithClarityNote(heard, clarity, heardMarked) + (why == "wake word" ? "" : MaybeNotForYou), ct);
+        }
+    }
+
+    // When Whisper was guessing, Ari gets the plain line plus the words it was unsure of, and decides herself whether to
+    // answer the gist or ask again. (Marking words inline made her comment on the marks.) Clear turns go through untouched.
+    private static readonly Regex GuessedWord = new(@"(\S+?)[,.!?]*\(\?\)", RegexOptions.Compiled);
+    private static string WithClarityNote(string text, string? clarity, string? marked)
+    {
+        if (clarity == "garbled")
+            return $"{text}\n[Voice: this came through badly garbled (noise or a cutting-out mic), so most of it is guesswork. Don't act on it; say briefly that you didn't catch it.]";
+        if (clarity != "unclear" || marked is null) return text;
+        string[] unsure = GuessedWord.Matches(marked).Select(m => m.Groups[1].Value).Distinct().ToArray();
+        return unsure.Length == 0 ? text
+            : $"{text}\n[Voice: the speech recogniser wasn't sure of: {string.Join(", ", unsure)}. Answer what they most likely meant without mentioning it; ask only if you can't tell.]";
     }
 
     // Run Ari's spoken response to an addressed turn. A new addressed turn cancels the in-flight one.
@@ -227,7 +283,7 @@ internal sealed class ListenerSession
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { logger?.LogWarning(ex, "[Listener] speaking a finished background job failed."); }
-        finally { await SendJson(new { type = "done" }, ct); }
+        finally { followUpUntil = DateTime.UtcNow + FOLLOW_UP_WINDOW; await SendJson(new { type = "done" }, ct); }
     }
 
     private async Task RespondAsync(string userText, SpeechSteeringContext steering, CancellationToken ct)
@@ -237,6 +293,7 @@ internal sealed class ListenerSession
         // with the open mic (PortAudio -9986).
         Channel<string> sentences = Channel.CreateUnbounded<string>();
         bool spoke = false;
+        Interlocked.Increment(ref responding);
 
         Task synthPump = Task.Run(async () =>
         {
@@ -260,6 +317,7 @@ internal sealed class ListenerSession
             await SendJson(new { type = "thinking" }, ct);           // reasoning before the first token
             SentenceChunker chunker = new(sentence =>
             {
+                if (SilentReply.IsMatch(sentence)) { logger?.LogInformation("[Listener] Ari stayed quiet (not meant for her)."); return; }
                 logger?.LogInformation("[Listener] Ari: \"{Sentence}\"", sentence);
                 _ = SendJson(new { type = "say", text = sentence }, ct); // caption on the orb
                 sentences.Writer.TryWrite(sentence);                     // queue for synthesis → browser
@@ -286,7 +344,10 @@ internal sealed class ListenerSession
         {
             sentences.Writer.TryComplete();
             try { await synthPump; } catch { /* ignore */ }
-            await SendJson(new { type = "done" }, ct);
+            // Only a reply she actually said opens the follow-up window; staying quiet sends her back to idle.
+            Interlocked.Decrement(ref responding);
+            if (spoke) followUpUntil = DateTime.UtcNow + FOLLOW_UP_WINDOW;
+            await SendJson(new { type = "done", spoke }, ct);
         }
     }
 
