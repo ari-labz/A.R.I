@@ -125,6 +125,9 @@ function SpeakButton({ content }: { content: string }) {
     const [speaking, setSpeaking] = useState(false)
 
     const handleClick = useCallback(() => {
+        // Create/unpause the audio context inside the click itself: Safari only lets a context start from a user
+        // gesture, and by the time the first sentence arrives (two requests later) that gesture has expired.
+        getAudioCtx()
         if (speaking) {
             // Stop
             globalSpeakAbort?.abort()

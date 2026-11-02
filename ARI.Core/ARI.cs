@@ -614,16 +614,19 @@ public class ARI : BackgroundService, IModuleLifecycle
         // Plugins first, while everything they use is still up.
         await CompiledPlugins.StopAllAsync(TimeSpan.FromSeconds(6));
 
-        speechQueue?.Dispose();
-        synthesiser?.Dispose();
-
-        calendarModule?.Dispose();
-
-        llmModule?.StopAllServersAsync();
-        llmModule?.Dispose();
-
-        imageGenModule?.Shutdown();
-        LLMDependency.StopSearXng();
+        // Each step on its own: one that throws must not skip the rest, or llama-server and the voice engines are
+        // left running after ARI has gone.
+        void Step(string what, Action act)
+        {
+            try { act(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Shutdown: {What} failed; carrying on.", what); }
+        }
+        Step("speech queue", () => speechQueue?.Dispose());
+        Step("voice engine", () => synthesiser?.Dispose());
+        Step("calendar",     () => calendarModule?.Dispose());
+        Step("LLM servers",  () => { llmModule?.StopAllServersAsync(); llmModule?.Dispose(); });
+        Step("image generation", () => imageGenModule?.Shutdown());
+        Step("SearXNG",      LLMDependency.StopSearXng);
 
         if (apiModule is not null)
             await apiModule.Stop(cancellationToken);
