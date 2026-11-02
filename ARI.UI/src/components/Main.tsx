@@ -48,7 +48,7 @@ interface Props {
     speechMode:       boolean
     onBeginSpeech:    () => void
     speechCaption:    string | null
-    speechState:      "listening" | "thinking" | "speaking"
+    speechState:      "idle" | "listening" | "thinking" | "speaking"
     speechInCall:     boolean
     speechMuted:      boolean
     speechCallStart:  number             // when the current call began (ms); windows come from replies after it

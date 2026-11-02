@@ -13,13 +13,20 @@ internal class Awareness : Agent
 
     internal override bool SuppressLog => true;
 
+    // Speech is not a group chat: a microphone in the room also hears phone calls, other people and the TV. Lines with
+    // her name, or replies right after she spoke, never reach this gate (the listener answers those itself).
+    private const string VoiceFraming =
+        "This is speech a microphone in the room picked up, not a chat message. It did not say Ari's name and did not " +
+        "come right after she spoke. Someone on the phone, talking to another person, or a TV or radio is OVERHEARD. " +
+        "Only say ADDRESSED if it is plainly a request or question meant for an assistant.";
+
     /// <summary>Voice gate: is this spoken transcript addressed to Ari?</summary>
     internal async Task<bool> IsAddressed(string transcript, string? context = null, CancellationToken ct = default)
     {
         Thread ephemeral = new Thread(ThreadPipeline.Dialogue, $"__aware_{Guid.NewGuid():N}") { Internal = true };
         string prompt = string.IsNullOrEmpty(context)
-            ? $"Transcript: \"{transcript}\""
-            : $"{context}\nTranscript: \"{transcript}\"";
+            ? $"{VoiceFraming}\nTranscript: \"{transcript}\""
+            : $"{VoiceFraming}\n{context}\nTranscript: \"{transcript}\"";
         string result = await Prompt(ephemeral, prompt, new PromptOptions { MaxTokensOverride = 8, Ct = ct });
         return result.Trim().StartsWith("ADDRESSED", StringComparison.OrdinalIgnoreCase);
     }

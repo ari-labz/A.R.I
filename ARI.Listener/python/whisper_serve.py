@@ -4,7 +4,7 @@ whisper_serve.py — ARI.Listener's speech-to-text worker.
 
 A tiny WebSocket server that receives raw PCM (16-bit LE, mono, 16 kHz), segments it into utterances with
 VAD (WebRTC VAD, energy fallback), transcribes each finished utterance with faster-whisper, and sends back
-JSON: {"type": "partial"|"final", "text": "..."} (partials every ~0.5 s while speaking). The C# ListenerSession pipes the browser mic to this and forwards
+JSON: {"type": "partial"|"final", "text": "..."} (finals add "clarity" and a "marked" text) (partials every ~0.5 s while speaking). The C# ListenerSession pipes the browser mic to this and forwards
 transcripts to the awareness gate.
 
 Run: python whisper_serve.py --port 8123 --model base.en
@@ -124,6 +124,21 @@ class Segmenter:
 
 
 def transcribe(pcm: bytes) -> str:
+    """Partials: quick text only, low-confidence segments dropped."""
+    return transcribe_final(pcm, partial=True)["text"]
+
+
+# How sure Whisper was of a final, from its own scores. avg_logprob is about -0.25 for clear speech and falls to
+# -0.5..-1.3 when wind, noise or a cutting-out mic garbles it; a word below LOW_WORD_PROB is one it was guessing at.
+UNCLEAR_LOGPROB  = -0.55   # below this the turn is "unclear": the gist is probably there, some words may be wrong
+GARBLED_LOGPROB  = -1.0    # below this it is "garbled": mostly guesswork
+DROP_LOGPROB     = -1.8    # below this it is noise, not speech
+LOW_WORD_PROB    = 0.5
+UNCLEAR_LOW_FRAC = 0.25    # this share of guessed words also makes a turn unclear
+
+
+def transcribe_final(pcm: bytes, partial: bool = False) -> dict:
+    """Returns {"text", "clarity": clear|unclear|garbled, "marked"}: marked is the text with guessed words flagged (?)."""
     audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
     segments, _ = model.transcribe(
         audio,
@@ -133,19 +148,41 @@ def transcribe(pcm: bytes) -> str:
         temperature=0.0,                   # deterministic; no creative fallbacks
         condition_on_previous_text=False,  # stops "okay okay okay…" runaway loops
         no_speech_threshold=0.6,           # skip segments the model thinks are silence
-        log_prob_threshold=-1.0,           # drop low-confidence segments
+        log_prob_threshold=-1.0,
         compression_ratio_threshold=2.4,   # drop repetitive/degenerate segments
+        word_timestamps=not partial,       # per-word confidence; adds next to nothing on short turns
     )
+    floor = -1.0 if partial else DROP_LOGPROB
     kept = []
     for s in segments:
         if getattr(s, "no_speech_prob", 0.0) > 0.6:
             continue
-        if getattr(s, "avg_logprob", 0.0) < -1.0:
+        if getattr(s, "avg_logprob", 0.0) < floor:
             continue
         if getattr(s, "compression_ratio", 1.0) > 2.4:
             continue
-        kept.append(s.text.strip())
-    return " ".join(kept).strip()
+        kept.append(s)
+    text = " ".join(s.text.strip() for s in kept).strip()
+    if partial or not kept:
+        return {"text": text, "clarity": "clear", "marked": text}
+
+    # Weight each segment's score by its length so one short shaky segment doesn't decide a long turn.
+    lengths = [max(1, len(s.text)) for s in kept]
+    logprob = sum(s.avg_logprob * n for s, n in zip(kept, lengths)) / sum(lengths)
+    words = [w for s in kept for w in (s.words or [])]
+    low = [w for w in words if w.probability < LOW_WORD_PROB]
+    low_frac = len(low) / len(words) if words else 0.0
+    if logprob < GARBLED_LOGPROB:
+        clarity = "garbled"
+    elif logprob < UNCLEAR_LOGPROB or low_frac >= UNCLEAR_LOW_FRAC:
+        clarity = "unclear"
+    else:
+        clarity = "clear"
+    marked = text
+    if clarity != "clear" and words:
+        marked = "".join(w.word + ("(?)" if w.probability < LOW_WORD_PROB else "") for w in words).strip()
+    log(f"[whisper_serve] clarity={clarity} logprob={logprob:.2f} guessed={len(low)}/{len(words)}")
+    return {"text": text, "clarity": clarity, "marked": marked}
 
 
 # A pause after "and", "um", "so" or a trailing comma usually isn't the end of the turn; wait this much longer.
@@ -167,6 +204,14 @@ async def handle(ws, *_):
             seg.extra_ms = UNFINISHED_EXTRA_MS if UNFINISHED_TAIL.search(text) else 0
             await ws.send(json.dumps({"type": "partial", "text": text}))
 
+    async def send_final(pcm: bytes):
+        r = await loop.run_in_executor(None, transcribe_final, pcm)
+        if r["text"] and not is_junk(r["text"]):
+            log(f'[whisper_serve] transcript: "{r["text"]}"')
+            await ws.send(json.dumps({"type": "final", **r}))
+        elif r["text"]:
+            log(f'[whisper_serve] dropped (hallucination): "{r["text"]}"')
+
     try:
         async for msg in ws:
             if isinstance(msg, (bytes, bytearray)):
@@ -179,12 +224,7 @@ async def handle(ws, *_):
                     partial["at_ms"] = seg.utter_ms
                     partial["task"] = asyncio.ensure_future(send_partial(bytes(seg.utter), seg.utterance_id))
                 for utter in finals:
-                    text = await loop.run_in_executor(None, transcribe, utter)
-                    if text and not is_junk(text):
-                        log(f'[whisper_serve] transcript: "{text}"')
-                        await ws.send(json.dumps({"type": "final", "text": text}))
-                    elif text:
-                        log(f'[whisper_serve] dropped (hallucination): "{text}"')
+                    await send_final(utter)
             else:
                 try:
                     obj = json.loads(msg)
@@ -193,10 +233,7 @@ async def handle(ws, *_):
                 if obj.get("type") == "end":
                     u = seg.flush()
                     if u:
-                        text = await loop.run_in_executor(None, transcribe, u)
-                        if text and not is_junk(text):
-                            log(f'[whisper_serve] transcript: "{text}"')
-                            await ws.send(json.dumps({"type": "final", "text": text}))
+                        await send_final(u)
     except websockets.ConnectionClosed:
         pass
 

@@ -6,9 +6,10 @@
 import { HUD_BANDS } from "ari-hud"
 
 export interface ListenerEvent {
-    type: string          // "ready" | "partial" | "transcript" | "error"
+    type: string          // "ready" | "partial" | "attending" | "transcript" | "thinking" | "speaking" | "say" | "done" | "played" | "error"
     text?: string
     addressed?: boolean
+    spoke?: boolean       // on "done": false when she chose to stay quiet
     message?: string
 }
 
@@ -114,6 +115,9 @@ export async function startListening(
     let nextStart = 0
     const active = new Set<AudioBufferSourceNode>()
     let playChain: Promise<void> = Promise.resolve()
+    // "done" means the server has sent her last sentence; "played" (made up here) is when it has finished playing.
+    let replyDone = false
+    const checkPlayed = () => { if (replyDone && active.size === 0) { replyDone = false; onEvent({ type: "played" }) } }
 
     const playWav = (data: ArrayBuffer) => {
         playChain = playChain.then(async () => {
@@ -125,7 +129,7 @@ export async function startListening(
             src.start(start)
             nextStart = start + buf.duration
             active.add(src)
-            src.onended = () => active.delete(src)
+            src.onended = () => { active.delete(src); checkPlayed() }
         }).catch(() => { /* skip undecodable frame */ })
     }
     const flushAudio = () => {
@@ -138,11 +142,12 @@ export async function startListening(
         if (typeof e.data !== "string") { playWav(e.data as ArrayBuffer); return } // binary = audio
         try {
             const evt = JSON.parse(e.data)
-            if (evt.type === "thinking") flushAudio() // a new turn supersedes queued speech
+            if (evt.type === "thinking") { flushAudio(); replyDone = false } // a new turn supersedes queued speech
             // Barge-in: the user talking over her stops her at once. Short backchannels ("yeah", "mm hm") don't,
             // and the server cancels the reply itself when their sentence finishes.
             if (evt.type === "partial" && active.size > 0 && String(evt.text ?? "").trim().split(/\s+/).length >= 3) flushAudio()
             onEvent(evt)
+            if (evt.type === "done") { replyDone = true; void playChain.then(checkPlayed) }
         } catch { /* ignore */ }
     }
 

@@ -10,6 +10,9 @@ import {
 import { usePipelines } from "./hooks/usePipelines"
 import { startListening, type ListenerHandle } from "./hooks/useListener"
 import { HUD_BANDS } from "ari-hud"
+
+type SpeechState = "idle" | "listening" | "thinking" | "speaking"
+const SPEECH_IDLE_AFTER_MS = 3000   // quiet this long while listening and she goes back to idle
 import { env } from "./env"
 import { playResponseChime } from "./notify"
 import LoginScreen from "./components/LoginScreen"
@@ -156,13 +159,25 @@ export default function App() {
     const [selectedPipeline, setSelectedPipeline]  = useState<string | null>(null)
     const [speechMode,       setSpeechMode]        = useState(false)
     const [speechCaption,    setSpeechCaption]     = useState<string | null>(null)
-    const [speechState,      setSpeechState]       = useState<"listening" | "thinking" | "speaking">("listening")
+    const [speechState,      setSpeechState]       = useState<SpeechState>("idle")
     const [speechInCall,     setSpeechInCall]      = useState(false)
     const [speechMuted,      setSpeechMuted]       = useState(false)
     const [speechCallStart,  setSpeechCallStart]   = useState(0)
     const speechLevels = useRef<number[]>(new Array(HUD_BANDS).fill(0))
     const speechMic    = useRef(0)
     const listenerRef = useRef<ListenerHandle | null>(null)
+    // Like a smart speaker: idle until she's spoken to (her name, a reply right after she speaks, or speech the
+    // awareness gate judges is for her), and back to idle after a few seconds of quiet.
+    const speechStateRef = useRef<SpeechState>("idle")
+    const lastHeardRef   = useRef(0)
+    const setSpeech = (s: SpeechState) => { speechStateRef.current = s; setSpeechState(s) }
+    useEffect(() => {
+        if (!speechInCall) return
+        const id = setInterval(() => {
+            if (speechStateRef.current === "listening" && Date.now() - lastHeardRef.current > SPEECH_IDLE_AFTER_MS) setSpeech("idle")
+        }, 250)
+        return () => clearInterval(id)
+    }, [speechInCall])
     const [connState, setConnState] = useState<"connecting" | "connected" | "failed">("connecting")
     const pipelines = usePipelines()
 
@@ -208,7 +223,7 @@ export default function App() {
         listenerRef.current?.stop()
         listenerRef.current = null
         setSpeechCaption(null)
-        setSpeechState("listening")
+        setSpeech("idle")
         setSpeechInCall(false)
         setSpeechMuted(false)
     }
@@ -924,15 +939,21 @@ export default function App() {
         loadThreads()
         try {
             setSpeechCallStart(Date.now())
+            setSpeech("idle")
             listenerRef.current = await startListening(key, e => {
+                const heard = () => { lastHeardRef.current = Date.now(); if (speechStateRef.current === "idle") setSpeech("listening") }
                 switch (e.type) {
+                    case "attending": heard(); break   // her name was heard, or a reply right after she spoke
+                    case "partial":   if (speechStateRef.current === "listening") lastHeardRef.current = Date.now(); break
                     case "transcript":
-                        if (e.text) setSpeechCaption(e.addressed ? e.text : `(overheard) ${e.text}`)
+                        if (e.addressed && e.text) { setSpeechCaption(e.text); heard() }
+                        else if (speechStateRef.current === "listening") setSpeech("idle")   // not for her
                         break
-                    case "thinking":  setSpeechState("thinking"); break
-                    case "speaking":  setSpeechState("speaking"); break
+                    case "thinking":  setSpeech("thinking"); break
+                    case "speaking":  setSpeech("speaking"); break
                     case "say":       if (e.text) setSpeechCaption(e.text); break  // Ari's reply
-                    case "done":      setSpeechState("listening"); break
+                    case "done":      if (e.spoke === false) setSpeech("idle"); break   // she chose not to answer
+                    case "played":    if (speechStateRef.current === "speaking") { lastHeardRef.current = Date.now(); setSpeech("listening") } break   // follow-up: she listens briefly
                 }
             }, speechLevels, speechMic)
             setSpeechInCall(true)
