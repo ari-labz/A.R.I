@@ -14,6 +14,10 @@ internal sealed class SentenceChunker
     private const int MinChunkChars = 80;
     private const int MaxChunkChars = 200;
     private const int MaxChunkSentences = 4;
+    // The first chunk goes out at the first clause so she starts speaking within a few words; prosody matters
+    // less than latency for an opening line. Later chunks group sentences as above.
+    private const int MinFirstClauseChars = 20;
+    private int chunksEmitted;
 
     private readonly Action<string> onSentence;
     private string full = "";
@@ -26,17 +30,18 @@ internal sealed class SentenceChunker
     public void Feed(string cumulative)
     {
         if (string.IsNullOrEmpty(cumulative)) return;
-        if (cumulative.Length < emitted) { full = ""; emitted = 0; pendingSentences.Clear(); }
+        if (cumulative.Length < emitted) { full = ""; emitted = 0; chunksEmitted = 0; pendingSentences.Clear(); }
         full = cumulative;
 
         for (int i = emitted; i < full.Length; i++)
         {
             char c = full[i];
-            if (c is not ('.' or '!' or '?' or '\n')) continue;
+            bool clause = chunksEmitted == 0 && pendingSentences.Count == 0 && c is ',' or ';' or ':' or '—';
+            if (c is not ('.' or '!' or '?' or '\n') && !clause) continue;
             if (i + 1 >= full.Length || !char.IsWhiteSpace(full[i + 1])) continue;
 
             string candidate = full.Substring(emitted, i - emitted + 1).Trim();
-            if (candidate.Length < MinSentenceChars) continue;
+            if (candidate.Length < (clause ? MinFirstClauseChars : MinSentenceChars)) continue;
 
             string clean = CleanMarkdown(candidate);
             if (clean.Length == 0) { emitted = i + 1; continue; }
@@ -66,6 +71,7 @@ internal sealed class SentenceChunker
         foreach (string s in pendingSentences) totalChars += s.Length;
 
         bool ready = force
+            || chunksEmitted == 0
             || totalChars >= MaxChunkChars
             || (totalChars >= MinChunkChars && pendingSentences.Count >= 2)
             || pendingSentences.Count >= MaxChunkSentences;
@@ -74,6 +80,7 @@ internal sealed class SentenceChunker
 
         string chunk = string.Join(" ", pendingSentences);
         pendingSentences.Clear();
+        chunksEmitted++;
         onSentence(chunk);
     }
 

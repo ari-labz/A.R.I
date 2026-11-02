@@ -9,7 +9,8 @@ namespace ARI.LLM;
 /// </summary>
 internal sealed class Subagent : Agent
 {
-    public Subagent() { }
+    // Background work: below a live reply in the queue, so the user's own turn preempts it. An Agents.json Priority overrides.
+    public Subagent() { Priority = (int)InferencePriority.Subagent; }
 
     private const string DefaultPrompt =
         "You are a subagent working for ARI on one task. Use the context and your tools to complete the task, then reply with " +

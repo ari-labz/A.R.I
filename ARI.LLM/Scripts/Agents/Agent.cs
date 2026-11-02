@@ -32,7 +32,7 @@ public abstract class Agent
     public int BudgetThinking { get; init; }
     // Resolved to Slot (and id_slot) at bind time. Null = no slot pin.
     public string? SlotName { get; set; }
-    public SamplerSettings? SamplerSettings { get; init; }
+    public SamplerSettings? SamplerSettings { get; set; }
     [JsonIgnore] internal int BudgetContext => Slot?.ContextLimit ?? 0;
 
     // Compaction: off by default. When on, stubs oldest tool outputs one at a time, once usage exceeds
@@ -302,6 +302,7 @@ public abstract class Agent
         internal readonly string        Username;
         internal readonly bool          ChatHidden;
         internal readonly CancellationToken Ct;
+        internal CancellationToken StepCt;   // Ct plus the queue's preempt switch, renewed each step
 
         // ── Budgets ───────────────────────────────────────────────────────────
         internal int ThinkBudget;
@@ -561,9 +562,14 @@ public abstract class Agent
                 // step acquisition bounds the worst case to one step's generation time, and is released
                 // below before tool execution, which is file/network I/O, not GPU work, and shouldn't hold
                 // the inference slot while it runs.
-                IDisposable? slot = Queue is not null
+                LLMQueue.Slot? slot = Queue is not null
                     ? await Queue.AcquireAsync((InferencePriority)Priority, turn.Ct)
                     : null;
+                using CancellationTokenSource stepCts = slot is null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(turn.Ct)
+                    : CancellationTokenSource.CreateLinkedTokenSource(turn.Ct, slot.Preempted);
+                turn.StepCt = stepCts.Token;
+                int reasoningMark = turn.ReasoningBuilder.Length, contentMark = turn.ContentBuilder.Length;
 
                 // The slot must be released no matter how this step ends — a thrown or cancelled
                 // step (e.g. a dream turn interrupted by user activity) must never leak the queue's
@@ -577,20 +583,47 @@ public abstract class Agent
                     PrepareStep(turn);
                     string json = BuildRequest(turn);
 
-                    // ── Stream ────────────────────────────────────────────────
-                    using Step? step = await OpenStep(turn, json);
-                    if (step is null) continue;   // HTTP error recovery; hint injected, retry
-
-                    while (await step.IsStreaming(turn.Ct))
+                    if (turn.Opts.WarmOnly)
                     {
-                        await ProcessDelta(turn, step);
-                        if (turn.ContentRunaway)           break;
-                        if (turn.ReplyBudgetHit)           break;
-                        if (turn.SteeringRedirect)         break;
-                        if (turn.ThinkingRedirect)         break;
-                        if (turn.EarlyAbort is not null)   break;
-                        if (turn.RunawayCall  is not null)  break;
-                        if (turn.TextToolLeak)             break;
+                        System.Text.Json.Nodes.JsonObject warm = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+                        warm["stream"] = false;
+                        warm.Remove("stream_options");
+                        warm["n_predict"] = 0;
+                        using HttpResponseMessage warmed = await httpClient.PostAsync($"{Endpoint}/v1/chat/completions",
+                            new StringContent(warm.ToJsonString(), System.Text.Encoding.UTF8, "application/json"), turn.Ct);
+                        Shared.Logger.LogInformation("[{Agent}] warmed the shared prompt ({Status}).", Name, (int)warmed.StatusCode);
+                        return "";
+                    }
+
+                    // ── Stream ────────────────────────────────────────────────
+                    Step? step;
+                    try
+                    {
+                        step = await OpenStep(turn, json);
+                        if (step is null) continue;   // HTTP error recovery; hint injected, retry
+                        using (step)
+                            while (await step.IsStreaming(turn.StepCt))
+                            {
+                                await ProcessDelta(turn, step);
+                                if (turn.ContentRunaway)           break;
+                                if (turn.ReplyBudgetHit)           break;
+                                if (turn.SteeringRedirect)         break;
+                                if (turn.ThinkingRedirect)         break;
+                                if (turn.EarlyAbort is not null)   break;
+                                if (turn.RunawayCall  is not null)  break;
+                                if (turn.TextToolLeak)             break;
+                            }
+                    }
+                    catch (OperationCanceledException) when (slot is { Preempted.IsCancellationRequested: true } && !turn.Ct.IsCancellationRequested)
+                    {
+                        // A live reply is waiting on this server. Drop this step's partial output and queue
+                        // again; llama.cpp keeps the prompt it already read, so the retry only regenerates.
+                        turn.ReasoningBuilder.Length = Math.Min(reasoningMark, turn.ReasoningBuilder.Length);
+                        turn.ContentBuilder.Length   = Math.Min(contentMark, turn.ContentBuilder.Length);
+                        turn.PendingCalls.Clear();
+                        turn.StreamingMarkers.Clear();
+                        Shared.Logger.LogInformation("[{Agent}] ({Thread}) step preempted by a live reply — requeued.", Name, turn.Thread.Key);
+                        continue;
                     }
 
                     // ── Process result ──────────────────────────────────────────
@@ -864,7 +897,7 @@ public abstract class Agent
         SetPhase(turn, turn.ReadingWebResults ? ThreadPhase.Researching : ThreadPhase.Prefilling);
         if (Server is { Status: ServerStatus.Offline, StartError: not null } offline)
             throw new LlmRequestFailedException($"{offline.Name} is offline: {offline.StartError}");
-        HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.Ct);
+        HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, turn.StepCt);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -1966,31 +1999,33 @@ public abstract class Agent
 
     private const string BlockRule = "--------------------------------";
 
+    internal const string NothingNew = "Nothing new.";
+    private static bool IsNothingNew(string? notes) =>
+        string.IsNullOrWhiteSpace(notes)
+        // Recall sometimes echoes the history's "ARI: " speaker prefix.
+        || System.Text.RegularExpressions.Regex.Replace(notes.Trim(), @"^ARI:\s*", "").TrimEnd('.').Equals(NothingNew.TrimEnd('.'), StringComparison.OrdinalIgnoreCase);
+
     private (string baseSystem, string thinkSuffix) BuildSystemBlock(
         Thread thread, int thinkBudget, int respBudget, bool Think)
     {
-        // All blocks below are byte-identical across turns so the KV prefix cache survives.
+        // All blocks below are byte-identical across turns so the KV prefix cache survives. The parts that are the
+        // same for every conversation come first and the per-thread ones (platform context, brief, privacy policy,
+        // live capabilities) last, so a new thread reuses the cached shared prefix instead of reading it all again.
         string roleBody   = BuildSystemPrompt(thread);
         string systemBody = UsePersona ? SystemPromptStore.Get() : "";
         string systemFull = systemBody.Length == 0 ? roleBody : $"{systemBody}\n\n{roleBody}";
-        string systemBlock = thread.PlatformContext is null
-            ? systemFull
-            : $"{systemFull}\n\n{thread.PlatformContext}";
-        if (thread.Brief is { } brief)
-            systemBlock += $"\n\n{brief}";
-        if (thread.IsGuarded)
-            systemBlock += $"\n\n{PrivacyPolicyStore.Get()}";
 
         List<string> sections = new()
         {
-            $"--- **System Prompt** ---\n\n{systemBlock}\n\n{BlockRule}"
+            $"--- **System Prompt** ---\n\n{systemFull}\n\n{BlockRule}"
         };
 
+        string live = "";
         if (thread.tools.ContainsKey("list_tools"))
         {
             string capabilities = UsePersona ? CapabilitiesStore.Get() : "";
-            string live = CapabilitiesBlock.For(thread);
-            string capsBlock = string.Join("\n\n", new[] { capabilities, live, SharedPrompts.ToolSystemBlock }.Where(x => x.Length > 0));
+            live = CapabilitiesBlock.For(thread);
+            string capsBlock = string.Join("\n\n", new[] { capabilities, SharedPrompts.ToolSystemBlock }.Where(x => x.Length > 0));
             sections.Add($"--- **Capabilities** ---\n\n{capsBlock}\n\n{BlockRule}");
         }
 
@@ -2001,7 +2036,21 @@ public abstract class Agent
                 sections.Add($"--- **Persona** ---\n\n{persona}\n\n{BlockRule}");
         }
 
-        string baseSystem = string.Join("\n\n", sections) + PersistentContext(thread);
+        List<string> perThread = new();
+        if (thread.PlatformContext is { } platform) perThread.Add(platform);
+        if (thread.Brief is { } brief)              perThread.Add(brief);
+        if (thread.IsGuarded)                       perThread.Add(PrivacyPolicyStore.Get());
+        if (live.Length > 0)                        perThread.Add(live);
+        string persistent = PersistentContext(thread);
+        if (persistent.Length > 0) perThread.Add(persistent.Trim());
+        // The per-thread part rides in its own opening message rather than the system prompt: llama.cpp always keeps a
+        // checkpoint at the first user message, so the shared system prompt ends exactly on one and every new
+        // conversation resumes from it instead of re-reading ~10k tokens.
+        thread.OpeningContext = perThread.Count > 0
+            ? $"--- **This Conversation** (context for you, not a message from anyone) ---\n\n{string.Join("\n\n", perThread)}\n\n{BlockRule}"
+            : null;
+
+        string baseSystem = string.Join("\n\n", sections);
 
         string thinkSuffix  = Think ? "" : "\n<|think_off|>";
 
@@ -2019,7 +2068,7 @@ public abstract class Agent
         {
             // A turn with tool calls is kept whole — merging would lose which prose followed which calls.
             if (collapsed.Count > 0 && collapsed[^1].Role == m.Role && collapsed[^1].ToolBatches is null && m.ToolBatches is null)
-                collapsed[^1] = collapsed[^1] with { Content = collapsed[^1].Content + "\n" + m.Content };
+                collapsed[^1] = collapsed[^1] with { Content = collapsed[^1].Content + "\n" + m.Content, Source = null };
             else
                 collapsed.Add(m);
         }
@@ -2028,6 +2077,7 @@ public abstract class Agent
             collapsed[^1] = collapsed[^1] with { Content = opts.AugmentedPrompt };
 
         List<object> messages = new() { new { role = "system", content = baseSystem + thinkSuffix } };
+        if (thread.OpeningContext is { } opening) messages.Add(new { role = "user", content = opening });
 
         for (int i = 0; i < collapsed.Count - 1; i++)
         {
@@ -2046,11 +2096,14 @@ public abstract class Agent
                 for (int k = 0; k < batch.Count; k++)
                     messages.Add(new { role = "tool", tool_call_id = IdOf(k), name = batch[k].Name, content = batch[k].Result });
             }
-            messages.Add(new { role = m.Role, content = $"{m.Username}: {m.Content}" });
+            messages.Add(new { role = m.Role, content = m.Source?.SentText ?? $"{m.Username}: {m.Content}" });
         }
 
         // modeNudge is a trailing system message — mid-conversation system messages ARE rendered by Qwen3's template.
-        string memoryBlock = opts.RecallNotes != null && !opts.MemoryInPrompt
+        bool   delta       = thread.MemoryDeltaThisTurn && opts.RecallNotes != null && !opts.MemoryInPrompt;
+        string memoryBlock = delta
+            ? (IsNothingNew(opts.RecallNotes) ? string.Empty : $"--- **Ari's Memories (new since your last message)** ---\n\n{opts.RecallNotes!.Trim()}\n\n{BlockRule}\n\n")
+            : opts.RecallNotes != null && !opts.MemoryInPrompt
             ? $"--- **Ari's Memories** ---\n\n" +
               "(These memories describe the USER's life, possessions, and experiences — not yours. Never adopt them as your own.)\n\n" +
               $"{(string.IsNullOrWhiteSpace(opts.RecallNotes) ? "None" : opts.RecallNotes.Trim())}\n\n{BlockRule}\n\n"
@@ -2059,7 +2112,19 @@ public abstract class Agent
         if (collapsed.Count > 0)
         {
             ThreadMessage current   = collapsed[^1];
-            string        promptText = $"{memoryBlock}# Prompt:\n\n{current.Username}: {current.Content}";
+            // The send time rides on the message itself (kept verbatim in history, so the cache is untouched), which gives her
+            // the hour and the gaps between messages without a clock in the system prompt.
+            string        sentAt     = current.Source is { } srcItem ? $"[{srcItem.Timestamp:ddd d MMM, HH:mm}] " : "";
+            string        promptText = $"{memoryBlock}# Prompt:\n\n{sentAt}{current.Username}: {current.Content}";
+
+            // Every message is replayed exactly as it was sent (memory block and header included), so next turn's
+            // prompt only adds to the end.
+            if (opts.AugmentedPrompt is null && current.Source is { } src)
+            {
+                src.SentText = promptText;
+                if (opts.RecallNotes != null && !opts.MemoryInPrompt && !delta && !string.IsNullOrWhiteSpace(opts.RecallNotes))
+                    thread.MemoryBlockStart = thread.ContextStart;
+            }
 
             messages.Add(new { role = "user", content = WithAttachments(thread, promptText, msgAtts) });
             if (opts.ModeNudge is not null) messages.Add(new { role = "system", content = opts.ModeNudge });

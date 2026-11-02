@@ -13,6 +13,9 @@ internal sealed class PromptOptions
     public int                 MaxTokensOverride   { get; init; }
     public int                 ThinkingBudget      { get; init; }
     public bool                UserMessagePreadded { get; init; }
+    /// <summary>Read the prompt into the server's cache and stop: no reply, nothing recorded. Used at startup so the
+    /// first real message doesn't pay for reading the shared system prompt.</summary>
+    public bool                WarmOnly            { get; init; }
     public bool                ChatHidden          { get; init; }
     public Func<string, Task>? OnDelta             { get; init; }
     public Func<string, Task>? OnTextDelta         { get; init; }

@@ -9,7 +9,7 @@ namespace ARI.LLM;
 /// rather than stating results out of nowhere. Null for anything else.</para>
 /// </summary>
 public record ThreadMessage(string Role, string Username, string Content,
-    IReadOnlyList<IReadOnlyList<HistoryToolCall>>? ToolBatches = null);
+    IReadOnlyList<IReadOnlyList<HistoryToolCall>>? ToolBatches = null, Prompt? Source = null);
 
 /// <summary>One past tool call as replayed into context: name, (shrunk) arguments, and a stub of its result.</summary>
 public record HistoryToolCall(string Name, string Args, string Result);

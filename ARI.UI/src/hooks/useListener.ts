@@ -121,6 +121,9 @@ export async function startListening(
         try {
             const evt = JSON.parse(e.data)
             if (evt.type === "thinking") flushAudio() // a new turn supersedes queued speech
+            // Barge-in: the user talking over her stops her at once. Short backchannels ("yeah", "mm hm") don't,
+            // and the server cancels the reply itself when their sentence finishes.
+            if (evt.type === "partial" && active.size > 0 && String(evt.text ?? "").trim().split(/\s+/).length >= 3) flushAudio()
             onEvent(evt)
         } catch { /* ignore */ }
     }

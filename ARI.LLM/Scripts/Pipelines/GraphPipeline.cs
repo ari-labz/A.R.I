@@ -11,7 +11,7 @@ namespace ARI.LLM;
 /// own thread, every other agent runs on a throw-away thread and only hands its text to the ports it is wired to.</summary>
 internal sealed class GraphPipeline : Pipeline
 {
-    private readonly TextingAgent                         textingAgent;
+    private readonly Dialogue                             textingAgent;   // the reply agent: texting for chats, talking for voice
     private readonly Memory?                              memory;
     private readonly Context?                             context;
     private readonly Engram?                              engram;
@@ -36,7 +36,7 @@ internal sealed class GraphPipeline : Pipeline
     protected override string PipelineName => "Graph";
 
     internal GraphPipeline(
-        TextingAgent textingAgent, Memory? memory, Context? context, Engram? engram,
+        Dialogue textingAgent, Memory? memory, Context? context, Engram? engram,
         IReadOnlyDictionary<string, CustomAgent> customAgents,
         Func<string?, PipelineGraph> graphFor,
         Func<string, PipelineGraph?> pipelineById,
@@ -171,12 +171,16 @@ internal sealed class GraphPipeline : Pipeline
                 string? threadCode = node.ThreadCode;
                 if (agentName.Equals("Memory", StringComparison.OrdinalIgnoreCase))
                 {
+                    thread.MemoryDeltaThisTurn = false;
                     if (!customAgents.ContainsKey(SystemAgents.Walker)) return await Recall();
                     if (memory is null || !thread.HasMemoryAccess) return null;
                     StartingPoints start = new MemoryApi(memory, thread, contextSummary, privacy).Start(message);
                     if (start.Text is null) return null;
                     inputs["starting"] = start.Text;
                     inputs["audience"] = start.Audience;
+                    // Every block sent since the window last moved is still in Dialogue's view, so ask only for what's new.
+                    thread.MemoryDeltaThisTurn = thread.MemoryBlockStart >= 0 && thread.MemoryBlockStart == thread.ContextStart;
+                    inputs["task"] = (thread.MemoryDeltaThisTurn ? SystemAgents.WalkerDeltaTask : SystemAgents.WalkerFullTask) + SystemAgents.WalkerLengthRule;
                     agentName  = SystemAgents.Walker;
                     threadCode ??= "memory";
                 }
@@ -202,6 +206,7 @@ internal sealed class GraphPipeline : Pipeline
                             Ct                  = cts.Token,
                             UserMessagePreadded = true,
                             OnDelta             = onDelta,
+                            OnTextDelta         = onTextDelta,
                         });
                     }
                     finally { Agent.PromptTokens.Value = null; }
@@ -234,6 +239,11 @@ internal sealed class GraphPipeline : Pipeline
                     filled["since"] = own is null ? history : SinceText(chat, own);
                     using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
                     string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? message : PipelineGraph.Fill(agent.MessagePrompt, filled);
+                    // Recall messages saved before {task} existed end with the full-block instruction; swap it for the delta one.
+                    if (agentName == SystemAgents.Walker && !agent.MessagePrompt.Contains("{task}") && inputs.GetValueOrDefault("task") is { } task)
+                        userText = userText.Contains(SystemAgents.WalkerFullTask)
+                            ? userText.Replace(SystemAgents.WalkerFullTask, task)
+                            : userText + "\n\n" + task;
                     if (isReply)
                     {
                         // The reply agent answers the user's own message, which is already in the thread; a message template only applies to steps behind the scenes.

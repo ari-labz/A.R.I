@@ -18,6 +18,11 @@ public class Prompt : ThreadItem
     [JsonIgnore]
     public override string? Message => Text;
 
+    /// <summary>The message exactly as the model was sent it, memory block included. Replayed verbatim in later
+    /// turns so the prompt only ever grows at the end and llama.cpp reuses what it already read.</summary>
+    [JsonIgnore]
+    public string? SentText { get; set; }
+
     // An attachment-only message has no text, and chat history skips empty items — so without this it
     // vanished and the previous message (sometimes ARI's own) was answered as if it were the latest.
     [JsonIgnore]

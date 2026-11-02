@@ -87,10 +87,9 @@ internal sealed class SpeechPipeline : Pipeline
             }
             catch (Exception ex)
             {
-                Shared.Logger.LogError(ex, "[Memory] ({Thread}) Failed to retrieve memories from {Platform}: {Error}", threadKey, platformContext ?? "unknown", ex.Message);
-                string errorMessage = "> error retrieving memories";
-                if (onDelta is not null) await onDelta(errorMessage);
-                return errorMessage;
+                // Same as Dialogue: a failed recall costs the memories, not the reply.
+                Shared.Logger.LogError(ex, "[Memory] ({Thread}) Failed to retrieve memories from {Platform}, replying without them: {Error}", threadKey, platformContext ?? "unknown", ex.Message);
+                recallBlock = null;
             }
             recallSeconds = recallSw.Elapsed.TotalSeconds;
         }

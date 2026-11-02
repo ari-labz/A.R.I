@@ -8,7 +8,7 @@ namespace ARI.Voice;
 
 public class VoiceModuleSynthesiser : ITtsSynthesiser
 {
-    private const int POLL_INTERVAL_MS = 2000;
+    private const int POLL_INTERVAL_MS = 150;   // short: the first sentence after a cold start waits on this
     private const int IDLE_CHECK_SECONDS = 30;
 
     private readonly HttpClient http;
@@ -310,12 +310,12 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     private async Task WaitUntilReady(CancellationToken ct)
     {
         string healthUrl = $"http://localhost:{serverPort}/health";
-        int elapsed = 0;
+        int elapsedMs = 0;
 
-        while (elapsed < startupTimeoutSecs)
+        while (elapsedMs < startupTimeoutSecs * 1000)
         {
             await Task.Delay(POLL_INTERVAL_MS, ct);
-            elapsed += POLL_INTERVAL_MS / 1000;
+            elapsedMs += POLL_INTERVAL_MS;
 
             try
             {

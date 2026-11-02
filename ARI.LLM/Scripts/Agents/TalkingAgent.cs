@@ -9,6 +9,9 @@ internal sealed class TalkingAgent : Dialogue
     // Set by SpeechPipeline before Prompt(), cleared in a finally block after.
     internal SpeechSteeringContext? Steering { get; set; }
 
+    // A live conversation outranks everything on the queue and preempts background work.
+    public TalkingAgent() { Priority = (int)InferencePriority.Voice; }
+
     internal override string? OnStreamingDelta(Thread thread, string delta)
     {
         if (Steering is null || !Steering.UserStillTalking) return null;
