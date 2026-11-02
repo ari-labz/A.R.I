@@ -921,6 +921,10 @@ public class LLMModule : ILLMModule, IDisposable
 
     /// <summary>Reads Dialogue's shared system prompt and tools into its slot right after boot, so the first message of
     /// the session (and every new conversation, which shares that prefix) doesn't spend ~50 s reading it.</summary>
+    /// <summary>Threads whose key starts with this are the startup warm-ups: real chats as far as the model is concerned
+    /// (so the cached prefix matches), but never listed.</summary>
+    internal const string WarmupKeyPrefix = "warmup-";
+
     private async Task WarmDialogueAsync()
     {
         if (textingAgent?.Server is not { Status: ServerStatus.Online }) return;
@@ -930,8 +934,8 @@ public class LLMModule : ILLMModule, IDisposable
         for (int waited = 0; Modules.ImageGen?.IsReady != true && waited < 120; waited += 2)
             await Task.Delay(2000);
         await Task.Delay(2000);   // let anything else that comes up with it settle
-        await Warm(textingAgent, ThreadPipeline.Dialogue, "warmup-shared-prefix");
-        if (talkingAgent is not null) await Warm(talkingAgent, ThreadPipeline.Speech, "warmup-voice-prefix");
+        await Warm(textingAgent, ThreadPipeline.Dialogue, WarmupKeyPrefix + "chat");
+        if (talkingAgent is not null) await Warm(talkingAgent, ThreadPipeline.Speech, WarmupKeyPrefix + "voice");
     }
 
     private async Task Warm(Agent agent, ThreadPipeline type, string key)
