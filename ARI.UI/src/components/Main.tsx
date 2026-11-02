@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import type { PipelineOption } from "../hooks/usePipelines"
 import Messages from "./Messages"
 import InputArea from "./InputArea"
@@ -6,7 +6,7 @@ import ThreadPanel from "./ThreadPanel"
 import DropOverlay from "./DropOverlay"
 import BrowserPane, { BrowserButton, BrowserNeedsYou } from "./BrowserPane"
 import { useBrowserSession } from "../hooks/useBrowserSession"
-import Orb from "./Orb"
+import Hud, { type HudWindow } from "./Hud"
 import type { AppMode, PendingAttachment } from "../App"
 import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
 import { apiFetch } from "../auth"
@@ -48,7 +48,14 @@ interface Props {
     speechMode:       boolean
     onBeginSpeech:    () => void
     speechCaption:    string | null
-    speechOrbState:   "listening" | "thinking" | "speaking"
+    speechState:      "listening" | "thinking" | "speaking"
+    speechInCall:     boolean
+    speechMuted:      boolean
+    speechCallStart:  number             // when the current call began (ms); windows come from replies after it
+    onSpeechMute:     () => void
+    onHangUp:         () => void
+    speechLevels:     { current: number[] }
+    speechMic:        { current: number }
     serverReady:      boolean
 }
 
@@ -62,10 +69,16 @@ export default function Main({
     onHeartbeatStart, onHeartbeatStop, commands,
     projects, selectedProject, onProjectChange,
     pipelines, selectedPipeline, onPipelineChange,
-    speechMode, onBeginSpeech, speechCaption, speechOrbState,
+    speechMode, onBeginSpeech, speechCaption, speechState,
+    speechInCall, speechMuted, speechCallStart, onSpeechMute, onHangUp, speechLevels, speechMic,
     safetyMode, onToggleSafety, serverReady,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
+    const [closedWindows,   setClosedWindows]   = useState<Set<string>>(new Set())
+    useEffect(() => { setClosedWindows(new Set()) }, [speechCallStart])
+    const hudWindows = useMemo(
+        () => speechInCall ? hudWindowsFrom(items, speechCallStart).filter(w => !closedWindows.has(w.id)) : [],
+        [items, speechInCall, speechCallStart, closedWindows])
     const [dropVisible,     setDropVisible]     = useState(false)
     const [dropHovering,    setDropHovering]    = useState<"thread" | "message" | null>(null)
     const dragCounterRef = useRef(0)
@@ -212,7 +225,19 @@ export default function Main({
                     </button>
 
                     {speechMode && activeThread ? (
-                        <Orb state={speechOrbState} caption={speechCaption} />
+                        <Hud
+                            state={!speechInCall || (speechMuted && speechState === "listening") ? "idle" : speechState}
+                            caption={speechCaption}
+                            windows={hudWindows}
+                            onCloseWindow={id => setClosedWindows(prev => new Set(prev).add(id))}
+                            inCall={speechInCall}
+                            muted={speechMuted}
+                            onMute={onSpeechMute}
+                            onHangUp={onHangUp}
+                            onCall={onBeginSpeech}
+                            levels={speechLevels}
+                            mic={speechMic}
+                        />
                     ) : (
                         <Messages
                             items={items}
@@ -275,4 +300,24 @@ export default function Main({
             <BrowserPane session={browser} />
         </div>
     )
+}
+
+// The visuals (show_visual) and images Ari put in her replies since the call began, each one a HUD window.
+const VISUAL_MARK = /<!--ari-visual:([^:]+):([^>]+?)-->/g
+const IMAGE_MARK  = /<!--ari-image:([^:]+):([^>]+?)-->/g
+function hudWindowsFrom(items: ThreadItem[], since: number): HudWindow[] {
+    const found = new Map<string, HudWindow>()
+    for (const item of items) {
+        if (item.type !== "ariResponse" || Date.parse(item.timestamp) < since - 2000) continue
+        const text = [item.content, ...(item.blocks ?? []).map(b => b.text ?? "")].join("\n")
+        for (const [re, kind] of [[VISUAL_MARK, "visual"], [IMAGE_MARK, "image"]] as const) {
+            for (const [, threadKey, file] of text.matchAll(re)) {
+                const src = `/api/v1/threads/${encodeURIComponent(threadKey)}/files/content?path=${encodeURIComponent(file)}`
+                // Showing the same visual again (same title) updates it in place rather than opening another window.
+                found.delete(src)
+                found.set(src, { id: src, kind, src, title: file.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ") })
+            }
+        }
+    }
+    return [...found.values()]
 }

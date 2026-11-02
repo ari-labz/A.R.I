@@ -384,7 +384,13 @@
     --col-code-msg-row-internal-prompt-bubble-colour-2: #7a8a96;
     --col-code-msg-row-internal-prompt-bubble-colour-3: #252f35;
     --col-sidebar-not-colour: rgba(0,0,0,.35);
-    --col-orb-label-colour: #8ec6de;
+    --col-hud-caption-colour: #cadde2;
+    --col-hud-dim-colour: #7f979d;
+    --col-hud-accent-colour: #5fa8b4;
+    --col-hud-panel-colour: rgba(22,32,36,.92);
+    --col-hud-panel-colour-2: #1b282d;
+    --col-hud-line-colour: #24343a;
+    --col-hud-end-colour: #d0574f;
     --col-btn-begin-speech-colour: #ffffff;
     --col-btn-begin-speech-colour-2: rgba(34,55,66,0.28);
     --col-html-colour: #ffffff;
