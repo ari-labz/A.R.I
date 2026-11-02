@@ -65,6 +65,13 @@ export async function startListening(
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     })
     const ctx = new AudioContext()
+    // Safari creates the context suspended when it isn't made directly inside a click (the mic prompt in between
+    // breaks that), and a suspended context never runs the processor below, so no audio is ever sent. Resume it now,
+    // and again on the next click or key if Safari still refuses.
+    const resume = () => { if (ctx.state === "suspended") ctx.resume().catch(() => { /* retried on next gesture */ }) }
+    resume()
+    document.addEventListener("pointerdown", resume)
+    document.addEventListener("keydown", resume)
     const source = ctx.createMediaStreamSource(stream)
     const processor = ctx.createScriptProcessor(4096, 1, 1)
     const inRate = ctx.sampleRate
@@ -133,6 +140,8 @@ export async function startListening(
         if (stopped) return
         stopped = true
         cancelAnimationFrame(rafId)
+        document.removeEventListener("pointerdown", resume)
+        document.removeEventListener("keydown", resume)
         if (levels) levels.current.fill(0)
         flushAudio()
         try { processor.disconnect(); source.disconnect() } catch { /* ignore */ }

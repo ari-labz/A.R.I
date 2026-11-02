@@ -164,6 +164,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         List<ThreadEntry> threads = allThreads
             .Where(kvp => kvp.Value.Pipeline is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech
                           && !kvp.Value.Internal
+                          && !kvp.Key.StartsWith(ARI.LLM.LLMModule.WarmupKeyPrefix)   // startup cache warm-ups, not conversations
                           && (callerIsAdmin || kvp.Value.OwnerId == callerId))
             .Select(kvp =>
             {

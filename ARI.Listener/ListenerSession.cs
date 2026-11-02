@@ -106,12 +106,25 @@ internal sealed class ListenerSession
     private async Task PumpBrowserToWhisper(ClientWebSocket toWhisper, CancellationToken ct)
     {
         byte[] buf = new byte[BROWSER_BUFFER_SIZE_BYTES];
+        // Audio health: how much mic audio arrives and how loud it is, logged a few seconds in and then every 30 s,
+        // so "she's stuck listening" can be told apart as no audio, silent audio, or audio Whisper didn't hear as speech.
+        long bytes = 0; int peak = 0; DateTime started = DateTime.UtcNow, nextReport = started.AddSeconds(5);
         while (browser.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
             WebSocketReceiveResult r;
             try { r = await browser.ReceiveAsync(buf, ct); } catch { break; }
             if (r.MessageType == WebSocketMessageType.Close) break;
             if (r.Count == 0) continue;
+            if (r.MessageType == WebSocketMessageType.Binary)
+            {
+                bytes += r.Count;
+                for (int i = 0; i + 1 < r.Count; i += 2) peak = Math.Max(peak, Math.Abs((int)BitConverter.ToInt16(buf, i)));
+            }
+            if (DateTime.UtcNow >= nextReport)
+            {
+                logger?.LogInformation("[Listener] mic audio: {Kb} KB in {Secs:0}s, peak level {Peak}/32767.", bytes / 1024, (DateTime.UtcNow - started).TotalSeconds, peak);
+                peak = 0; nextReport = DateTime.UtcNow.AddSeconds(30);
+            }
             WebSocketMessageType type = r.MessageType == WebSocketMessageType.Binary ? WebSocketMessageType.Binary : WebSocketMessageType.Text;
             try { await toWhisper.SendAsync(new ArraySegment<byte>(buf, 0, r.Count), type, r.EndOfMessage, ct); } catch { break; }
         }
