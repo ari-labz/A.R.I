@@ -610,6 +610,9 @@ public class ARI : BackgroundService, IModuleLifecycle
         if (llmModule is not null)
             await llmModule.Channels.Notify(new Notice { Kind = NoticeKind.Offline });
 
+        // Plugins first, while everything they use is still up.
+        await CompiledPlugins.StopAllAsync(TimeSpan.FromSeconds(6));
+
         speechQueue?.Dispose();
         synthesiser?.Dispose();
 

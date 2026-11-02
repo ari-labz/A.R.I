@@ -119,6 +119,14 @@ public static class CompiledPlugins
         }
     }
 
+    /// <summary>Stops every running plugin, each given a few seconds, so they let go of what they hold (Discord leaves
+    /// its voice calls and logs out) before ARI exits. Called on shutdown.</summary>
+    public static async Task StopAllAsync(TimeSpan perPlugin)
+    {
+        foreach (Loaded l in byId.Values)
+            try { await l.Plugin.StopAsync().WaitAsync(perPlugin); } catch { /* best-effort: shutdown carries on */ }
+    }
+
     public static async Task RemoveAsync(string id)
     {
         await gate.WaitAsync();
