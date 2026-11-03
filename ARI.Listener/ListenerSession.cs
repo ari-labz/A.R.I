@@ -32,12 +32,27 @@ internal sealed class ListenerSession
         "Do not use markdown, lists, headings, or code blocks — plain spoken sentences only. " +
         "You answer straight away, without thinking first. If something needs research, careful reasoning or several tools, " +
         "say in a few words that you're on it and hand it to spawn_agent, then keep talking; you'll get the result and can tell them.";
-    // Her name anywhere in a line wakes her straight away, like a smart speaker's wake word. Whisper spells it a few
-    // ways, and after "hey" it often blurs into "Hey RE" / "Hey RA", so those count too.
-    private static readonly Regex WakeWord = new(@"\b(ari|arie|arri|ary|aree)\b|\bhey,?\s+(re|ra|ree|r\.e|harry)\b",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    // The misheard forms, so she's told "Hey Ari" rather than puzzling over "Hey RE(?)".
+    // Her spoken name (Customisation → Branding) anywhere in a line wakes her straight away, like a smart speaker's wake
+    // word. For the default "Ari", Whisper spells it a few ways, and after "hey" it often blurs into "Hey RE" / "Hey RA",
+    // so those count too; a name she's been given counts as written.
+    private static Regex WakeWord => wakeWord ??= BuildWakeWord();
+    private static Regex? wakeWord;
+    static ListenerSession() => AssistantName.Changed += () => wakeWord = null;
+
+    private static Regex BuildWakeWord()
+    {
+        string spoken = AssistantName.SpokenName;
+        if (spoken.Equals(AssistantName.DefaultSpokenName, StringComparison.OrdinalIgnoreCase))
+            return new(@"\b(ari|arie|arri|ary|aree)\b|\bhey,?\s+(re|ra|ree|r\.e|harry)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        string words = string.Join(@"\W*", spoken.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(Regex.Escape));
+        return new($@"(?<!\w){words}(?!\w)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    }
+
+    // The default name's misheard forms, so she's told "Hey Ari" rather than puzzling over "Hey RE(?)".
     private static readonly Regex MisheardName = new(@"\bhey(\(\?\))?,?\s+(re|ra|ree|r\.e|harry)\b[,.]?(\(\?\))?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static string UnMishear(string text) =>
+        AssistantName.SpokenName.Equals(AssistantName.DefaultSpokenName, StringComparison.OrdinalIgnoreCase)
+            ? MisheardName.Replace(text, "Hey " + AssistantName.DefaultSpokenName) : text;
     // Right after she speaks, a reply needs no wake word (a smart speaker's follow-up mode). It counts from when her
     // reply is sent, and her audio is still playing for a few seconds after that.
     private static readonly TimeSpan FOLLOW_UP_WINDOW = TimeSpan.FromSeconds(12);
@@ -224,7 +239,7 @@ internal sealed class ListenerSession
 
         if (addressed)
         {
-            string heard = MisheardName.Replace(text!, "Hey Ari"), heardMarked = marked is null ? null : MisheardName.Replace(marked, "Hey Ari");
+            string heard = UnMishear(text!), heardMarked = marked is null ? null : UnMishear(marked);
             StartResponse(WithClarityNote(heard, clarity, heardMarked) + (why == "wake word" ? "" : MaybeNotForYou), ct);
         }
     }

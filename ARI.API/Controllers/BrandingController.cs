@@ -1,3 +1,4 @@
+using ARI.Common;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -6,9 +7,21 @@ namespace ARI.API.Controllers;
 [ApiController]
 public class BrandingController : ControllerBase
 {
-    // Public (AuthMiddleware.AnonPaths): the UI needs it before sign-in to style the sidebar logo.
+    // Public (AuthMiddleware.AnonPaths): the UI needs it before sign-in to style the sidebar logo and show her name.
     [HttpGet("api/v1/branding")]
-    public IActionResult State() => Ok(new { sidebarDerived = BrandingStore.SidebarDerived });
+    public IActionResult State() => Ok(new { sidebarDerived = BrandingStore.SidebarDerived, name = AssistantName.Name, spokenName = AssistantName.SpokenName });
+
+    /// <summary>What the AI is called: Name is how it's written, SpokenName how it's said (the voice wake word).</summary>
+    [HttpGet("api/v1/admin/assistant-name")]
+    public IActionResult GetName() => Ok(new { name = AssistantName.Name, spokenName = AssistantName.SpokenName,
+                                               defaultName = AssistantName.DefaultName, defaultSpokenName = AssistantName.DefaultSpokenName });
+
+    [HttpPut("api/v1/admin/assistant-name")]
+    public IActionResult SetName([FromBody] AssistantNameRequest req)
+    {
+        if (AssistantName.Set(req?.Name, req?.SpokenName) is { } error) return BadRequest(new { error });
+        return GetName();
+    }
 
     [HttpGet("api/v1/admin/branding")]
     public IActionResult List() => Ok(BrandingStore.Slots.Select(s => new
@@ -40,3 +53,5 @@ public class BrandingController : ControllerBase
         return Ok(new { ok = true });
     }
 }
+
+public record AssistantNameRequest(string? Name, string? SpokenName);

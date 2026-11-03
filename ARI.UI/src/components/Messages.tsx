@@ -4,6 +4,7 @@ import { setBubbleMd, setBubbleBlocks, ensureImageLightbox } from "../hooks/useM
 import type { ContentBlock } from "../hooks/useThreads"
 import { apiFetch } from "../auth"
 import { useVoiceAvailable } from "../hooks/usePipelines"
+import { useAssistantName } from "../hooks/useAssistantName"
 
 // ── Speak response ────────────────────────────────────────────────────────────
 let globalSpeakAbort: AbortController | null = null
@@ -417,9 +418,10 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     feedback?: Feedback
     onFeedbackChange: (timestamp: string, feedback: Feedback | null) => void
 }) {
+    const aiName = useAssistantName()
     const streaming = item.isStreaming ?? false
     const t = formatTime(item.timestamp)
-    const senderLabel = isInternal ? (agentName ?? "Agent") : "A·R·I"
+    const senderLabel = isInternal ? (agentName ?? "Agent") : aiName
 
     let thoughtEl: React.ReactNode = null
     if (!streaming && (item.totalSeconds != null || item.thinkingSeconds != null)) {
@@ -450,7 +452,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
         if (hasDetails) {
             thoughtEl = (
                 <details className="thought-block">
-                    <summary>A·R·I thought for {secs}s</summary>
+                    <summary>{aiName} thought for {secs}s</summary>
                     <div className="thought-content">
                         {rows.length > 0 && (
                             <div className="thought-times" style={{ fontSize: "12px", color: "var(--col-messages-line-449-text)", width: "fit-content", minWidth: "200px", marginBottom: "8px" }}>
@@ -469,7 +471,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
                 </details>
             )
         } else {
-            thoughtEl = <div style={{ fontSize: "12px", color: "var(--col-messages-line-465-text)", marginTop: "6px", userSelect: "none" }}>A·R·I thought for {secs}s</div>
+            thoughtEl = <div style={{ fontSize: "12px", color: "var(--col-messages-line-465-text)", marginTop: "6px", userSelect: "none" }}>{aiName} thought for {secs}s</div>
         }
     }
 
@@ -502,7 +504,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
                 <MdBubble content={item.content} blocks={item.blocks} baseClass="bubble" msgIndex={msgIndex} />}
             {streaming && (
                 <div className="typing-indicator">
-                    <span className="typing-prefix">A·R·I is</span>
+                    <span className="typing-prefix">{aiName} is</span>
                     <span className="phase-word">{phaseWord}</span>
                     <div className="typing-dots"><b /><b /><b /></div>
                 </div>
@@ -629,12 +631,13 @@ function CommandResponse({ item }: { item: ThreadItem }) {
 }
 
 function MemoryEvent({ item }: { item: ThreadItem }) {
+    const aiName = useAssistantName()
     const t = formatTime(item.timestamp)
     const changes = item.changes ?? []
     return (
         <div className="msg-row memory-event">
             <details className="thought-block memory-block">
-                <summary>A·R·I will remember this</summary>
+                <summary>{aiName} will remember this</summary>
                 <div className="thought-content memory-content">
                     {changes.map((c, i) => (
                         <div key={i} className="memory-change">
@@ -775,6 +778,7 @@ function animateDiffBadges(root: HTMLElement) {
 /// The "A·R·I will remember that" card. It is put in the chat at the point where she started remembering, so whatever happens after
 /// (a queued reply, new messages) stacks underneath it. It says "Adding to memory" with moving dots while she works, "Added to memory" after.
 function MemoryMarker({ done }: { done: boolean }) {
+    const aiName = useAssistantName()
     return (
         <div className="memory-marker" role="status" aria-live="polite">
             <div className="memory-marker-icon" aria-hidden="true">
@@ -787,7 +791,7 @@ function MemoryMarker({ done }: { done: boolean }) {
                 </svg>
             </div>
             <div className="memory-marker-text">
-                <span className="memory-marker-title">A·R·I will remember that</span>
+                <span className="memory-marker-title">{aiName} will remember that</span>
                 <span className="memory-marker-sub">
                     {done ? "Added to memory" : <>Adding to memory<span className="memory-marker-dots"><b /><b /><b /></span></>}
                 </span>
@@ -809,6 +813,7 @@ function ReplyQueued() {
 }
 
 export default function Messages({ items, isRemembering, activeThread, isInternal, agentName, processing, threadStatus }: Props) {
+    const aiName = useAssistantName()
     const bottomRef  = useRef<HTMLDivElement>(null)
     const messagesEl = useRef<HTMLDivElement>(null)
     // Whether to keep following the tail. True while the user is parked near the bottom; flips off the
@@ -968,7 +973,7 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
 
             {threadStatus === "syncing" && (
                 <div className="msg-row assistant" id="typing-indicator">
-                    <div className="sender">A·R·I</div>
+                    <div className="sender">{aiName}</div>
                     <div className="typing-indicator">
                         <span className="typing-prefix">Syncing</span>
                         <span className="phase-word">project files</span>

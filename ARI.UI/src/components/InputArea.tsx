@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, type KeyboardEvent } from "react"
+import { useAssistantName } from "../hooks/useAssistantName"
 import type { PipelineOption } from "../hooks/usePipelines"
 import type { PendingAttachment } from "../App"
 import type { Project } from "../hooks/useThreads"
@@ -46,6 +47,7 @@ export default function InputArea({
     onHeartbeatStart, onHeartbeatStop,
     codeMode, safetyMode, onToggleSafety,
 }: Props) {
+    const aiName = useAssistantName()
     const [input, setInput]         = useState("")
     const [amending, setAmending]   = useState(false)
     const [cmdMatches, setCmdMatches] = useState<Command[]>([])
@@ -234,7 +236,7 @@ export default function InputArea({
                     placeholder={
                         !serverReady ? "Waiting for a model server…"
                         : amending    ? "Describe the changes to the plan…"
-                        : "Message A·R·I..."
+                        : `Message ${aiName}...`
                     }
                     onChange={e => { setInput(e.target.value); updateCmdPopup(e.target.value) }}
                     onKeyDown={handleKeyDown}
