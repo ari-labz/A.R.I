@@ -266,3 +266,40 @@ export function useTypingHeartbeat(getThreadKey: () => string | null) {
 
     return { start, stop }
 }
+
+// A pause this long in typing sends the draft, so Recall can open the notes the message will need before it's sent.
+const DRAFT_PAUSE_MS  = 600
+const DRAFT_MIN_WORDS = 3
+
+/** Sends what's being typed after each pause. No thread yet (a new chat) sends it without a key. */
+export function useDraftPrefetch(getThreadKey: () => string | null) {
+    const timer    = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const lastSent = useRef("")
+
+    function cancel() {
+        if (timer.current) { clearTimeout(timer.current); timer.current = null }
+    }
+
+    function update(text: string) {
+        cancel()
+        const draft = text.trim()
+        if (draft.split(/\s+/).length < DRAFT_MIN_WORDS || draft === lastSent.current) return
+        timer.current = setTimeout(() => {
+            timer.current = null
+            lastSent.current = draft
+            apiFetch("/api/v1/drafts", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body:    JSON.stringify({ threadKey: getThreadKey(), text: draft }),
+            }).catch(() => {})
+        }, DRAFT_PAUSE_MS)
+    }
+
+    // Sending (or clearing the box) ends the draft: nothing more goes out for it.
+    function clear() {
+        cancel()
+        lastSent.current = ""
+    }
+
+    return { update, clear }
+}

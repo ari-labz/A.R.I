@@ -563,7 +563,7 @@ public abstract class Agent
                 // below before tool execution, which is file/network I/O, not GPU work, and shouldn't hold
                 // the inference slot while it runs.
                 LLMQueue.Slot? slot = Queue is not null
-                    ? await Queue.AcquireAsync((InferencePriority)Priority, turn.Ct)
+                    ? await Queue.AcquireAsync(turn.Opts.Priority ?? (InferencePriority)Priority, turn.Ct)
                     : null;
                 using CancellationTokenSource stepCts = slot is null
                     ? CancellationTokenSource.CreateLinkedTokenSource(turn.Ct)
@@ -2000,7 +2000,7 @@ public abstract class Agent
     private const string BlockRule = "--------------------------------";
 
     internal const string NothingNew = "Nothing new.";
-    private static bool IsNothingNew(string? notes) =>
+    internal static bool IsNothingNew(string? notes) =>
         string.IsNullOrWhiteSpace(notes)
         // Recall sometimes echoes the history's "ARI: " speaker prefix.
         || System.Text.RegularExpressions.Regex.Replace(notes.Trim(), @"^ARI:\s*", "").TrimEnd('.').Equals(NothingNew.TrimEnd('.'), StringComparison.OrdinalIgnoreCase);
@@ -2037,6 +2037,7 @@ public abstract class Agent
         }
 
         List<string> perThread = new();
+        if (thread.OpenNotes is { } notes)          perThread.Add(notes);
         if (thread.PlatformContext is { } platform) perThread.Add(platform);
         if (thread.Brief is { } brief)              perThread.Add(brief);
         if (thread.IsGuarded)                       perThread.Add(PrivacyPolicyStore.Get());
