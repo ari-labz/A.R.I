@@ -3,6 +3,7 @@ import type { ThreadItem, Attachment } from "../hooks/useThreads"
 import { setBubbleMd, setBubbleBlocks, ensureImageLightbox } from "../hooks/useMarkdown"
 import type { ContentBlock } from "../hooks/useThreads"
 import { apiFetch } from "../auth"
+import { useVoiceAvailable } from "../hooks/usePipelines"
 
 // ── Speak response ────────────────────────────────────────────────────────────
 let globalSpeakAbort: AbortController | null = null
@@ -123,6 +124,7 @@ async function speakResponse(content: string, setSpeaking: (v: boolean) => void)
 
 function SpeakButton({ content }: { content: string }) {
     const [speaking, setSpeaking] = useState(false)
+    const voiceAvailable = useVoiceAvailable()
 
     const handleClick = useCallback(() => {
         // Create/unpause the audio context inside the click itself: Safari only lets a context start from a user
@@ -138,6 +140,8 @@ function SpeakButton({ content }: { content: string }) {
         }
     }, [speaking, content])
 
+    // No voice module, nothing to speak with: hide the button rather than offer one that fails.
+    if (!voiceAvailable) return null
     return (
         <button
             className={`btn-speak${speaking ? " speaking" : ""}`}
