@@ -521,7 +521,25 @@ public class VoiceController(
         if (!Directory.Exists(dir))
             return NotFound(new { error = $"Model '{modelName}' not found." });
 
+        if (voiceTraining?.Current is { IsRunning: true } job && job.ModelName == modelName)
+            return Conflict(new { error = "Pause or stop this model's training before deleting it." });
+
         Directory.Delete(dir, recursive: true);
+
+        // RVC keeps its prepared clips and checkpoints under rvc/logs/<name> and its exported weights under
+        // rvc/assets/weights; left behind, a new voice with the same name would silently reuse the old clips.
+        if (engine == "KokoroRVC")
+        {
+            string rvc = Path.Combine(Paths.VoiceModules, engine, "rvc");
+            string exp = RvcExperimentName(modelName);
+            string expDir = Path.Combine(rvc, "logs", exp);
+            if (Directory.Exists(expDir)) Directory.Delete(expDir, recursive: true);
+            foreach (string weights in new[] { $"{exp}.pth", $"{exp}_export.pth" })
+            {
+                string path = Path.Combine(rvc, "assets", "weights", weights);
+                if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+            }
+        }
         logger.LogInformation("[Voice] Deleted {Engine} model '{ModelName}'", engine, modelName);
         return Ok(new { ok = true, deleted = modelName, engine });
     }
@@ -681,7 +699,7 @@ public class VoiceController(
 
     private async Task EnsureEngineServer(string engine, int port, string voiceDir)
     {
-        if (engine == "StyleTTS2") return;
+        // Every engine, StyleTTS2 included: the engine being trained is often not the one that's speaking.
         using (HttpClient probe = new() { Timeout = TimeSpan.FromSeconds(2) })
             try { if ((await probe.GetAsync($"http://localhost:{port}/health")).IsSuccessStatusCode) return; } catch { /* not running */ }
 
