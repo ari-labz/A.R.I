@@ -72,7 +72,7 @@ internal static class SubagentManager
     /// <summary>Subagents are offered to conversations, not to internal threads (no nesting) or Discord
     /// server channels (anyone there could direct them).</summary>
     internal static bool AvailableFor(Thread t) =>
-        Agent is not null && !t.Internal && !t.Key.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
+        Agent is not null && !t.Internal && !t.IsSharedChannel;
 
     /// <summary>Starts a subagent on its own internal thread with a title, a task prompt and optional context (it
     /// starts with a blank memory, so context carries whatever it needs from this conversation). Returns the run,

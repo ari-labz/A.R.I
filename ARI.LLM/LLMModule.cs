@@ -533,6 +533,7 @@ public class LLMModule : ILLMModule, IDisposable
             return existing;
         }
         Thread thread = new Thread(type, threadKey, platformContext);
+        Channels.StampPlace(thread);
         threads[threadKey] = thread;
         // list_tools/request_tools are always warm (issue #126) and universal — no agent-identity gate.
         // What a group actually resolves to depends on ToolFactories reading this thread's bound context
@@ -544,7 +545,7 @@ public class LLMModule : ILLMModule, IDisposable
         new ToolSearch(thread).Register(thread);
         // The reflex for corrections and "remember this" is always on for people-facing chats.
         if (type is ThreadPipeline.Dialogue or ThreadPipeline.Speech) new RememberTool(thread).Register(thread);
-        bool isChannel = Channels.IsChannelKey(threadKey);
+        bool isChannel = thread.Medium == ThreadMedium.Channel;
         // propose_persona_edit is hot for the same reason: the moment worth proposing a persona change is a
         // moment the user is criticising her, and a list_tools → request_tools discovery hop is not something
         // to rely on mid-apology. Chat clients only — the proposal is approved by clicking a diff, which a
@@ -1282,7 +1283,7 @@ public class LLMModule : ILLMModule, IDisposable
         NotifyWatchers(threadKey);   // push "prefilling" snapshot immediately so the watch client doesn't wait for the first delta
 
         // Conversations on chat services always use Dialogue.
-        if (Channels.IsChannelKey(threadKey))
+        if (threads.TryGetValue(threadKey, out Thread? channelThread) && channelThread.Medium == ThreadMedium.Channel)
         {
             Thread dlgThread = GetOrCreateThread(ThreadPipeline.Dialogue, threadKey, platformContext);
             return await graphPipeline!.ExecuteAsync(dlgThread, threadKey, prompt, username, platformContext, onDelta, cts, messageAttachments);
