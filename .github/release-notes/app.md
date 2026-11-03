@@ -1,10 +1,11 @@
-Changes since v0.9.1:
+Changes since v0.9.3:
 
-- Faster replies: A·R·I now answers within a few seconds in chat and in voice, instead of up to a minute.
-- New voice screen: the orb is replaced by A·R·I's HUD, a layered 3D face that idles at an angle and turns to face you when you speak to her. Charts, pages and images she shows during a call open as tidy windows, and her face moves to the corner while they're up. The call bar has a mic meter, Mute and Hang up.
-- Wake word: in a voice call she stays idle until you say "Ari", reply right after she has spoken, or say something she judges is meant for her. A TV, a phone call or people talking in the room no longer set her off, and she goes back to idle after a few seconds of quiet.
-- Unclear speech: when the speech recogniser was guessing (wind, noise, a cutting-out mic), A·R·I is told which words were uncertain and asks you to repeat instead of answering something you didn't say.
-- KokoroRVC voice engine: train a voice on it from the Voice Synthesis page like StyleTTS2, with pause and resume, and listen to a paused voice before training further. It matches the trained voice's pitch automatically.
-- Voices page: voices show as a grid of cards with engine icons. You can rename a voice (its training carries on under the new name) and give it its own picture.
-- The speaker button on a reply now plays in Safari and the desktop app.
-- Fixes: the microphone in Safari never being heard, startup warm-up chats showing in the sidebar, plugins and the model server being left running after A·R·I shuts down.
+- Rename her: A·R·I is the default, but you can give the AI her own name (and how it's said, for the wake word) in Customisation → Branding. Prompts use an {AI} token wherever they mean her.
+- Commands: read-only commands (grep, cat, ls, git log and the like) run without asking. Anything else needs your OK the first time, one command at a time, with Allow once or Allow every time. Chaining commands with &&, |, ; or a new line can't slip one past the check, and dangerous ones ask every time.
+- Desktop app: A·R·I asks before changing a file outside the open project.
+- Projects: choose what new chats in a project start in: Auto, Dialogue, Code, or a pipeline you've made.
+- Voices: Voice Settings now live on each voice's own page. Picking a voice loads the voice module first, and you can test any saved checkpoint before choosing it.
+- Attachments: drop files onto one zone to attach them to a message.
+- API: a client app can give a thread hidden context she reads every turn (POST /threads with "context", or /threads/{key}/context).
+- Logs start with the A·R·I version, Docker or native, the OS and .NET, so a pasted log says which A·R·I it came from.
+- Fixes: voice training failing to start for StyleTTS2 or KokoroRVC, KokoroRVC no longer asks for transcripts, the loss graph keeping one point per epoch, the speaker button showing when voice isn't running, the control panel's window buttons on Windows and dragging its header in the desktop app.
