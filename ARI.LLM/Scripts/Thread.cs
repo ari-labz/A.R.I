@@ -359,6 +359,10 @@ public class Thread
     /// <summary>A server channel on a chat service: anyone there could be talking to her.</summary>
     public bool IsSharedChannel => Medium == ThreadMedium.Channel && InSharedChannel;
 
+    /// <summary>Context an API client gives this thread (the end user's name, role, which screen they're on): read by the
+    /// model on every turn, never shown as a message. Set with POST /threads or PUT /threads/{key}/context.</summary>
+    public string? ApiContext { get; set; }
+
     /// <summary>The chat service this conversation is on ("discord"), when <see cref="Medium"/> is Channel.</summary>
     public string? ChannelService { get; set; }
 
