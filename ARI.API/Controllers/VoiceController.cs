@@ -291,6 +291,7 @@ public class VoiceController(
             return BadRequest(new { error = "text is required." });
         if (req.Text.Length > 5000)
             return BadRequest(new { error = "text is too long (5000 characters at most)." });
+        if (await EnsureVoiceModule() is { } notReady) return notReady;
         if (voiceService?.IsReady != true)
             return StatusCode(503, new { error = "Voice module is not running." });
 
@@ -311,7 +312,9 @@ public class VoiceController(
                 return BadRequest(new { error = "That checkpoint is not one of the installed voices." });
             if (!System.IO.File.Exists(req.CheckpointPath))
                 return NotFound(new { error = $"Checkpoint not found: {req.CheckpointPath}" });
-            engineParams["checkpointPath"] = req.CheckpointPath;
+            // The engine keeps whichever checkpoint it loaded last, so "latest" (model.pth) is loaded the same way.
+            if (voiceService.Synthesiser is VoiceModuleSynthesiser engineServer)
+                await engineServer.LoadCheckpoint(req.CheckpointPath, ct);
         }
 
         byte[] wav = await voiceService.Synthesise(req.Text, engineParams.Count > 0 ? engineParams : null, ct);
@@ -337,6 +340,14 @@ public class VoiceController(
         string modelPth = Path.Combine(modelDir, "model.pth");
         if (System.IO.File.Exists(modelPth))
             checkpoints.Add(new { label = "latest", epoch = (int?)null, path = modelPth });
+
+        // KokoroRVC keeps a playable copy of every save next to model.pth, named "<voice>_epoch<N>.pth".
+        string epochPrefix = modelName + "_epoch";
+        checkpoints.AddRange(Directory.GetFiles(modelDir, epochPrefix + "*.pth")
+            .Select(f => int.TryParse(Path.GetFileNameWithoutExtension(f)[epochPrefix.Length..], out int epoch) ? (Epoch: epoch, Path: f) : (Epoch: -1, Path: f))
+            .Where(e => e.Epoch >= 0)
+            .OrderByDescending(e => e.Epoch)
+            .Select(e => (object)new { label = $"epoch {e.Epoch}", epoch = (int?)e.Epoch, path = e.Path }));
 
         string checkpointsDir = Path.Combine(modelDir, "Checkpoints");
         if (Directory.Exists(checkpointsDir))
@@ -446,8 +457,10 @@ public class VoiceController(
     {
         if (!SafeNames.IsSafe(req.Engine) || !SafeNames.IsSafe(req.ModelName))
             return BadRequest(new { error = "That name is not allowed." });
-        if (voiceService is null)
-            return StatusCode(503, new { error = "Voice module is not running." });
+        if (await EnsureVoiceModule() is { } notReady) return notReady;
+        // Loading a voice restarts its engine's server, which is the one a training run on that engine is using.
+        if (voiceTraining?.Current is { IsRunning: true } && trainingEngine == req.Engine)
+            return Conflict(new { error = $"A {req.Engine} voice is training on the same speech engine. Pause the training before switching voice." });
         if (string.IsNullOrWhiteSpace(req.Engine) || string.IsNullOrWhiteSpace(req.ModelName))
             return BadRequest(new { error = "engine and modelName are required." });
         if (string.IsNullOrEmpty(vsConfig.VoicesPath))
@@ -697,8 +710,27 @@ public class VoiceController(
     // startup arguments and is started by the voice module.
     private static readonly Dictionary<string, VoiceModuleSynthesiser> trainingServers = new();
 
+    // The engine the current training run uses: a voice switch on that engine would restart the server it trains on.
+    private static string? trainingEngine;
+
+    /// <summary>Starts the Voice module if it isn't running (it skips loading at boot when no voice existed yet), so picking
+    /// or testing a voice loads the module first and then the voice. Returns the error to send, or null when it is running.
+    /// Refused while a voice trains: the module's speech engine would take over the port the training server uses.</summary>
+    private async Task<IActionResult?> EnsureVoiceModule()
+    {
+        if (voiceService is not null) return null;
+        if (voiceTraining?.Current is { IsRunning: true })
+            return Conflict(new { error = "The voice module can't load while a voice is training (they share the speech engine). Pause the training first." });
+        if (Modules.Lifecycle is not { } lifecycle)
+            return StatusCode(503, new { error = "Voice module is not running." });
+        logger.LogInformation("[Voice] Starting the voice module to load a voice.");
+        string? error = await lifecycle.StartModule("Voice");
+        return error is null && voiceService is not null ? null : StatusCode(503, new { error = error ?? "The voice module could not start." });
+    }
+
     private async Task EnsureEngineServer(string engine, int port, string voiceDir)
     {
+        trainingEngine = engine;
         // Every engine, StyleTTS2 included: the engine being trained is often not the one that's speaking.
         using (HttpClient probe = new() { Timeout = TimeSpan.FromSeconds(2) })
             try { if ((await probe.GetAsync($"http://localhost:{port}/health")).IsSuccessStatusCode) return; } catch { /* not running */ }
