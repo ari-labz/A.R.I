@@ -80,7 +80,7 @@ export default function Main({
         () => speechInCall ? hudWindowsFrom(items, speechCallStart).filter(w => !closedWindows.has(w.id)) : [],
         [items, speechInCall, speechCallStart, closedWindows])
     const [dropVisible,     setDropVisible]     = useState(false)
-    const [dropHovering,    setDropHovering]    = useState<"thread" | "message" | null>(null)
+    const [dropHovering,    setDropHovering]    = useState(false)
     const dragCounterRef = useRef(0)
     const threadFileRef  = useRef<HTMLInputElement>(null)
 
@@ -98,7 +98,7 @@ export default function Main({
         dragCounterRef.current--
         if (dragCounterRef.current <= 0) {
             dragCounterRef.current = 0
-            setDropVisible(false); setDropHovering(null)
+            setDropVisible(false); setDropHovering(false)
         }
     }, [])
     const handleDragOver = useCallback((e: DragEvent) => {
@@ -107,7 +107,7 @@ export default function Main({
     const handleDrop = useCallback((e: DragEvent) => {
         e.preventDefault()
         dragCounterRef.current = 0
-        setDropVisible(false); setDropHovering(null)
+        setDropVisible(false); setDropHovering(false)
     }, [])
 
     useEffect(() => {
@@ -148,27 +148,9 @@ export default function Main({
         return true
     }
 
-    async function handleDropThread(files: File[]) {
-        dragCounterRef.current = 0
-        setDropVisible(false); setDropHovering(null)
-        if (!files.length || takePluginFiles(files)) return
-        const succeeded = await onUploadThreadFiles(files)
-        if (succeeded.length) {
-            setThreadPanelOpen(false)
-            // bounce animation
-            const panel = document.getElementById("thread-panel")
-            if (panel) {
-                panel.classList.remove("panel-peek")
-                void panel.offsetWidth
-                panel.classList.add("panel-peek")
-                panel.addEventListener("animationend", () => panel.classList.remove("panel-peek"), { once: true })
-            }
-        }
-    }
-
     function handleDropMessage(files: File[]) {
         dragCounterRef.current = 0
-        setDropVisible(false); setDropHovering(null)
+        setDropVisible(false); setDropHovering(false)
         if (files.length && !takePluginFiles(files)) onUploadMessageFiles(files)
     }
 
@@ -209,7 +191,6 @@ export default function Main({
                     <DropOverlay
                         visible={dropVisible}
                         hovering={dropHovering}
-                        onDropThread={handleDropThread}
                         onDropMessage={handleDropMessage}
                     />
 
