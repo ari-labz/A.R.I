@@ -21,7 +21,7 @@ import { startTour } from "./tour"
 import { initPush } from "./push"
 import UserPreferences from "./components/UserPreferences"
 import { apiFetch, fetchMe, setToken, getToken, type AuthUser } from "./auth"
-import { decideCommand, sanitizeAllowlist, type CommandDecision, type SegmentInfo } from "./commandApproval"
+import { decideCommand, cleanAllowlist, type CommandDecision, type SegmentInfo } from "./commandApproval"
 import "./styles/app.css"
 
 export type AppMode = "idle" | "active"
@@ -67,7 +67,8 @@ const COMMANDS = [
 export { COMMANDS }
 
 // ── run_command authorization ─────────────────────────────────────────────────
-// The rules (what a command's key is, what counts as dangerous, what needs a prompt) live in commandApproval.ts.
+// The rules (what a command's key is, what is read-only or dangerous, what needs a prompt) live on the server (ARI.LLM
+// CommandPolicy, shared with the shell tool); commandApproval.ts runs the prompt loop around them.
 // Here: the decision a prompt can return, and the global allowlist's load/save.
 // Loads the global allowlist from the server (the source of truth, shared by every project and client). Entries an
 // older version kept in the desktop app's own store are merged in once, so nothing the user already approved is lost.
@@ -75,12 +76,12 @@ async function loadCommandAllowlist(): Promise<string[]> {
     let server: string[] | null = null
     try {
         const res = await apiFetch("/api/v1/admin/commandAllowlist")
-        if (res.ok) server = sanitizeAllowlist((await res.json())?.commands)
+        if (res.ok) server = cleanAllowlist((await res.json())?.commands)
     } catch { /* offline or not an admin — fall through to the local store */ }
     let local: string[] = []
-    try { local = sanitizeAllowlist(await env.getCommandAllowlist()) } catch { /* no local store */ }
+    try { local = cleanAllowlist(await env.getCommandAllowlist()) } catch { /* no local store */ }
     if (server === null) return local
-    const merged = sanitizeAllowlist([...server, ...local])
+    const merged = cleanAllowlist([...server, ...local])
     if (merged.length !== server.length) await saveCommandAllowlist(merged)
     return merged
 }
@@ -750,6 +751,14 @@ export default function App() {
                         // whole command. Dangerous forms (git reset --hard, push --force, rm -rf, …) always prompt and
                         // can only be allowed this once — they are never stored. See commandApproval.ts.
                         const decision = await decideCommand(command, commandAllowlistRef.current, {
+                            check: async (line) => {
+                                try {
+                                    const res = await apiFetch("/api/v1/admin/commandAllowlist/check", {
+                                        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: line }),
+                                    })
+                                    return res.ok ? ((await res.json()).segments as SegmentInfo[]) : null
+                                } catch { return null }
+                            },
                             ask: (segment) => {
                                 console.warn(`[ToolSocket] run_command needs a decision  callId=${callId}  cmd=${segment.text}  tier=${segment.tier}`)
                                 return new Promise<CommandDecision>(resolve => setPendingCommand({ command, segment, resolve }))
@@ -851,16 +860,19 @@ export default function App() {
             // A server tool is waiting on approval — reuse the run_command prompt. When the request goes away
             // (answered on another device, or timed out) close the prompt if it's still showing.
             if (e.approval && e.approval.id !== shownApprovalRef.current) {
-                const { id, title, command } = e.approval
+                // A shell command carries the one command being asked about: the prompt then explains it and can offer
+                // "Allow … every time" (stored on the server, which shares the list with run_command).
+                const { id, title, command, segment } = e.approval
                 shownApprovalRef.current = id
                 setPendingCommand({
-                    command, title,
+                    command, segment: segment ?? undefined, title: segment ? undefined : title,
                     resolve: d => {
                         shownApprovalRef.current = null
                         apiFetch(`/api/v1/threads/${key}/approvals/${id}`, {
                             method: "POST", headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ allow: d !== "deny" }),
-                        }).catch(() => {})
+                            body: JSON.stringify({ allow: d !== "deny", decision: d === "whitelist" ? "always" : d }),
+                        }).then(() => { if (d === "whitelist" && segment?.key) commandAllowlistRef.current = cleanAllowlist([...commandAllowlistRef.current, segment.key]) })
+                          .catch(() => {})
                     },
                 })
             } else if (e.approval === null && shownApprovalRef.current) {
@@ -1529,7 +1541,7 @@ export default function App() {
                                     onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>
                                 {pendingCommand.segment ? "Allow just this time" : "Allow once"}
                             </button>
-                            {!pendingCommand.title && pendingCommand.segment?.tier === "allowable" && pendingCommand.segment.key && (
+                            {pendingCommand.segment?.tier === "allowable" && pendingCommand.segment.key && (
                                 <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1413-background)", color: "var(--col-app-line-1413-text)" }}
                                         onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>
                                     Allow "{pendingCommand.segment.key}" every time

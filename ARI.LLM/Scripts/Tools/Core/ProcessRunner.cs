@@ -77,82 +77,87 @@ internal static class ProcessRunner
     }
 }
 
-/// <summary>Whether a command needs the owner's approval before it runs. Plain read-only commands go straight
-/// through; anything else asks in the app (the same Allow / Deny prompt git uses) unless "approve everything"
-/// is switched on.</summary>
+/// <summary>Whether a command needs the owner's approval before it runs. Read-only commands go straight through; every
+/// other command in the line must be on the shared allowlist (see <see cref="CommandPolicy"/> and CommandAllowlistStore),
+/// or the owner is asked about it in the app, one command at a time: Deny, Allow once, or Allow every time. Dangerous and
+/// opaque commands ask every time. "Approve everything" skips all of it.</summary>
 internal static class ShellGate
 {
     private static string SettingsFile => Path.Combine(Paths.PersistentData, "shell_settings.json");
+    private static readonly object MigrateLock = new();
+    private static bool migrated;
 
-    private sealed record Settings(bool AutoApprove, List<string> Allow);
-
-    private static Settings Read()
+    private static bool ReadAutoApprove()
     {
         try
         {
-            if (!File.Exists(SettingsFile)) return new(false, new());
+            if (!File.Exists(SettingsFile)) return false;
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(SettingsFile));
-            bool auto = doc.RootElement.TryGetProperty("autoApprove", out JsonElement v) && v.ValueKind == JsonValueKind.True;
-            List<string> allow = doc.RootElement.TryGetProperty("allow", out JsonElement a) && a.ValueKind == JsonValueKind.Array
-                ? a.EnumerateArray().Select(e => (e.GetString() ?? "").Trim()).Where(x => x.Length > 0).Distinct().ToList() : new();
-            return new(auto, allow);
+            return doc.RootElement.TryGetProperty("autoApprove", out JsonElement v) && v.ValueKind == JsonValueKind.True;
         }
-        catch { return new(false, new()); }
+        catch { return false; }
     }
 
-    internal static bool AutoApprove => Read().AutoApprove;
-    internal static List<string> AllowList => Read().Allow;
+    // The shell used to keep its own allow list in shell_settings.json; its entries join the shared list once, as keys.
+    private static void MigrateOldAllowList()
+    {
+        lock (MigrateLock)
+        {
+            if (migrated) return;
+            migrated = true;
+            try
+            {
+                if (!File.Exists(SettingsFile)) return;
+                using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(SettingsFile));
+                if (!doc.RootElement.TryGetProperty("allow", out JsonElement a) || a.ValueKind != JsonValueKind.Array || a.GetArrayLength() == 0) return;
+                List<string> keys = a.EnumerateArray()
+                    .Select(e => CommandPolicy.Analyze(e.GetString() ?? "").FirstOrDefault())
+                    .Where(seg => seg is { Tier: CommandTier.Allowable, Key: { } k } && CommandPolicy.StorableKey(k))
+                    .Select(seg => seg!.Key!).ToList();
+                CommandAllowlistStore.Set(CommandAllowlistStore.Get().Concat(keys));
+                File.WriteAllText(SettingsFile, JsonSerializer.Serialize(new { autoApprove = ReadAutoApprove() }, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch { /* keep the old file as it is */ }
+        }
+    }
+
+    internal static bool AutoApprove => ReadAutoApprove();
+
+    internal static List<string> AllowList
+    {
+        get { MigrateOldAllowList(); return CommandAllowlistStore.Get(); }
+    }
 
     internal static void Save(bool autoApprove, IEnumerable<string> allow)
     {
+        MigrateOldAllowList();
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile)!);
-        List<string> clean = allow.Select(x => x.Trim()).Where(x => x.Length > 0 && x.Length <= 200).Distinct().Take(500).ToList();
-        File.WriteAllText(SettingsFile, JsonSerializer.Serialize(new { autoApprove, allow = clean }, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(SettingsFile, JsonSerializer.Serialize(new { autoApprove }, new JsonSerializerOptions { WriteIndented = true }));
+        CommandAllowlistStore.Set(allow.Select(x => x.Trim()).Where(CommandPolicy.StorableKey));
     }
 
     internal static void SetAutoApprove(bool on) => Save(on, AllowList);
 
-    /// <summary>True when every part of the command is either read-only or starts with something on the owner's allowed list ("git commit",
-    /// "npm run build"). Command substitution and process substitution always ask, since they can hide another command.</summary>
-    internal static bool IsAllowed(string command, List<string> allow)
-    {
-        if (command.Contains('`') || command.Contains("$(") || command.Contains("<(")) return false;
-        foreach (string segment in System.Text.RegularExpressions.Regex.Split(command, @"\|\||&&|;|\||\n"))
-        {
-            string seg = segment.Trim();
-            if (seg.Length == 0 || IsReadOnly(seg)) continue;
-            if (!allow.Any(a => seg.Equals(a, StringComparison.Ordinal) || seg.StartsWith(a + " ", StringComparison.Ordinal))) return false;
-        }
-        return true;
-    }
-
-    private static readonly HashSet<string> ReadOnly = new(StringComparer.Ordinal)
-    {
-        "ls", "pwd", "echo", "date", "whoami", "uname", "which", "df", "du", "wc", "head", "tail", "sort", "uniq", "grep", "rg",
-        "find", "tree", "file", "stat", "ps", "env", "printenv", "hostname", "uptime", "id", "cd", "true", "false", "basename", "dirname",
-    };
-    private static readonly HashSet<string> ReadOnlyGit = new(StringComparer.Ordinal) { "status", "log", "diff", "show", "branch", "rev-parse", "ls-files", "remote" };
-
-    internal static bool IsReadOnly(string command)
-    {
-        if (command.Contains('>') || command.Contains('`') || command.Contains("$(") || command.Contains("<(") || command.Contains(" -delete") || command.Contains(" -exec")) return false;
-        foreach (string segment in System.Text.RegularExpressions.Regex.Split(command, @"\|\||&&|;|\||\n"))
-        {
-            string[] words = segment.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (words.Length == 0) continue;
-            if (words[0] == "git") { if (words.Length < 2 || !ReadOnlyGit.Contains(words[1])) return false; }
-            else if (!ReadOnly.Contains(words[0])) return false;
-        }
-        return true;
-    }
-
-    /// <summary>Null when the command may run; otherwise the message to give Ari.</summary>
+    /// <summary>Null when the command may run; otherwise the message to give Ari. allowListed is false for things that
+    /// aren't shell command lines (code to run, an SSH host): those are asked about as a whole, once, every time.</summary>
     internal static async Task<string?> Approve(Thread? thread, string title, string command, bool allowListed = true)
     {
         if (thread is null || !thread.IsAdminChat) return "Only the owner, chatting in the app, can run commands.";
-        Settings settings = Read();
-        if (settings.AutoApprove || IsReadOnly(command) || (allowListed && IsAllowed(command, settings.Allow))) return null;
-        return await ToolApprovals.RequestAsync(thread, title, command) ? null : "The owner didn't approve this, so it was not run. Ask them what they'd like instead.";
+        if (AutoApprove) return null;
+        const string denied = "The owner didn't approve this, so it was not run. Ask them what they'd like instead.";
+        if (!allowListed)
+            return await ToolApprovals.DecideAsync(thread, title, command) == ApprovalDecision.Deny ? denied : null;
+
+        // Every command in the line that isn't read-only or already allowed is asked about on its own; one denial stops
+        // the whole line. "Every time" stores the command's key, never for a dangerous or opaque one.
+        foreach (CommandSegment segment in CommandPolicy.NeedingDecision(command, AllowList))
+        {
+            ApprovalDecision decision = await ToolApprovals.DecideAsync(thread, title, command, segment);
+            if (decision == ApprovalDecision.Deny) return denied;
+            if (decision == ApprovalDecision.Always && segment is { Tier: CommandTier.Allowable, Key: { } key } && CommandPolicy.StorableKey(key))
+                CommandAllowlistStore.Add(key);
+        }
+        return null;
     }
 }
 

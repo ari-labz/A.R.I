@@ -224,7 +224,7 @@ export interface WatchEvent {
     remembering?: boolean
     isCodeMode?: boolean
     // A server-side tool waiting on the user's OK (a destructive git/gh command); null once answered or expired.
-    approval?:   { id: string; title: string; command: string } | null
+    approval?:   { id: string; title: string; command: string; segment?: import("../commandApproval").SegmentInfo | null } | null
 }
 
 export interface AppEvent {
