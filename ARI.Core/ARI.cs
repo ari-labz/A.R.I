@@ -69,6 +69,7 @@ public class ARI : BackgroundService, IModuleLifecycle
     private async Task Startup(CancellationToken stoppingToken)
     {
         appStoppingToken = stoppingToken;
+        _logger.LogInformation("{Build}", BuildInfo.Summary);
         _logger.LogInformation("ARI is starting...");
 
         // Clear any stale ARI instance (and its child servers) before we bind ports — otherwise a
