@@ -104,6 +104,15 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 /* Header logo: height-restricted, scaled (aspect ratio kept) to fit; the header never resizes. */
 #cp-logo  { height: 28px; width: auto; max-width: 200px; object-fit: contain; object-position: left center; display: block; flex-shrink: 0; }
 #cp-title { font-size: 14px; font-weight: 600; color: var(--text-dim); letter-spacing: .01em; }
+/* In the desktop app the window has no title bar: the header is what you drag it by, and on Windows it carries the
+   minimise / maximise / close buttons (macOS draws its own traffic lights). */
+body.cp-desktop #cp-header { -webkit-app-region: drag; app-region: drag; }
+body.cp-desktop #cp-header button, body.cp-desktop #cp-header a { -webkit-app-region: no-drag; app-region: no-drag; }
+#cp-win-controls { display: none; align-self: stretch; margin-right: -24px; }
+body.cp-win32 #cp-win-controls { display: flex; }
+#cp-win-controls button { width: 46px; display: flex; align-items: center; justify-content: center; background: none; border: none; padding: 0; cursor: pointer; color: var(--col-win-controls-button-colour); transition: color .1s, background .1s; }
+#cp-win-controls button:hover { color: var(--col-win-controls-button-hover-colour); background: var(--col-win-controls-button-hover-colour-2); }
+#cp-win-controls #cp-win-close:hover { color: var(--col-win-close-btn-hover-colour); background: var(--col-win-close-btn-hover-colour-2); }
 
 /* ── grid wrap ───────────────────────────────────────── */
 #cp-grid-wrap { flex: 1; overflow-y: auto; min-height: 0; padding: 3px; padding-bottom: 9px; background: var(--col-cp-grid-wrap-colour); }
@@ -630,6 +639,11 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
       <img id="cp-logo" src="/images/logo-header.png?v=2" alt="A·R·I" />
       <span id="cp-title">Overview</span>
       <button id="cp-devmode" type="button" title="Dev Mode: Engram writes to a throwaway copy of the brain. Ctrl+Shift+D" style="margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.06em;padding:4px 10px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;">DEV MODE: OFF</button>
+      <div id="cp-win-controls">
+        <button id="cp-win-min" type="button" title="Minimise" aria-label="Minimise"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+        <button id="cp-win-max" type="button" title="Maximise" aria-label="Maximise"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="8" height="8" rx="1"/></svg></button>
+        <button id="cp-win-close" type="button" title="Close" aria-label="Close"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg></button>
+      </div>
     </div>
 
     <!-- Servers tab -->
@@ -1684,6 +1698,15 @@ function switchTab(name) {
     if (name === 'imagegen-model' || name === 'imagegen-settings') igLoad();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
+
+// Desktop app: the header drags the window, and on Windows it has the window buttons (see #cp-win-controls).
+if (window.electronBridge) {
+    document.body.classList.add('cp-desktop');
+    if (window.electronBridge.platform === 'win32') document.body.classList.add('cp-win32');
+    document.getElementById('cp-win-min').addEventListener('click', () => window.electronBridge.minimizeWindow());
+    document.getElementById('cp-win-max').addEventListener('click', () => window.electronBridge.maximizeWindow());
+    document.getElementById('cp-win-close').addEventListener('click', () => window.electronBridge.closeWindow());
+}
 switchTab('overview');
 
 // ── customisation: branding ───────────────────────────────
