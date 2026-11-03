@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { apiFetch } from "../auth"
 
 export interface PipelineOption { id: string; label: string }
 
@@ -23,4 +24,21 @@ export function usePipelines(): PipelineOption[] {
     }, [])
 
     return pipelines
+}
+
+// Whether the voice module is running: the server only lists the "speech" pipeline while it is. Asked once per page
+// and shared, since every reply's speaker button wants to know.
+let voiceRunning: Promise<boolean> | null = null
+export function useVoiceAvailable(): boolean {
+    const [available, setAvailable] = useState(false)
+    useEffect(() => {
+        let alive = true
+        voiceRunning ??= apiFetch("/api/v1/pipelines")
+            .then(r => (r.ok ? r.json() : []))
+            .then((list: PipelineOption[]) => Array.isArray(list) && list.some(p => p.id === "speech"))
+            .catch(() => false)
+        voiceRunning.then(v => { if (alive) setAvailable(v) })
+        return () => { alive = false }
+    }, [])
+    return available
 }
