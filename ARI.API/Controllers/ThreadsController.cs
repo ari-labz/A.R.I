@@ -624,9 +624,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                       : remembering ? "remembering"
                       : "idle";
         bool isCodeMode = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
-        // A tool waiting on the user's OK (a destructive git/gh command) — the app shows its Allow/Deny prompt.
+        // A tool waiting on the user's OK (a shell command, a destructive git/gh command) — the app shows its prompt. A
+        // shell command carries the one being asked about, so the app can offer "Allow … every time" for an allowable one.
         object? approval = ARI.LLM.ToolApprovals.Get(threadKey) is { } pending
-            ? new { id = pending.Id, title = pending.Title, command = pending.Command }
+            ? new { id = pending.Id, title = pending.Title, command = pending.Command,
+                    segment = pending.Segment is { } seg ? new { text = seg.Text, key = seg.Key, tier = seg.Tier.ToString().ToLowerInvariant(), reason = seg.Reason } : null }
             : null;
         string payload  = JsonSerializer.Serialize(new { status, remembering, isCodeMode, approval });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
@@ -637,7 +639,15 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     [HttpPost("{id}/approvals/{approvalId}")]
     public IActionResult AnswerApproval([FromRoute(Name = "id")] string threadKey, [FromRoute(Name = "approvalId")] string id, [FromBody] ApprovalAnswer body)
     {
-        return ARI.LLM.ToolApprovals.Resolve(threadKey, id, body?.Allow == true) ? Ok() : NotFound();
+        // "decision" is deny / allow / always; older clients send only allow (true/false).
+        ARI.LLM.ApprovalDecision decision = body?.Decision?.ToLowerInvariant() switch
+        {
+            "always" or "whitelist" => ARI.LLM.ApprovalDecision.Always,
+            "allow" => ARI.LLM.ApprovalDecision.Allow,
+            "deny" => ARI.LLM.ApprovalDecision.Deny,
+            _ => body?.Allow == true ? ARI.LLM.ApprovalDecision.Allow : ARI.LLM.ApprovalDecision.Deny,
+        };
+        return ARI.LLM.ToolApprovals.Resolve(threadKey, id, decision) ? Ok() : NotFound();
     }
 
     // ── The conversation's browser, shown live in the chat window ───────────────────────────────────────────────────
@@ -1425,7 +1435,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
 public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
 public record InterjectRequest(string? Text);
-public record ApprovalAnswer(bool Allow);
+public record ApprovalAnswer(bool Allow, string? Decision = null);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null, string? Context = null);

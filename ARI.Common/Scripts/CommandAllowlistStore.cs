@@ -1,13 +1,12 @@
 using System.Text.Json;
-using ARI.Common;
 
-namespace ARI.API;
+namespace ARI.Common;
 
 /// <summary>
-/// The global "allow every time" list for run_command: command keys like <c>git commit</c> or <c>dotnet build</c>,
-/// shared by every project and thread. The chat client decides what a key is (and refuses to store dangerous
-/// forms such as <c>git reset --hard</c> — those ask every time); this just persists the list under the server's
-/// persistent data so it survives restarts and follows the user across clients.
+/// The global "allow every time" list of command keys like <c>grep</c>, <c>git commit</c> or <c>dotnet build</c>, shared by
+/// the shell tool and the desktop app's run_command, every project and every thread. ARI.LLM's CommandPolicy decides what a
+/// key is (and never stores dangerous forms such as <c>git reset --hard</c> — those ask every time); this just persists the
+/// list under the server's persistent data so it survives restarts and follows the user across clients.
 /// </summary>
 public static class CommandAllowlistStore
 {
@@ -44,6 +43,9 @@ public static class CommandAllowlistStore
         }
         return clean;
     }
+
+    /// <summary>Adds one key (if it isn't there already) and returns the list.</summary>
+    public static List<string> Add(string key) => Set(Get().Append(key));
 
     private static List<string> Clean(IEnumerable<string> commands) =>
         commands.Select(c => (c ?? "").Trim())
