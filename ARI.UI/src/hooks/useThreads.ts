@@ -27,6 +27,7 @@ export interface Project {
     category:     string
     backend:      StorageBackend
     rootPath:     string | null
+    chatPipeline?: string   // "auto", "dialogue", "code" or a pipeline id: what a new chat in the project runs on
 }
 
 export function useThreads() {
@@ -129,13 +130,18 @@ export interface Attachment {
 }
 
 export async function createThread(projectId?: string | null, pipeline?: string | null): Promise<string> {
+    return (await createThreadWithMode(projectId, pipeline)).key
+}
+
+// The same, plus whether the server made it a Code chat (the picked pipeline, the project's choice, or its auto rule).
+export async function createThreadWithMode(projectId?: string | null, pipeline?: string | null): Promise<{ key: string; isCodeMode: boolean }> {
     const res = await apiFetch("/api/v1/threads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: projectId ?? null, desktop: env.isDesktop, pipeline: pipeline ?? null }),
     })
-    const { key } = await res.json()
-    return key
+    const { key, isCodeMode } = await res.json()
+    return { key, isCodeMode: isCodeMode === true }
 }
 
 // Close a thread: the server runs Engram (saving it to memory) then deletes it, broadcasting threadDeleted.

@@ -3,6 +3,7 @@ import type { Project } from "../hooks/useThreads"
 import { apiFetch, getToken } from "../auth"
 import { env } from "../env"
 import ProjectFileExplorer from "./ProjectFileExplorer"
+import { usePipelines } from "../hooks/usePipelines"
 
 type SyncState = "idle" | "checking" | "up-to-date" | "ahead" | "behind" | "conflict" | "dirty" | "syncing" | "error" | "no-local-path" | "uninitialized"
 interface SyncStatus { state: SyncState; ahead?: number; behind?: number; message?: string }
@@ -12,6 +13,22 @@ interface Props {
     onProjectCreated: () => void
 }
 
+// What a new chat in the project runs on. Auto keeps the old rule (code, unless the project is a notes vault).
+function ChatPipelineField({ value, onChange, style }: { value: string; onChange: (v: string) => void; style?: React.CSSProperties }) {
+    const pipelines = usePipelines().filter(p => p.id !== "speech")
+    const known = value === "auto" || pipelines.some(p => p.id === value)
+    return (
+        <label style={style}>
+            Chat pipeline <span className="field-optional">(what a new chat in this project starts in)</span>
+            <select value={value} onChange={e => onChange(e.target.value)}>
+                <option value="auto">Auto (code, unless it's a notes vault)</option>
+                {pipelines.map(p => <option key={p.id} value={p.id}>{p.id === "dialogue" ? "Dialogue" : p.label}</option>)}
+                {!known && <option value={value}>{value} (no longer exists — Auto is used)</option>}
+            </select>
+        </label>
+    )
+}
+
 
 export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [showForm,         setShowForm]         = useState(false)
@@ -19,6 +36,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [description,      setDescription]      = useState("")
     const [instructions,     setInstructions]     = useState("")
     const [category,         setCategory]         = useState("")
+    const [chatPipeline,     setChatPipeline]     = useState("auto")
     const [saving,           setSaving]           = useState(false)
     const [error,            setError]            = useState<string | null>(null)
 
@@ -27,6 +45,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [editDescription,  setEditDescription]  = useState("")
     const [editInstructions, setEditInstructions] = useState("")
     const [editCategory,     setEditCategory]     = useState("")
+    const [editChatPipeline, setEditChatPipeline] = useState("auto")
     const [editSaving,       setEditSaving]       = useState(false)
     const [editError,        setEditError]        = useState<string | null>(null)
 
@@ -58,10 +77,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             const res = await apiFetch("/api/v1/projects", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), category: category.trim() }),
+                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), category: category.trim(), chatPipeline }),
             })
             if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Failed to create project."); return }
-            setName(""); setDescription(""); setInstructions(""); setCategory("")
+            setName(""); setDescription(""); setInstructions(""); setCategory(""); setChatPipeline("auto")
             setShowForm(false)
             onProjectCreated()
         } catch { setError("Could not reach ARI.") }
@@ -70,7 +89,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
 
     function handleCancelCreate() {
         setShowForm(false)
-        setName(""); setDescription(""); setInstructions(""); setCategory(""); setError(null)
+        setName(""); setDescription(""); setInstructions(""); setCategory(""); setChatPipeline("auto"); setError(null)
     }
 
     // ── Detail ────────────────────────────────────────────────────────────────────
@@ -81,6 +100,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         setEditDescription(p.description)
         setEditInstructions(p.instructions)
         setEditCategory(p.category)
+        setEditChatPipeline(p.chatPipeline || "auto")
         setEditPath(localPaths[p.id] ?? null)
         setEditError(null)
         setAutoSync(localStorage.getItem(`ari-autosync-${p.id}`) === "1")
@@ -143,7 +163,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             const res = await apiFetch(`/api/v1/projects/${selected.id}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), category: editCategory.trim(), backend: selected.backend }),
+                body: JSON.stringify({ name: editName.trim(), description: editDescription.trim(), instructions: editInstructions.trim(), category: editCategory.trim(), chatPipeline: editChatPipeline, backend: selected.backend }),
             })
             if (!res.ok) { setEditError((await res.json().catch(() => null))?.error ?? "Failed to save."); return }
             setSelected(await res.json())
@@ -205,6 +225,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             Category <span className="field-optional">(optional — for your own search/sort)</span>
                             <input type="text" value={editCategory} onChange={e => setEditCategory(e.target.value)} placeholder="e.g. Book, Game, DND Campaign" />
                         </label>
+                        <ChatPipelineField value={editChatPipeline} onChange={setEditChatPipeline} style={{ marginBottom: 16 }} />
                         {selected.rootPath && (
                             <div className="project-meta-row" style={{ marginBottom: 16 }}>
                                 <span className="project-meta-path" style={{ opacity: 0.55 }}>{selected.rootPath}</span>
@@ -344,6 +365,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                         Category <span className="field-optional">(optional — for your own search/sort)</span>
                         <input type="text" value={category} onChange={e => setCategory(e.target.value)} placeholder="e.g. Book, Game, DND Campaign" />
                     </label>
+                    <ChatPipelineField value={chatPipeline} onChange={setChatPipeline} />
                     {error && <p className="form-error">{error}</p>}
                     <div className="form-actions">
                         <button type="button" className="btn-secondary" onClick={handleCancelCreate} disabled={saving}>Cancel</button>

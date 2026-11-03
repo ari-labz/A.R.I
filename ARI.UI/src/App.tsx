@@ -3,7 +3,7 @@ import Sidebar from "./components/Sidebar"
 import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
 import {
-    useThreads, createThread, closeThread, loadHistory, fetchThread, pollThreadWhileStreaming,
+    useThreads, createThread, createThreadWithMode, closeThread, loadHistory, fetchThread, pollThreadWhileStreaming,
     openEventStream, openWatchStream, useTypingHeartbeat,
     type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project, type ThreadStatus, type WatchEvent,
 } from "./hooks/useThreads"
@@ -1053,17 +1053,18 @@ export default function App() {
         }
 
         let key = activeThreadRef.current
+        let newIsCode = false
         if (needsNew) {
-            key = await createThread(selectedProject, selectedPipeline)
+            const made = await createThreadWithMode(selectedProject, selectedPipeline)
+            key = made.key; newIsCode = made.isCodeMode
             setActiveThread(key)
             attachWatch(key)   // a thread created by sending is watched too, not only one opened from the list
             activeProjectRef.current = selectedProject
             loadThreads()
             if (selectedProject) {
-                // A project thread is a code thread — flip code mode on now so the
-                // dark-mode overlay animates in (false → true while #main is mounted)
-                // instead of only appearing when the thread is later reopened.
-                setCodeMode(true)
+                // Flip code mode on now if the server made it a code thread, so the dark-mode overlay animates
+                // in (false → true while #main is mounted) instead of only appearing when the thread is reopened.
+                setCodeMode(newIsCode)
                 // Auto-sync: if the user has opted in and Desktop has a local path, sync before injecting the tree.
                 if (window.electronBridge?.syncRun && localStorage.getItem(`ari-autosync-${selectedProject}`) === "1") {
                     const lp = await env.getLocalPath(selectedProject)
