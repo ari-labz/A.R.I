@@ -234,7 +234,7 @@ export default function App() {
     // run_command confirmation: pending prompt awaiting a deny/allow/whitelist decision, plus the
     // in-memory allowlist (loaded from the persisted store, extended live by "Whitelist").
     // title is set for a server-side tool's approval request (git/github) — one-off, so no "Always allow".
-    const [pendingCommand, setPendingCommand] = useState<{ command: string; title?: string; segment?: SegmentInfo; resolve: (d: CommandDecision) => void } | null>(null)
+    const [pendingCommand, setPendingCommand] = useState<{ command: string; title?: string; heading?: string; segment?: SegmentInfo; resolve: (d: CommandDecision) => void } | null>(null)
     const shownApprovalRef = useRef<string | null>(null)
     const commandAllowlistRef = useRef<string[]>([])
     // Generic yes/no confirmation (used for destructive file deletes).
@@ -589,6 +589,23 @@ export default function App() {
 
             console.warn(`[ToolSocket] ← Tool request  type=${type}  callId=${callId}`)
 
+            // A change to a file outside the project is refused by the desktop app (OUTSIDE_PROJECT) until the owner
+            // allows it here — every time, never remembered. Returns "denied" when they say no.
+            const outsideAsk = async <T,>(verb: string, target: string, run: (allowOutside: boolean) => Promise<T>): Promise<T | "denied"> => {
+                try { return await run(false) }
+                catch (e) {
+                    if (!(e instanceof Error ? e.message : String(e)).includes("OUTSIDE_PROJECT")) throw e
+                    const decision = await new Promise<CommandDecision>(resolve => setPendingCommand({
+                        command: target,
+                        heading: `${verb} a file outside the project?`,
+                        title:   "ARI wants to change a file outside this project's folder. It asks every time.",
+                        resolve,
+                    }))
+                    return decision === "deny" ? "denied" : await run(true)
+                }
+            }
+            const outsideDenied = (target: string) => JSON.stringify({ type: "file_error", callId, error: `The user didn't allow changing ${target}, which is outside the project folder. Don't try again; ask how they'd like to proceed.` })
+
             // Parse args JSON (all tools send their params as a JSON string in "args").
             // On malformed JSON we MUST still reply — a silent return leaves the backend waiting the
             // full tool timeout (~90s) and the model stuck. Send an error so it can retry cleanly.
@@ -690,12 +707,15 @@ export default function App() {
                     } else {
                         const sl = Number((params as unknown as { start_line?: unknown }).start_line)
                         const el = Number((params as unknown as { end_line?: unknown }).end_line)
-                        const res = await window.electronBridge!.editFile(localPath, params.path, params.new_string, {
+                        const res = await outsideAsk("Edit", params.path ?? "", allowOutside => window.electronBridge!.editFile(localPath, params.path, params.new_string, {
                             edits: editsArr ?? undefined,
                             startLine: Number.isFinite(sl) ? sl : undefined,
                             endLine:   Number.isFinite(el) ? el : undefined,
-                        })
-                        if (res.ok) {
+                            allowOutside,
+                        }))
+                        if (res === "denied") {
+                            ws.send(outsideDenied(params.path ?? ""))
+                        } else if (res.ok) {
                             // fs.editFile returns a full message with a numbered snippet around the
                             // edit, so the model sees the new state without re-reading the file.
                             console.warn(`[ToolSocket] → file_content (edit_file)  callId=${callId}  path=${params.path}`)
@@ -712,7 +732,9 @@ export default function App() {
                         console.warn(`[ToolSocket] → file_content (write_file BLOCKED by safety)  callId=${callId}`)
                         ws.send(JSON.stringify({ type: "file_error", callId, error: `SAFETY MODE — file was NOT written. Do not call edit_file or write_file again. Respond to the user now: tell them safety mode is on, show the proposed content as a code block, and say they can disable safety mode (shield icon) to apply it.\n\nProposed content for ${params.path} (${lines.length} lines):\n\n\`\`\`\n${params.content ?? ""}\n\`\`\`` }))
                     } else {
-                        await window.electronBridge!.writeFile(localPath, params.path, params.content ?? "")
+                        if (await outsideAsk("Write", params.path ?? "", allowOutside => window.electronBridge!.writeFile(localPath, params.path, params.content ?? "", allowOutside)) === "denied") {
+                            ws.send(outsideDenied(params.path ?? "")); return
+                        }
                         const writtenLines = (params.content ?? "").split("\n").length
                         console.warn(`[ToolSocket] → file_content (write_file)  callId=${callId}  path=${params.path}`)
                         ws.send(JSON.stringify({ type: "file_content", callId, content: `Successfully wrote ${params.path} (${writtenLines} lines).` }))
@@ -768,14 +790,16 @@ export default function App() {
                         console.warn(`[ToolSocket] → file_error (delete_file DENIED)  callId=${callId}`)
                         ws.send(JSON.stringify({ type: "file_error", callId, error: `The user denied deleting ${params.path}. Do not try to delete it again; ask how they would like to proceed.` }))
                     } else {
-                        const res = await window.electronBridge!.deleteFile(localPath, params.path)
-                        if (res.ok) ws.send(JSON.stringify({ type: "file_content", callId, content: `Deleted ${params.path}.` }))
+                        const res = await outsideAsk("Delete", params.path ?? "", allowOutside => window.electronBridge!.deleteFile(localPath, params.path, allowOutside))
+                        if (res === "denied") ws.send(outsideDenied(params.path ?? ""))
+                        else if (res.ok) ws.send(JSON.stringify({ type: "file_content", callId, content: `Deleted ${params.path}.` }))
                         else        ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Delete failed." }))
                     }
 
                 } else if (type === "move_file") {
-                    const res = await window.electronBridge!.moveFile(localPath, params.source, params.destination)
-                    if (res.ok) ws.send(JSON.stringify({ type: "file_content", callId, content: `Moved ${params.source} → ${params.destination}.` }))
+                    const res = await outsideAsk("Move", `${params.source} → ${params.destination}`, allowOutside => window.electronBridge!.moveFile(localPath, params.source, params.destination, allowOutside))
+                    if (res === "denied") ws.send(outsideDenied(params.source ?? ""))
+                    else if (res.ok) ws.send(JSON.stringify({ type: "file_content", callId, content: `Moved ${params.source} → ${params.destination}.` }))
                     else        ws.send(JSON.stringify({ type: "file_error", callId, error: res.error ?? "Move failed." }))
                 } else if (type === "preview_file") {
                     // The client no longer builds the outline. It returns RAW file content tagged
@@ -1484,7 +1508,7 @@ export default function App() {
                 <div style={cmdOverlayStyle}
                      onClick={() => { pendingCommand.resolve("deny"); setPendingCommand(null) }}>
                     <div style={cmdModalStyle} onClick={e => e.stopPropagation()}>
-                        <div style={cmdTitleStyle}>{pendingCommand.segment?.tier === "dangerous" ? "Run this dangerous command?" : "Run this command?"}</div>
+                        <div style={cmdTitleStyle}>{pendingCommand.heading ?? (pendingCommand.segment?.tier === "dangerous" ? "Run this dangerous command?" : "Run this command?")}</div>
                         <div style={cmdSubStyle}>
                             {pendingCommand.title
                                 ?? (pendingCommand.segment?.tier === "dangerous"

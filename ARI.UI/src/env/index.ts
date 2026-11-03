@@ -3,12 +3,13 @@ export interface EditOptions {
   startLine?: number
   endLine?: number
   edits?: { new_string?: string; start_line?: number; end_line?: number }[]
+  allowOutside?: boolean   // the owner allowed this change to a file outside the project (desktop app)
 }
 
 export interface AriEnvironment {
   isDesktop: boolean
   readFile(root: string, path: string): Promise<string>
-  writeFile(root: string, path: string, content: string): Promise<void>
+  writeFile(root: string, path: string, content: string, allowOutside?: boolean): Promise<void>
   listDirectory(root: string, dirPath?: string, depth?: number): Promise<string[]>
   searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>
   editFile(root: string, filePath: string, newString: string, options?: EditOptions): Promise<{ ok: boolean; error?: string; message?: string }>
@@ -16,8 +17,8 @@ export interface AriEnvironment {
   getCommandAllowlist(): Promise<string[]>
   setCommandAllowlist(list: string[]): Promise<void>
   findFiles(root: string, pattern: string, searchPath?: string): Promise<string[]>
-  deleteFile(root: string, filePath: string): Promise<{ ok: boolean; error?: string }>
-  moveFile(root: string, source: string, destination: string): Promise<{ ok: boolean; error?: string }>
+  deleteFile(root: string, filePath: string, allowOutside?: boolean): Promise<{ ok: boolean; error?: string }>
+  moveFile(root: string, source: string, destination: string, allowOutside?: boolean): Promise<{ ok: boolean; error?: string }>
   pickFolder(): Promise<string | null>
   getFileTree(root: string): Promise<string[]>
   getShallowTree(root: string, depth?: number): Promise<string[]>
@@ -34,7 +35,7 @@ declare global {
       platform: string
       readFile(root: string, path: string): Promise<string>
       readBytes(root: string, path: string): Promise<string>
-      writeFile(root: string, path: string, content: string): Promise<void>
+      writeFile(root: string, path: string, content: string, allowOutside?: boolean): Promise<void>
       listDirectory(root: string, dirPath?: string, depth?: number): Promise<string[]>
       searchFiles(root: string, pattern: string, searchPath?: string, glob?: string, ignoreCase?: boolean): Promise<string[]>
       editFile(root: string, filePath: string, newString: string, options?: EditOptions): Promise<{ ok: boolean; error?: string; message?: string }>
@@ -42,8 +43,8 @@ declare global {
       getCommandAllowlist(): Promise<string[]>
       setCommandAllowlist(list: string[]): Promise<void>
       findFiles(root: string, pattern: string, searchPath?: string): Promise<string[]>
-      deleteFile(root: string, filePath: string): Promise<{ ok: boolean; error?: string }>
-      moveFile(root: string, source: string, destination: string): Promise<{ ok: boolean; error?: string }>
+      deleteFile(root: string, filePath: string, allowOutside?: boolean): Promise<{ ok: boolean; error?: string }>
+      moveFile(root: string, source: string, destination: string, allowOutside?: boolean): Promise<{ ok: boolean; error?: string }>
       pickFolder(): Promise<string | null>
       getFileTree(root: string): Promise<string[]>
       getShallowTree(root: string, depth?: number): Promise<string[]>
