@@ -17,8 +17,9 @@ internal static class ToolHistory
     private const int ARG_VALUE_CHARS         = 160;
     private static readonly JsonSerializerOptions Relaxed = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-    /// <summary>The trace's tool calls, batched as they ran (calls issued together, before their results).</summary>
-    internal static List<IReadOnlyList<HistoryToolCall>> Batches(IEnumerable<TraceStep> trace)
+    /// <summary>The trace's tool calls, batched as they ran (calls issued together, before their results). <paramref name="keepResults"/>
+    /// replays each call exactly as it was sent, result and all, for a thread whose reading is the point of keeping it.</summary>
+    internal static List<IReadOnlyList<HistoryToolCall>> Batches(IEnumerable<TraceStep> trace, bool keepResults = false)
     {
         List<IReadOnlyList<HistoryToolCall>> batches = new();
         List<(string Name, string Args, string? Result)> current = new();
@@ -27,7 +28,9 @@ internal static class ToolHistory
         void Flush()
         {
             if (current.Count > 0)
-                batches.Add(current.Select(c => new HistoryToolCall(c.Name, ShrinkArgs(c.Args), Stub(c.Result ?? ""))).ToList());
+                batches.Add(current.Select(c => keepResults
+                    ? new HistoryToolCall(c.Name, c.Args, c.Result ?? "")
+                    : new HistoryToolCall(c.Name, ShrinkArgs(c.Args), Stub(c.Result ?? ""))).ToList());
             current.Clear();
         }
 

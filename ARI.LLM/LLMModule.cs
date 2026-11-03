@@ -875,6 +875,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         dreamOrchestrator?.Start();
         _ = WarmDialogueAsync();
+        _ = WarmRecallAsync();
 
         async Task BootOne(Server server, Model? model)
         {
@@ -937,6 +938,15 @@ public class LLMModule : ILLMModule, IDisposable
         await Task.Delay(2000);   // let anything else that comes up with it settle
         await Warm(textingAgent, ThreadPipeline.Dialogue, WarmupKeyPrefix + "chat");
         if (talkingAgent is not null) await Warm(talkingAgent, ThreadPipeline.Speech, WarmupKeyPrefix + "voice");
+    }
+
+    /// <summary>Reads Recall's opening (its prompt, its tools, and ARI's and the owner's notes) into its slot, so the first message of the
+    /// session doesn't wait for it. Recall runs on its own server, so this doesn't wait for Dialogue's warm-up.</summary>
+    private async Task WarmRecallAsync()
+    {
+        if (graphPipeline is null || Engram.ReadStoredUserName() is not { } owner) return;
+        try { await graphPipeline.WarmRecallAsync(owner); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Warming Recall's opening failed; the first message will read it instead."); }
     }
 
     private async Task Warm(Agent agent, ThreadPipeline type, string key)
@@ -1716,6 +1726,16 @@ public class LLMModule : ILLMModule, IDisposable
     {
         if (threads.TryGetValue(threadKey, out Thread? t)) t.OnUserTyping();
     }
+
+    /// <summary>What the owner of a chat is typing, before it's sent, so Recall can start opening the notes it will need.</summary>
+    public void PrefetchDraft(string threadKey, string draft, string username)
+    {
+        if (RecallExperiment.ChatDrafts && threads.TryGetValue(threadKey, out Thread? t) && t.Pipeline == ThreadPipeline.Dialogue && t.State != ThreadState.Streaming)
+            graphPipeline?.PrefetchDraft(t, draft, username);
+    }
+
+    /// <summary>The same for the first message of a chat that will only be made when it's sent.</summary>
+    public void PrefetchNewChat(string ownerId, string draft, string username) => graphPipeline?.PrefetchNewChat(ownerId, draft, username);
 
     /// <summary>Returns the Code thread for a given key, creating it if needed, for tool registration.</summary>
     public Thread GetOrCreateCodeThread(string threadKey)

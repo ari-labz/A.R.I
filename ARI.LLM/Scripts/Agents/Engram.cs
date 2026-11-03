@@ -878,7 +878,7 @@ internal class Engram : MemoryAgent, IDisposable
 
     // ── Classify (unchanged) ─────────────────────────────────────────────────────────
 
-    private static string? ReadStoredUserName()
+    internal static string? ReadStoredUserName()
     {
         try
         {
