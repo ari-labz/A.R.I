@@ -6378,23 +6378,31 @@ async function vsSwitchEngineModel(engine, modelName) {
 }
 
 // Wire up Voice Synthesis "Train for" engine cards
+let vsTrainEnginePicked = false;
 const vsTrainCards = document.querySelectorAll('.vs-train-engine-card:not(.vs-train-engine-card-off)');
 vsTrainCards.forEach(card => {
     card.addEventListener('click', () => {
+        vsTrainEnginePicked = true;
         vsEngine.value = card.dataset.engine;
         vsEngine.dispatchEvent(new Event('change'));
         vsSetActiveCard(vsTrainCards, card.dataset.engine);
     });
 });
 
-vsEngine.addEventListener('change', () => {
+let vsEpochsWereOrpheus = false;
+vsEngine.addEventListener('change', e => {
+    if (e.isTrusted) vsTrainEnginePicked = true;   // picked from the dropdown itself
     const isOrpheus = vsEngine.value === 'Orpheus';
     vsQuantLabel.style.display = isOrpheus ? '' : 'none';
     vsSaveFreqLabel.style.display = isOrpheus ? 'none' : '';
-    vsEpochs.value = isOrpheus ? '3' : '100';
+    // Keep the epochs you typed; only Orpheus (fine-tuning in a few epochs) swaps in its own default.
+    if (isOrpheus !== vsEpochsWereOrpheus) vsEpochs.value = isOrpheus ? '3' : '100';
+    vsEpochsWereOrpheus = isOrpheus;
     vsTrainBtn.textContent = vsEngine.value === 'KokoroRVC' ? 'Start training' : 'Transcribe & Review';
     document.getElementById('vs-dropzone-text').innerHTML =
-        'Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip<br>Include matching .txt files to skip transcription</span>';
+        vsEngine.value === 'KokoroRVC'
+            ? 'Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip<br>KokoroRVC learns from the audio alone; no transcripts needed</span>'
+            : 'Drag &amp; drop audio files here<br><span style="font-size:12px;color:var(--text-dim)">.wav, .mp3, .flac, .ogg — or a Dataset Builder .zip<br>Include matching .txt files to skip transcription</span>';
     vsTranscriptSec.style.display = 'none';
     vsSetActiveCard(vsTrainCards, vsEngine.value);
     vsLossSetEngine(vsEngine.value);
@@ -6593,8 +6601,11 @@ async function vsUploadFiles() {
     if (!stageResp.ok) throw new Error('Stage failed: ' + (await cpErrorText(stageResp)));
     const { stageId, stagingPath } = await stageResp.json();
     const CHUNK = 5 * 1024 * 1024, CONCURRENCY = 4;
-    for (let fi = 0; fi < vsFiles.length; fi++) {
-        const f = vsFiles[fi], totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
+    // KokoroRVC trains on the audio alone, so transcripts (.txt/.csv) stay behind.
+    const files = vsEngine.value === 'KokoroRVC' ? vsFiles.filter(f => !/\.(txt|csv)$/i.test(f.name)) : vsFiles;
+    if (files.length < vsFiles.length) vsAppendLog(`KokoroRVC doesn't need transcripts — uploading the ${files.length} audio file(s) only`);
+    for (let fi = 0; fi < files.length; fi++) {
+        const f = files[fi], totalChunks = Math.max(1, Math.ceil(f.size / CHUNK));
         vsAppendLog(`Uploading ${f.name} (${fmtBytes(f.size)}, ${totalChunks} chunk${totalChunks>1?'s':''})…`);
         let done = 0;
         const uploadChunk = async (ci) => {
@@ -6603,12 +6614,12 @@ async function vsUploadFiles() {
             const up = await cpFetch(url, { method: 'POST', body: slice, headers: { 'Content-Type': 'application/octet-stream' } });
             if (!up.ok) throw new Error(`Upload of ${f.name} chunk ${ci} failed: ` + (await cpErrorText(up)));
             done++;
-            vsSetProgress(`Uploading file ${fi+1} of ${vsFiles.length}`, Math.round((done / totalChunks) * 100), `${f.name} — ${done} / ${totalChunks} chunks`, '');
+            vsSetProgress(`Uploading file ${fi+1} of ${files.length}`, Math.round((done / totalChunks) * 100), `${f.name} — ${done} / ${totalChunks} chunks`, '');
         };
         for (let ci = 0; ci < totalChunks; ci += CONCURRENCY) { await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalChunks - ci) }, (_, i) => uploadChunk(ci + i))); }
         vsAppendLog(`✓ ${f.name} uploaded`);
     }
-    vsAppendLog(`All ${vsFiles.length} file(s) uploaded.`);
+    vsAppendLog(`All ${files.length} file(s) uploaded.`);
     return { stageId, stagingPath };
 }
 
@@ -6638,7 +6649,14 @@ function vsLossSetEngine(engine) {
 function vsLossPush(point) {
     if (point.engine && point.engine !== vsLossEngine) vsLossSetEngine(point.engine);
     const L = VS_LOSS_LABELS[vsLossEngine] ?? VS_LOSS_LABELS.StyleTTS2;
-    vsLossPoints.push(point);
+    // One point per epoch, in epoch order: re-attaching replays the whole event stream on top of the loss
+    // history, so the same epoch can arrive more than once.
+    const same = vsLossPoints.findIndex(p => p.epoch === point.epoch);
+    if (same >= 0) vsLossPoints[same] = point;
+    else {
+        const after = vsLossPoints.findIndex(p => p.epoch > point.epoch);
+        if (after < 0) vsLossPoints.push(point); else vsLossPoints.splice(after, 0, point);
+    }
     vsLossWrap.style.display = '';
     vsLossLiveDot.style.display = '';
     vsLossStatus.innerHTML = `
@@ -6651,7 +6669,7 @@ function vsLossPush(point) {
     vsLossDraw();
 }
 
-function vsLossMarkPause(epoch) { vsLossPauseAt.push(epoch); vsLossDraw(); }
+function vsLossMarkPause(epoch) { if (!vsLossPauseAt.includes(epoch)) vsLossPauseAt.push(epoch); vsLossDraw(); }
 
 function vsLossDraw() {
     const pts = vsLossPoints;
@@ -7394,6 +7412,11 @@ async function loadVoiceModels() {
         if (activeEngine) {
             vsSelectedEngine = activeEngine;
             vsUpdateEngineUI();
+            // "Train for" starts on the engine that's speaking, until you pick one yourself.
+            if (!vsTrainEnginePicked && vsEngine.value !== activeEngine && [...vsEngine.options].some(o => o.value === activeEngine)) {
+                vsEngine.value = activeEngine;
+                vsEngine.dispatchEvent(new Event('change'));
+            }
         }
         vsFilterModelDropdown();
         vsTvStatus.textContent = ready ? `Active: ${activeModel} (${activeEngine ?? 'unknown'})` : 'Voice module not running';
