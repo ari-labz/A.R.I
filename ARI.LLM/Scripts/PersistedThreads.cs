@@ -50,6 +50,7 @@ internal static class PersistedThreads
         public string?  ChannelService { get; set; }
         public string?  ChannelTarget { get; set; }
         public string?  PlatformContext { get; set; }
+        public string?  ApiContext      { get; set; }
         public string?  FilesystemRoot  { get; set; }
         public bool     IsBrainVault    { get; set; }
         public bool     IsRemoteProject { get; set; }
@@ -135,6 +136,7 @@ internal static class PersistedThreads
             {
                 Key = thread.Key, Pipeline = thread.Pipeline.ToString(), OwnerId = thread.OwnerId, Title = thread.Title,
                 Medium = thread.Medium.ToString(), ChannelService = thread.ChannelService, ChannelTarget = thread.ChannelTarget, PlatformContext = thread.PlatformContext,
+                ApiContext = thread.ApiContext,
                 FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault,
                 IsRemoteProject = thread.IsRemoteProject, IsAdminChat = thread.IsAdminChat, HasMemoryAccess = thread.HasMemoryAccess,
                 SafeMode = thread.SafeMode, LastMessageAt = thread.LastMessageAt, ContextStart = thread.ContextStart,
@@ -252,6 +254,7 @@ internal static class PersistedThreads
             thread.ChannelService  = meta.ChannelService ?? (meta.Medium == "Discord" ? "discord" : null);
             thread.ChannelTarget   = meta.ChannelTarget ?? (meta.DiscordChannelId != 0 ? meta.DiscordChannelId.ToString() : null);
             thread.PlatformContext ??= meta.PlatformContext;
+            thread.ApiContext      ??= meta.ApiContext;
             thread.FilesystemRoot  = meta.FilesystemRoot;
             thread.IsBrainVault    = meta.IsBrainVault;
             thread.IsRemoteProject = meta.IsRemoteProject;

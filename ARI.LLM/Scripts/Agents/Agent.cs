@@ -2115,7 +2115,14 @@ public abstract class Agent
             // The send time rides on the message itself (kept verbatim in history, so the cache is untouched), which gives her
             // the hour and the gaps between messages without a clock in the system prompt.
             string        sentAt     = current.Source is { } srcItem ? $"[{srcItem.Timestamp:ddd d MMM, HH:mm}] " : "";
-            string        promptText = $"{memoryBlock}# Prompt:\n\n{sentAt}{current.Username}: {current.Content}";
+            // Context from the app ARI is built into (see Thread.ApiContext) rides in the same block as her memories, so each
+            // turn carries the value current at the time and the cached prefix is untouched when it changes.
+            string        appContext = thread.ApiContext is { Length: > 0 } fromApp
+                ? "--- **Context from the app this conversation is in** ---\n\n" +
+                  "(Set by the application ARI is built into, not typed by the user. Treat it as facts about the situation.)\n\n" +
+                  $"{fromApp.Trim()}\n\n{BlockRule}\n\n"
+                : string.Empty;
+            string        promptText = $"{memoryBlock}{appContext}# Prompt:\n\n{sentAt}{current.Username}: {current.Content}";
 
             // Every message is replayed exactly as it was sent (memory block and header included), so next turn's
             // prompt only adds to the end.

@@ -38,6 +38,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     // System-context blocks injected by the client (e.g. filesystem skeleton). Merged into the
     // system prompt at send time — never exposed as user-visible thread attachments.
     private static readonly ConcurrentDictionary<string, string> pendingSystemContext = new();
+    // Thread context from an API client goes into every turn's prompt, so it's kept short.
+    private const int MAX_API_CONTEXT_CHARS = 4000;
 
     /// <summary>The name this caller goes by in conversations.</summary>
     private string GetUsername()
@@ -227,6 +229,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public IActionResult NewThread([FromBody] NewThreadRequest? req = null)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (req?.Context is { Length: > MAX_API_CONTEXT_CHARS })
+            return BadRequest(new { error = $"context is too long ({MAX_API_CONTEXT_CHARS} characters at most)." });
         // Desktop (Electron) clients get a "client-" key so they're distinguishable from browser ("web-") threads.
         string key = $"{(req?.Desktop == true ? "client" : "web")}-{Guid.NewGuid():N}";
         // A project can only be attached by someone who may use it: its owner, or an admin. Anything else is
@@ -260,6 +264,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         {
             created.HasMemoryAccess = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
             created.OwnerId ??= User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+            if (!string.IsNullOrWhiteSpace(req?.Context)) created.ApiContext = req.Context.Trim();
         }
         return Ok(new { key });
     }
@@ -1051,6 +1056,33 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok();
     }
 
+    /// <summary>
+    /// The thread's context from the app ARI is built into (the end user's name, role, which screen they're on). The model
+    /// reads it on every turn, as part of the prompt, and it never shows as a message in the history or the chat UI.
+    /// PUT replaces it, DELETE clears it; it can also be given when the thread is created (POST /threads, "context").
+    /// </summary>
+    [HttpGet("{id}/context")]
+    public IActionResult GetApiContext([FromRoute(Name = "id")] string threadKey) =>
+        FindThread(threadKey) is { } thread ? Ok(new { context = thread.ApiContext }) : NotFound(new { error = "No such thread." });
+
+    [HttpPut("{id}/context")]
+    public IActionResult SetApiContext([FromRoute(Name = "id")] string threadKey, [FromBody] ApiContextRequest req)
+    {
+        if (FindThread(threadKey) is not { } thread) return NotFound(new { error = "No such thread." });
+        if (req?.Context is { Length: > MAX_API_CONTEXT_CHARS })
+            return BadRequest(new { error = $"context is too long ({MAX_API_CONTEXT_CHARS} characters at most)." });
+        thread.ApiContext = string.IsNullOrWhiteSpace(req?.Context) ? null : req.Context.Trim();
+        return Ok(new { context = thread.ApiContext });
+    }
+
+    [HttpDelete("{id}/context")]
+    public IActionResult ClearApiContext([FromRoute(Name = "id")] string threadKey)
+    {
+        if (FindThread(threadKey) is not { } thread) return NotFound(new { error = "No such thread." });
+        thread.ApiContext = null;
+        return Ok(new { context = (string?)null });
+    }
+
     [HttpPost("{id}/typing")]
     public IActionResult NotifyTyping([FromRoute(Name = "id")] string threadKey)
     {
@@ -1390,6 +1422,7 @@ public record InterjectRequest(string? Text);
 public record ApprovalAnswer(bool Allow);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
-public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null);
+public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null, string? Context = null);
+public record ApiContextRequest(string? Context);
 public record InjectContextRequest(string Name, string Content);
 public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null);
