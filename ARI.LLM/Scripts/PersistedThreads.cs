@@ -32,8 +32,7 @@ internal static class PersistedThreads
     /// threads nobody owns are never saved.</summary>
     internal static bool IsEligible(Thread t) =>
         t.Pipeline == ThreadPipeline.Dialogue && !t.Internal && t.OwnerId is not null && t.HasUserMessages
-        && !t.Key.StartsWith("dm:", StringComparison.OrdinalIgnoreCase)
-        && !t.Key.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
+        && t.Medium != ThreadMedium.Channel;
 
     internal static bool ShouldSave(Thread t) => PersistedThreadsSetting.Enabled && IsEligible(t);
 

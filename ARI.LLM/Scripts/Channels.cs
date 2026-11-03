@@ -36,9 +36,22 @@ public class Channels : IDisposable
 
     public void Dispose() => stopping.Cancel();
 
-    /// <summary>Whether a thread key belongs to a conversation on a chat service rather than the app.</summary>
-    public static bool IsChannelKey(string threadKey) =>
-        threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) || threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase);
+    /// <summary>Where a conversation lives, from the key this class (and a chat plugin's voice channels) build for it:
+    /// "dm:…" is a direct message, "guild:…" a server channel. The one place that reads a key; everything else asks the
+    /// thread (<see cref="Thread.Medium"/>, <see cref="Thread.InSharedChannel"/>).</summary>
+    public static (ThreadMedium Medium, bool Shared) PlaceOf(string threadKey) =>
+        threadKey.StartsWith("guild:", StringComparison.OrdinalIgnoreCase) ? (ThreadMedium.Channel, true)
+        : threadKey.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) ? (ThreadMedium.Channel, false)
+        : (ThreadMedium.Web, false);
+
+    /// <summary>Marks a new thread as a chat-service conversation when its key says so, before its tools are chosen.</summary>
+    internal static void StampPlace(Thread thread)
+    {
+        (ThreadMedium medium, bool shared) = PlaceOf(thread.Key);
+        if (medium != ThreadMedium.Channel) return;
+        thread.Medium = medium;
+        thread.InSharedChannel = shared;
+    }
 
     public void LinkOwner(string service, string id) => owners[service] = id;
 
@@ -81,7 +94,6 @@ public class Channels : IDisposable
         }
 
         Thread thread = llm.GetOrCreateDialogueThread(threadKey);
-        thread.Medium = ThreadMedium.Channel;
         thread.ChannelService = message.Service;
         thread.ChannelTarget = message.Target;
         if (message.IsDirect && isOwner && Shared.MasterUserId is string masterId) thread.OwnerId ??= masterId;
@@ -128,9 +140,7 @@ public class Channels : IDisposable
     {
         string text = ContentBlock.PlainText(reply);
         if (text.Length == 0 || text.Equals(PASS_TOKEN, StringComparison.OrdinalIgnoreCase)) return;
-        if (!IsChannelKey(threadKey)) return;
-
-        Thread thread = llm.GetOrCreateDialogueThread(threadKey);
+        if (!llm.Threads.TryGetValue(threadKey, out Thread? thread) || thread.Medium != ThreadMedium.Channel) return;
         IChannel? channel = thread.ChannelService is null ? null : Find(thread.ChannelService);
         if (channel is null) return;
 

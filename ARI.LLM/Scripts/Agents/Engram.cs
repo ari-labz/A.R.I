@@ -170,17 +170,18 @@ internal class Engram : MemoryAgent, IDisposable
         // filters recall, not writes. Master-only filtering is not a substitute: the misfiled note that
         // prompted this gate was built from the Master's own messages, misread by pronoun resolution.
         // Force-proof like the DevMode gate above — a manual close must not be a way around it either.
-        if (threadKey.StartsWith("guild:", StringComparison.Ordinal) && !EngramOthersSetting.Enabled)
+        threads.TryGetValue(threadKey, out Thread? sweptThread);
+        (ThreadMedium medium, bool shared) = sweptThread is not null ? (sweptThread.Medium, sweptThread.InSharedChannel) : Channels.PlaceOf(threadKey);
+        if (medium == ThreadMedium.Channel && shared && !EngramOthersSetting.Enabled)
         {
-            if (threads.TryGetValue(threadKey, out Thread? guildThread)) guildThread.EngramProcessed = true;
+            if (sweptThread is not null) sweptThread.EngramProcessed = true;
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — guild threads are never swept into the brain.", threadKey);
             return;
         }
 
         // Same for a DM conversation ARI opened with someone other than the owner (discord_dm_user): what they say
         // is theirs, not material for the owner's brain. Only the owner's own direct chat has an owner.
-        if (!EngramOthersSetting.Enabled && threadKey.StartsWith("dm:", StringComparison.Ordinal)
-            && threads.TryGetValue(threadKey, out Thread? dmThread) && dmThread.Medium == ThreadMedium.Channel && dmThread.OwnerId is null)
+        if (!EngramOthersSetting.Enabled && sweptThread is { Medium: ThreadMedium.Channel, InSharedChannel: false, OwnerId: null } dmThread)
         {
             dmThread.EngramProcessed = true;
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — DMs with people other than the Master are never swept into the brain.", threadKey);

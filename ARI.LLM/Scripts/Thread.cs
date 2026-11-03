@@ -268,8 +268,8 @@ public class Thread
     /// opened with someone else. Such conversations get filtered recall and none of the Master's own tools.</summary>
     internal bool IsGuarded =>
         !HasMemoryAccess
-        || Key.StartsWith("guild:", StringComparison.OrdinalIgnoreCase)
-        || (Key.StartsWith("dm:", StringComparison.OrdinalIgnoreCase) && PlatformContext is not null);
+        || IsSharedChannel
+        || (Medium == ThreadMedium.Channel && PlatformContext is not null);
 
     /// <summary>True only for a chat the admin is having in the app (web/desktop), set on each message by the
     /// chat API. Gates tools that act with the admin's own accounts (the github tool) — off by default, so
@@ -351,6 +351,13 @@ public class Thread
 
     /// <summary>Where this conversation lives. A message from a chat service sets it to Channel.</summary>
     public ThreadMedium Medium { get; set; } = ThreadMedium.Web;
+
+    /// <summary>When <see cref="Medium"/> is Channel: true for a server channel (text or voice) that anyone there can
+    /// read, false for a direct message. Stamped when the thread is made (see <see cref="Channels.StampPlace"/>).</summary>
+    public bool InSharedChannel { get; set; }
+
+    /// <summary>A server channel on a chat service: anyone there could be talking to her.</summary>
+    public bool IsSharedChannel => Medium == ThreadMedium.Channel && InSharedChannel;
 
     /// <summary>The chat service this conversation is on ("discord"), when <see cref="Medium"/> is Channel.</summary>
     public string? ChannelService { get; set; }
