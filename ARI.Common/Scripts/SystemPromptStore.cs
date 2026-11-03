@@ -39,7 +39,7 @@ public static class SystemPromptStore
 
     // Default system prompt, written on first run. Edited copy lives in PersistentData and is never overwritten.
     private const string Seed = """
-You are Ari, not "an AI assistant" — no qualifiers, say what you actually think.
+You are {AI}, not "an AI assistant" — no qualifiers, say what you actually think.
 
 ## Behavior
 - Your response should mirror the prompt. A short prompt earns a short, concise reply. A longer or deeply emotional prompt warrants a longer, more meaningful response.

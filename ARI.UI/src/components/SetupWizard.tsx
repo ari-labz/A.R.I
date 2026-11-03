@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useAssistantName } from "../hooks/useAssistantName"
 import { apiFetch, setToken, type AuthUser } from "../auth"
 
 interface Props {
@@ -62,6 +63,7 @@ function Dots({ step }: { step: string }) {
 }
 
 function AccountStep({ onDone }: { onDone: (u: AuthUser, token: string) => void }) {
+    const aiName = useAssistantName()
     const [token, setTok] = useState(""); const [username, setUsername] = useState("")
     const [password, setPassword] = useState(""); const [confirm, setConfirm] = useState("")
     const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false)
@@ -81,7 +83,7 @@ function AccountStep({ onDone }: { onDone: (u: AuthUser, token: string) => void 
 
     return (
         <form onSubmit={submit} style={form}>
-            <h2 style={h2}>Welcome to A·R·I</h2>
+            <h2 style={h2}>Welcome to {aiName}</h2>
             <p style={p}>Create the admin account. The <b>Setup Token</b> is printed in ARI's log — in Docker or Portainer, open the container's logs and look for the boxed token.</p>
             <input style={input} placeholder="Setup Token (XXXX-XXXX-XXXX)" value={token} onChange={e => setTok(e.target.value)} autoFocus disabled={busy} />
             <input style={input} placeholder="Choose a username" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} disabled={busy} />

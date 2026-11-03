@@ -936,6 +936,16 @@ body.cp-win32 #cp-win-controls { display: flex; }
         <button class="cu-tab" data-cu="colours" type="button">Colour palette</button>
       </div>
       <div id="cu-pane-brand" style="flex:1;min-height:0;overflow-y:auto;padding:20px;">
+        <div class="vs-section" id="cu-name" style="max-width:760px;margin:0 0 20px;">
+          <div class="vs-section-title">Name</div>
+          <p style="color:var(--text-dim);font-size:13px;margin:4px 0 12px;">What the AI is called. Prompts that say {AI} use the name; the spoken name is the voice wake word.</p>
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+            <label class="vs-label" style="flex:1;min-width:180px;">Name<input id="cu-name-input" class="vs-input" type="text" maxlength="40" autocomplete="off"></label>
+            <label class="vs-label" style="flex:1;min-width:180px;">Spoken name<input id="cu-spoken-input" class="vs-input" type="text" maxlength="40" autocomplete="off"></label>
+            <button class="vs-btn-primary" id="cu-name-save" type="button">Save</button>
+          </div>
+          <span id="cu-name-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;display:block;"></span>
+        </div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 16px;max-width:640px;">
           Replace the A·R·I logo with your own. PNG, SVG, WebP, JPEG or GIF up to 2 MB; wide logos with a transparent background work best (the built-in ones are 1000 × 250). Images keep their proportions and scale to fit: the main logo fills the same 4:1 space as the default, and header logos are scaled to the header's height, which never changes. Upload just the main logo and the header and sidebar use it too (the sidebar turned white); upload those only if you want something different.
         </p>
@@ -1760,7 +1770,33 @@ function cuBrandCard(s) {
     card.append(stage, body);
     return card;
 }
+// What the AI is called (AssistantName): written name and spoken name (the voice wake word). Empty goes back to the default.
+async function loadAssistantName() {
+    try {
+        const r = await cpFetch('/api/v1/admin/assistant-name');
+        if (!r.ok) return;
+        const d = await r.json();
+        const nameIn = document.getElementById('cu-name-input'), spokenIn = document.getElementById('cu-spoken-input');
+        nameIn.value = d.name; nameIn.placeholder = d.defaultName;
+        spokenIn.value = d.spokenName; spokenIn.placeholder = d.defaultSpokenName;
+    } catch { /* keep the fields as they are */ }
+}
+document.getElementById('cu-name-save').addEventListener('click', async () => {
+    const status = document.getElementById('cu-name-status');
+    status.textContent = 'Saving…';
+    try {
+        const r = await cpFetch('/api/v1/admin/assistant-name', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: document.getElementById('cu-name-input').value, spokenName: document.getElementById('cu-spoken-input').value }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || r.statusText);
+        document.getElementById('cu-name-input').value = d.name;
+        document.getElementById('cu-spoken-input').value = d.spokenName;
+        status.textContent = `Saved. She's ${d.name} from the next message; reload the chat to see it there.`;
+    } catch (e) { status.textContent = 'Could not save: ' + e.message; }
+});
+
 async function loadBranding() {
+    loadAssistantName();
     const list = document.getElementById('cu-brand-list');
     try {
         const slots = await (await cpFetch('/api/v1/admin/branding')).json();

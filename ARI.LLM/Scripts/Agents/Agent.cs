@@ -2047,10 +2047,11 @@ public abstract class Agent
         // checkpoint at the first user message, so the shared system prompt ends exactly on one and every new
         // conversation resumes from it instead of re-reading ~10k tokens.
         thread.OpeningContext = perThread.Count > 0
-            ? $"--- **This Conversation** (context for you, not a message from anyone) ---\n\n{string.Join("\n\n", perThread)}\n\n{BlockRule}"
+            ? AssistantName.Fill($"--- **This Conversation** (context for you, not a message from anyone) ---\n\n{string.Join("\n\n", perThread)}\n\n{BlockRule}")
             : null;
 
-        string baseSystem = string.Join("\n\n", sections);
+        // Prompts say {AI} where they mean her; the name comes from Customisation → Branding.
+        string baseSystem = AssistantName.Fill(string.Join("\n\n", sections));
 
         string thinkSuffix  = Think ? "" : "\n<|think_off|>";
 
