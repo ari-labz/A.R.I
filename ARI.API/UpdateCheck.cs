@@ -1,3 +1,4 @@
+using ARI.Common;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
@@ -19,7 +20,7 @@ public static class UpdateCheck
     private static readonly HttpClient Http = new();
     private static readonly SemaphoreSlim Gate = new(1, 1);
 
-    public  static string  ServerVersion { get; } = ReadServerVersion();
+    public  static string  ServerVersion { get; } = BuildInfo.Version;
     public  static string? LatestVersion { get; private set; }
     public  static bool    Outdated      { get; private set; }
     private static DateTime _lastChecked = DateTime.MinValue;
@@ -77,22 +78,6 @@ public static class UpdateCheck
         {
             return null;
         }
-    }
-
-    private static string ReadServerVersion()
-    {
-        try
-        {
-            string path = Path.Combine(AppContext.BaseDirectory, "manifest.json");
-            if (File.Exists(path))
-            {
-                using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
-                if (doc.RootElement.TryGetProperty("version", out JsonElement v))
-                    return v.GetString() ?? "0.0.0";
-            }
-        }
-        catch { /* fall through */ }
-        return "0.0.0";
     }
 
     // Returns >0 if a is newer than b.
