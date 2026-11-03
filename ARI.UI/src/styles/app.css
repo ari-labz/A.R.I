@@ -902,8 +902,10 @@ button, a, input, select, textarea, label, [role="button"] {
 .field-optional { font-weight: 400; color: var(--text-dim); }
 #project-form input[type="text"],
 #project-form textarea,
+#project-form select,
 .project-detail-form input[type="text"],
-.project-detail-form textarea {
+.project-detail-form textarea,
+.project-detail-form select {
     padding: 8px 12px; border: 1px solid var(--input-border);
     border-radius: 8px; font-family: inherit; font-size: 14px;
     color: var(--text); background: var(--col-project-form-input-colour); outline: none;
@@ -912,8 +914,10 @@ button, a, input, select, textarea, label, [role="button"] {
 }
 #project-form input[type="text"]:focus,
 #project-form textarea:focus,
+#project-form select:focus,
 .project-detail-form input[type="text"]:focus,
-.project-detail-form textarea:focus { border-color: var(--input-focus); }
+.project-detail-form textarea:focus,
+.project-detail-form select:focus { border-color: var(--input-focus); }
 #project-form textarea,
 .project-detail-form textarea { line-height: 1.5; }
 .folder-picker-row {

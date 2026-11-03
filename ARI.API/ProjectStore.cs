@@ -27,7 +27,10 @@ public record Project(
     [property: JsonConverter(typeof(JsonStringEnumConverter))] StorageBackend Backend = StorageBackend.RemoteFs,
     string?        RootPath    = null,
     // 0 = admin-owned (legacy rows that predate multi-user support).
-    int            OwnerId     = 0);
+    int            OwnerId     = 0,
+    // What a new chat in this project runs on: "auto" (code unless it looks like a notes vault — see
+    // ProjectCodeRules), "dialogue", "code", or the id of a pipeline made in the control panel.
+    string         ChatPipeline = "auto");
 
 public class ProjectStore
 {

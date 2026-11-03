@@ -29,7 +29,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         string owner = p.OwnerId == 0 ? "admin"
             : names is not null && names.TryGetValue(p.OwnerId, out string? n) ? n
             : users.GetById(p.OwnerId)?.Username ?? "unknown";
-        return new { p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt, p.Category, Backend = p.Backend.ToString(), p.RootPath, p.OwnerId, OwnerUsername = owner };
+        return new { p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt, p.Category, Backend = p.Backend.ToString(), p.RootPath, p.OwnerId, OwnerUsername = owner, p.ChatPipeline };
     }
 
     [HttpPost]
@@ -50,6 +50,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             Description  = req.Description?.Trim() ?? created.Description,
             Instructions = req.Instructions?.Trim() ?? created.Instructions,
             OwnerId      = ownerId,
+            ChatPipeline = CleanPipeline(req.ChatPipeline) ?? created.ChatPipeline,
         };
         store.Update(created);
 
@@ -79,6 +80,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             Description  = req.Description?.Trim() ?? current.Description,
             Instructions = req.Instructions?.Trim() ?? current.Instructions,
             Category     = req.Category?.Trim() ?? current.Category,
+            ChatPipeline = CleanPipeline(req.ChatPipeline) ?? current.ChatPipeline,
             Backend      = StorageBackend.ServerFs,
             RootPath     = rootPath,
         };
@@ -233,10 +235,15 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         return int.TryParse(sub, out int id) ? id : -1;   // -1 matches no owner (0 means "the admin")
     }
 
+    // A pipeline id is a short slug; anything else is ignored rather than stored. An id that later stops existing
+    // falls back to "auto" when a chat is made (see ThreadsController.NewThread).
+    private static string? CleanPipeline(string? id) =>
+        id?.Trim() is { Length: > 0 and <= 80 } t && t.All(c => char.IsLetterOrDigit(c) || c is '-' or '_') ? t.ToLowerInvariant() : null;
+
     // Admins can access any project; guests can only access their own.
     private bool CanAccess(Project p) => IsAdmin() || p.OwnerId == CallerId();
 }
 
 public record CreateProjectRequest(
     string Name, string? Description, string? Instructions,
-    string? Category);
+    string? Category, string? ChatPipeline = null);

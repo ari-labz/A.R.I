@@ -245,11 +245,15 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         }
         // Pre-register in LLMModule so the newThread event fires immediately and
         // all sidebar observers see the thread without waiting for the first message.
-        // An explicit pipeline selection wins; otherwise a bound project that isn't a note vault opens in code-mode.
-        if (Enum.TryParse(req?.Pipeline, ignoreCase: true, out ARI.LLM.ThreadPipeline selected) && !int.TryParse(req?.Pipeline, out _)
+        // A pipeline picked in the input bar wins; then the project's own choice; on "auto" a bound project that
+        // isn't a note vault opens in code-mode.
+        string? choice = req?.Pipeline is { Length: > 0 } picked ? picked
+            : project?.ChatPipeline is { Length: > 0 } fromProject && !fromProject.Equals("auto", StringComparison.OrdinalIgnoreCase) ? fromProject
+            : null;
+        if (Enum.TryParse(choice, ignoreCase: true, out ARI.LLM.ThreadPipeline selected) && !int.TryParse(choice, out _)
             && selected is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech)
             Llm.ForcePipeline(key, selected);
-        else if (req?.Pipeline is { Length: > 0 } graphId && Llm.ReplyPipelines().Any(p => p.Id.Equals(graphId, StringComparison.OrdinalIgnoreCase)))
+        else if (choice is { Length: > 0 } graphId && Llm.ReplyPipelines().Any(p => p.Id.Equals(graphId, StringComparison.OrdinalIgnoreCase)))
         {
             Llm.GetOrCreateDialogueThread(key);
             Llm.SetThreadPipeline(key, graphId);
@@ -266,7 +270,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             created.OwnerId ??= User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
             if (!string.IsNullOrWhiteSpace(req?.Context)) created.ApiContext = req.Context.Trim();
         }
-        return Ok(new { key });
+        bool isCodeMode = Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? made) && made.Pipeline == ARI.LLM.ThreadPipeline.Code;
+        return Ok(new { key, isCodeMode });
     }
 
     /// <summary>
@@ -1285,9 +1290,10 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
                 ARI.LLM.Thread? boundThread = FindThread(threadKey);
 
-                // Force code pipeline before the classifier runs (first message only)
-                bool isFirstMessage = boundThread?.History.Count is null or 0;
-                if (isFirstMessage && ProjectCodeRules.RunsAsCode(project))
+                // A thread made through NewThread already has its pipeline (picked, the project's choice, or auto).
+                // Only a project thread that didn't exist yet gets the auto rule here, before the classifier runs.
+                if (boundThread is null && (project.ChatPipeline ?? "auto").Equals("auto", StringComparison.OrdinalIgnoreCase)
+                    && ProjectCodeRules.RunsAsCode(project))
                     Llm.ForceCodeThread(threadKey);
 
                 // The project's name rides on the thread whether or not its files are on this server's disk, so
