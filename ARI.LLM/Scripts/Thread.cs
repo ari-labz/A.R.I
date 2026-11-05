@@ -76,11 +76,34 @@ public class Thread
     /// small; a step's own sub-thread needs its reading kept, because remembering what it read is the point.</summary>
     internal bool KeepToolHistory { get; init; }
 
+    /// <summary>Replay those tool calls exactly as they ran, results in full, instead of stubbed: a step's own sub-thread, so the notes
+    /// Recall read on earlier messages are still open on the next one and it doesn't read them again.</summary>
+    internal bool KeepToolResults { get; init; }
+
     /// <summary>Only one run at a time uses a sub-thread, so a new message waits for a cancelled run to finish unwinding.</summary>
     internal readonly SemaphoreSlim RunLock = new(1, 1);
 
     /// <summary>How many of the parent chat's messages this sub-thread has already been told about.</summary>
     internal int LastChatCount;
+
+    /// <summary>The turn Recall was already asked to write up its reading in, so it's asked only once.</summary>
+    internal Response? WriteUpAsked;
+
+    /// <summary>True if <paramref name="text"/> is in front of the model on this thread right now: in the opening context, in this turn's
+    /// tool results, or (for a thread that keeps its tool results) in an earlier turn's still inside the window.</summary>
+    internal bool HasInView(string text)
+    {
+        if (text.Trim().Length == 0) return false;
+        if (OpeningContext?.Contains(text, StringComparison.Ordinal) == true) return true;
+        for (int i = Math.Min(contextStartIndex, History.Count); i < History.Count; i++)
+        {
+            if (History[i] is not Response { Trace: { } trace } response) continue;
+            if (!KeepToolResults && response != streamingResponse) continue;
+            foreach (TraceStep step in trace.ToList())
+                if (step.Kind == "tool_result" && step.Text?.Contains(text, StringComparison.Ordinal) == true) return true;
+        }
+        return false;
+    }
 
     private readonly List<Thread> children = new();
 
@@ -475,7 +498,7 @@ public class Thread
             IReadOnlyList<IReadOnlyList<HistoryToolCall>>? toolBatches = null;
             if ((!Internal || KeepToolHistory) && item is Response { Trace: { } trace } && replayedTraces.Add(trace))
             {
-                List<IReadOnlyList<HistoryToolCall>> batches = ToolHistory.Batches(trace);
+                List<IReadOnlyList<HistoryToolCall>> batches = ToolHistory.Batches(trace, keepResults: KeepToolResults);
                 if (batches.Count > 0)
                 {
                     toolBatches = batches;

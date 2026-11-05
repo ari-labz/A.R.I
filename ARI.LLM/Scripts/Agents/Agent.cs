@@ -2000,7 +2000,7 @@ public abstract class Agent
     private const string BlockRule = "--------------------------------";
 
     internal const string NothingNew = "Nothing new.";
-    private static bool IsNothingNew(string? notes) =>
+    internal static bool IsNothingNew(string? notes) =>
         string.IsNullOrWhiteSpace(notes)
         // Recall sometimes echoes the history's "ARI: " speaker prefix.
         || System.Text.RegularExpressions.Regex.Replace(notes.Trim(), @"^ARI:\s*", "").TrimEnd('.').Equals(NothingNew.TrimEnd('.'), StringComparison.OrdinalIgnoreCase);

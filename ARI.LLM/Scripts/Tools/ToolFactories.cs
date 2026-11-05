@@ -82,7 +82,7 @@ internal static class ToolFactories
         // Brain tools — always available; use the global brain index and vault, no project binding needed.
         ["search_brain"]   = _ => new SearchBrain(),
         ["memories_on"]    = _ => new MemoriesOn(),
-        ["recall_memory"]  = _ => new RecallMemory(),
+        ["recall_memory"]  = t => new RecallMemory(t),
         ["create_memory"]  = _ => Brain.Ready ? new CreateMemory() : null,
         ["edit_memory"]    = _ => Brain.Ready ? new EditMemory() : null,
         ["delete_memory"]  = _ => Brain.Ready ? new DeleteMemory() : null,
