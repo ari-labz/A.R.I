@@ -36,7 +36,6 @@ interface Props {
     onRemoveMessageAttach: (name: string) => void
     onHeartbeatStart:  () => void
     onHeartbeatStop:   () => void
-    onDraft:           (text: string) => void
     safetyMode:        boolean
     onToggleSafety:    () => void
     commands:         Command[]
@@ -67,7 +66,7 @@ export default function Main({
     pendingAttach, threadAttach,
     onSend, onUploadThreadFiles, onUploadMessageFiles,
     onRemoveThreadAttach, onRemoveMessageAttach,
-    onHeartbeatStart, onHeartbeatStop, onDraft, commands,
+    onHeartbeatStart, onHeartbeatStop, commands,
     projects, selectedProject, onProjectChange,
     pipelines, selectedPipeline, onPipelineChange,
     speechMode, onBeginSpeech, speechCaption, speechState,
@@ -272,7 +271,6 @@ export default function Main({
                         onRemoveAttach={onRemoveMessageAttach}
                         onHeartbeatStart={onHeartbeatStart}
                         onHeartbeatStop={onHeartbeatStop}
-                        onDraft={onDraft}
                         codeMode={shieldMode}
                         safetyMode={safetyMode}
                         onToggleSafety={onToggleSafety}

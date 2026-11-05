@@ -17,8 +17,6 @@ internal sealed class PromptOptions
     /// first real message doesn't pay for reading the shared system prompt.</summary>
     public bool                WarmOnly            { get; init; }
     public bool                ChatHidden          { get; init; }
-    /// <summary>Queue at this priority instead of the agent's own: Recall reading ahead runs in the background, behind any live reply.</summary>
-    public InferencePriority?  Priority            { get; init; }
     public Func<string, Task>? OnDelta             { get; init; }
     public Func<string, Task>? OnTextDelta         { get; init; }
     public CancellationToken   Ct                  { get; init; }

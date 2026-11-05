@@ -1105,18 +1105,6 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok();
     }
 
-    /// <summary>The message being typed, before it's sent: Recall starts opening the notes it will need, so the reply doesn't wait for
-    /// them. No thread key means the first message of a chat that doesn't exist yet. Memory is only for the Master's and admins' own chats.</summary>
-    [HttpPost("~/api/v1/drafts")]
-    public IActionResult Draft([FromBody] DraftRequest body)
-    {
-        if (Llm is null || string.IsNullOrWhiteSpace(body?.Text)) return Ok();
-        if (User.FindFirstValue(ClaimTypes.Role) != ARI.API.Auth.Roles.Admin || User.FindFirstValue(ClaimTypes.NameIdentifier) is not { } callerId) return Ok();
-        if (body.ThreadKey is not { Length: > 0 } key) Llm.PrefetchNewChat(callerId, body.Text, GetUsername());
-        else if (FindThread(key) is { HasMemoryAccess: true } thread && thread.OwnerId == callerId) Llm.PrefetchDraft(key, body.Text, GetUsername());
-        return Ok();
-    }
-
     /// <summary>Esc = stop. Cancels the in-flight turn but PRESERVES the partial work (thinking + partial
     /// reply/tools) so nothing is lost — the user's next message is a fresh turn.</summary>
     [HttpPost("{id}/interrupt")]
@@ -1447,7 +1435,6 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
 public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
 public record InterjectRequest(string? Text);
-public record DraftRequest(string? ThreadKey, string? Text);
 public record ApprovalAnswer(bool Allow, string? Decision = null);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);

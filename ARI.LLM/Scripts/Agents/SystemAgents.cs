@@ -129,41 +129,24 @@ internal static class SystemAgents
 
     internal const string WalkerFullTask = "Write the memory block for this conversation now.";
 
-    // The 2 Nov wording, kept only so memory-experimental can A/B against it: at the end of the message it made the 9B write without
-    // opening a single note (0 of 10 first steps read anything; 8 of 10 without it). The length rule now lives in WalkerPrompt.
-    internal const string WalkerOldLengthRule = " Keep it to about 200 words, most relevant first; ARI can call recall_memory herself for more.";
+    // The length rule lives in WalkerPrompt, not here: at the end of the message, "…ARI can call recall_memory herself for more" made the
+    // 9B write without opening a single note (0 of 10 first steps read anything; 8 of 10 without it).
 
-    // Earlier blocks stay in ARI's context verbatim, so retyping them costs seconds and adds nothing.
+    // Earlier blocks stay in ARI's context verbatim, so retyping them costs seconds and adds nothing. With the notes it read kept in its
+    // thread, "ARI still has every block you wrote" let it say "Nothing new." after opening the very note the message was about: it took
+    // "I can see it" for "ARI has it". This says what ARI actually has.
     internal const string WalkerDeltaTask =
-        "ARI still has every memory block you wrote earlier in this conversation. Write only what the brain holds that bears on " +
-        "the latest message and is not already in those blocks. If there is nothing to add, write exactly: " + Agent.NothingNew;
-
-    // With the notes it read kept in its thread, the first wording let it say "Nothing new." after opening the very note the message was
-    // about: it took "I can see it" for "ARI has it". This one says what ARI actually has.
-    internal const string WalkerDeltaTaskStrict =
         "ARI can't see the notes you read; she knows only what your earlier memory blocks in this conversation put into words. Write what " +
         "the brain holds that bears on the latest message and those blocks didn't already say, whether you read it just now or earlier. " +
         "If the latest message needs nothing from the brain, write exactly: " + Agent.NothingNew;
 
     internal static string WalkerWriteUp(IEnumerable<string> opened) => $"You opened {string.Join(", ", opened)} for this message. Write what in them bears on it.";
 
-    internal const string Ready = "Ready.";
-
-    // With ARI's and the speaker's notes already open it often wrote from those alone, so the task says which of the best matches it hasn't
-    // read. (tool_choice "required" can't force a read: llama.cpp b11565 ignores it for Qwen3.5, and the 9B rambles to its limit instead.)
+    // With some notes already open it often wrote from those alone, so the task says which of the best matches it hasn't read.
+    // (tool_choice "required" can't force a read: llama.cpp b11565 ignores it for Qwen3.5, and the 9B rambles to its limit instead.)
     internal static string WalkerUnreadHint(IReadOnlyList<string> unread) =>
         $"Not open yet among the best matches: {string.Join(", ", unread)}. Open the ones this message needs before you write, " +
         "several at once; if none of them bears on it, go without them. ";
-
-    // Runs while the person reads ARI's reply, so the notes the next message needs are already open when it arrives.
-    internal const string WalkerLookAheadTask =
-        "Nobody is waiting on you: ARI has just replied. Open the notes the next message is most likely to need: the people, events and " +
-        "things this exchange touched, and the links from them it hasn't reached yet. Don't write a memory block. When you're done, " +
-        "reply with exactly: " + Ready;
-
-    internal const string WalkerDraftTask =
-        "That message is still being typed and hasn't been sent. Open the notes it will need, so they're ready when it arrives. " +
-        "Don't write a memory block. When you're done, reply with exactly: " + Ready;
 
     // Lines the walker prompt gained after it shipped, each inserted after the line it follows, so a prompt nobody edited is brought up to date
     // and an edited one only gets the lines whose anchor it still has.
