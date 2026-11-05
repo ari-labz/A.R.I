@@ -66,15 +66,17 @@ internal static class SystemAgents
                 entry["Enabled"]        = true;
                 entry["AgentPrompt"]    = WalkerPrompt;
                 entry["MessagePrompt"]  = WalkerMessage;
-                entry["MaxToolCalls"]   = 10;
+                entry["MaxToolCalls"]   = WALKER_MAX_TOOL_CALLS;
                 entry["PreloadedTools"] = new JsonArray("memory_tools");
                 agents.Add(entry);
                 changed = true;
             }
+            else if (agents.OfType<JsonObject>().FirstOrDefault(a => NameOf(a).Equals(Walker, StringComparison.OrdinalIgnoreCase)) is { } walker)
+                changed |= UpdateWalker(walker);
             if (changed)
             {
                 File.WriteAllText(agentsJsonPath, root.ToJsonString(Indented));
-                Shared.Logger.LogInformation("[SystemAgents] added the Memory step agents to Agents.json.");
+                Shared.Logger.LogInformation("[SystemAgents] brought the system agents in Agents.json up to date.");
             }
         }
         catch (Exception ex)
@@ -91,13 +93,15 @@ internal static class SystemAgents
         - Start from what the conversation is about: the latest message, read in the light of the conversation so far and the context it sits in. Everything you read has to serve that, nothing else.
         - The starting points are only the names of notes that might be relevant. You know nothing about them until you open them. Use your tools: recall_memory reads a note in full, search_brain looks things up by words, neighbours shows what a note links to. Anything you write has to come from a note you opened.
         - If the starting points list ARI's own note, open it first: it is who she is, and it shapes what matters.
+        - Notes already in front of you, shown under This Conversation or read earlier in this conversation, are open: use them, and never open them again.
         - If the speaker sets a limit ("just work stuff", "nothing intimate", "sfw"), keep to it: don't open or write anything outside it.
         - Before you open any note, ask yourself: would ARI answer this conversation worse without it? If not, don't open it. A note is not relevant just because it is linked, mentions the speaker, or looks interesting. Do not browse.
         - When a note mentions a person, place or thing that this conversation needs, follow that link. Keep following relevant links, up to 6 steps from where you started, and stop when nothing more is relevant. Don't read the same note twice.
+        - Read in rounds: open every note you need at this step together, as several recall_memory calls at once, then follow the links in what you read the same way.
         - You keep this conversation between messages, so you remember what you read earlier. When the topic changes, or the person corrects themselves ("no, I meant ..."), look up the new thing and keep what you already know. Only read again if something you need is not already in front of you.
 
         WHAT TO WRITE
-        Your final message is the memory block ARI reads before it replies. Write clear notes for ARI about what bears on this conversation: who people are, what happened, how things are connected, dates, decisions, preferences. Be thorough about that, and keep the specifics (names, dates, numbers, wording that matters). Leave out everything else, even things you happened to read: other facts about the person's life that this conversation does not touch do not belong in the block. Group it by subject. Write only what the brain holds that bears on the conversation. Never restate what was said in this conversation: ARI already has it, and a summary of it is not a memory. Write names, never pronouns ("Sam misses Biscuit", not "misses her"), so nothing can be misread. If the brain holds nothing relevant, write exactly: Nothing in memory about this yet.
+        Your final message is the memory block ARI reads before it replies. Write clear notes for ARI about what bears on this conversation: who people are, what happened, how things are connected, dates, decisions, preferences. Be thorough about that, and keep the specifics (names, dates, numbers, wording that matters). Leave out everything else, even things you happened to read: other facts about the person's life that this conversation does not touch do not belong in the block. Group it by subject. Keep it to about 200 words, most relevant first. Write only what the brain holds that bears on the conversation. Never restate what was said in this conversation: ARI already has it, and a summary of it is not a memory. Write names, never pronouns ("Sam misses Biscuit", not "misses her"), so nothing can be misread. If the brain holds nothing relevant, write exactly: Nothing in memory about this yet.
 
         PRIVACY
         The starting points say who is listening. If it is the MASTER, include everything relevant. If it is GUARDED, use your judgement: leave out anything private or sensitive about the Master that is not right to share with this person (health, legal, money, intimate matters, identity, relationships and the like). When you leave something out, end the block with this section:
@@ -125,13 +129,61 @@ internal static class SystemAgents
 
     internal const string WalkerFullTask = "Write the memory block for this conversation now.";
 
-    // ARI waits for the block before she says a word, so it's bounded: ~200 words is a few seconds to write; 1,300 tokens was 20+.
-    internal const string WalkerLengthRule = " Keep it to about 200 words, most relevant first; ARI can call recall_memory herself for more.";
+    // The length rule lives in WalkerPrompt, not here: at the end of the message, "…ARI can call recall_memory herself for more" made the
+    // 9B write without opening a single note (0 of 10 first steps read anything; 8 of 10 without it).
 
-    // Earlier blocks stay in ARI's context verbatim, so retyping them costs seconds and adds nothing.
+    // Earlier blocks stay in ARI's context verbatim, so retyping them costs seconds and adds nothing. With the notes it read kept in its
+    // thread, "ARI still has every block you wrote" let it say "Nothing new." after opening the very note the message was about: it took
+    // "I can see it" for "ARI has it". This says what ARI actually has.
     internal const string WalkerDeltaTask =
-        "ARI still has every memory block you wrote earlier in this conversation. Write only what the brain holds that bears on " +
-        "the latest message and is not already in those blocks. If there is nothing to add, write exactly: " + Agent.NothingNew;
+        "ARI can't see the notes you read; she knows only what your earlier memory blocks in this conversation put into words. Write what " +
+        "the brain holds that bears on the latest message and those blocks didn't already say, whether you read it just now or earlier. " +
+        "If the latest message needs nothing from the brain, write exactly: " + Agent.NothingNew;
+
+    internal static string WalkerWriteUp(IEnumerable<string> opened) => $"You opened {string.Join(", ", opened)} for this message. Write what in them bears on it.";
+
+    // With some notes already open it often wrote from those alone, so the task says which of the best matches it hasn't read.
+    // (tool_choice "required" can't force a read: llama.cpp b11565 ignores it for Qwen3.5, and the 9B rambles to its limit instead.)
+    internal static string WalkerUnreadHint(IReadOnlyList<string> unread) =>
+        $"Not open yet among the best matches: {string.Join(", ", unread)}. Open the ones this message needs before you write, " +
+        "several at once; if none of them bears on it, go without them. ";
+
+    // Lines the walker prompt gained after it shipped, each inserted after the line it follows, so a prompt nobody edited is brought up to date
+    // and an edited one only gets the lines whose anchor it still has.
+    private static readonly (string After, string Insert)[] WalkerAdditions =
+    [
+        ("If the starting points list ARI's own note, open it first: it is who she is, and it shapes what matters.",
+         "\n- Notes already in front of you, shown under This Conversation or read earlier in this conversation, are open: use them, and never open them again."),
+        ("and stop when nothing more is relevant. Don't read the same note twice.",
+         "\n- Read in rounds: open every note you need at this step together, as several recall_memory calls at once, then follow the links in what you read the same way."),
+        ("Group it by subject.", " Keep it to about 200 words, most relevant first."),
+    ];
+
+    // Reading in rounds spends calls faster: three rounds of three or four notes is a normal walk.
+    private const int WALKER_OLD_MAX_TOOL_CALLS = 10;
+    private const int WALKER_MAX_TOOL_CALLS     = 16;
+
+    private static bool UpdateWalker(JsonObject walker)
+    {
+        bool changed = false;
+        if (KeyOf(walker, "AgentPrompt") is { } promptKey && walker[promptKey]?.GetValue<string>() is { } prompt)
+        {
+            foreach ((string after, string insert) in WalkerAdditions)
+            {
+                int at = prompt.IndexOf(after, StringComparison.Ordinal);
+                if (at < 0 || prompt.Contains(insert.Trim(), StringComparison.Ordinal)) continue;
+                prompt = prompt.Insert(at + after.Length, insert);
+                changed = true;
+            }
+            if (changed) walker[promptKey] = prompt;
+        }
+        if (KeyOf(walker, "MaxToolCalls") is { } callsKey && walker[callsKey] is JsonValue calls && calls.TryGetValue(out int max) && max == WALKER_OLD_MAX_TOOL_CALLS)
+        {
+            walker[callsKey] = WALKER_MAX_TOOL_CALLS;
+            changed = true;
+        }
+        return changed;
+    }
 
     private static string? KeyOf(JsonObject o, string name) => o.Select(kv => kv.Key).FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
     private static JsonNode? Get(JsonObject o, string name) => KeyOf(o, name) is { } k ? o[k] : null;

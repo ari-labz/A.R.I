@@ -875,6 +875,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         dreamOrchestrator?.Start();
         _ = WarmDialogueAsync();
+        _ = WarmRecallAsync();
 
         async Task BootOne(Server server, Model? model)
         {
@@ -937,6 +938,14 @@ public class LLMModule : ILLMModule, IDisposable
         await Task.Delay(2000);   // let anything else that comes up with it settle
         await Warm(textingAgent, ThreadPipeline.Dialogue, WarmupKeyPrefix + "chat");
         if (talkingAgent is not null) await Warm(talkingAgent, ThreadPipeline.Speech, WarmupKeyPrefix + "voice");
+    }
+
+    /// <summary>Reads Recall's opening (its prompt and its tools) into its slot, so the first message of the session doesn't wait for it. Recall runs on its own server, so this doesn't wait for Dialogue's warm-up.</summary>
+    private async Task WarmRecallAsync()
+    {
+        if (graphPipeline is null || Engram.ReadStoredUserName() is not { } owner) return;
+        try { await graphPipeline.WarmRecallAsync(owner); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Warming Recall's opening failed; the first message will read it instead."); }
     }
 
     private async Task Warm(Agent agent, ThreadPipeline type, string key)

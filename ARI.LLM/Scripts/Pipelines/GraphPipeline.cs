@@ -25,6 +25,13 @@ internal sealed class GraphPipeline : Pipeline
 
     private const int MaxDepth = 8;
 
+    /// <summary>The sub-thread code Recall keeps under a chat when the graph doesn't name one.</summary>
+    private const string RECALL_CODE = "memory";
+
+    /// <summary>A ceiling on Recall's block, a little over the ~200 words its prompt asks for: at temperature 0.8 one run in a few copied its
+    /// own growing blocks up to 650 words, 15 s a turn.</summary>
+    private const int RECALL_MAX_TOKENS = 450;
+
     /// <summary>Tokens Dialogue's prompt may use that aren't extra inputs: the memory block (either spelling) and the two it always has.</summary>
     private static readonly string[] DialogueOwnTokens = ["history", "memories", "memory"];
 
@@ -172,17 +179,19 @@ internal sealed class GraphPipeline : Pipeline
                 if (agentName.Equals("Memory", StringComparison.OrdinalIgnoreCase))
                 {
                     thread.MemoryDeltaThisTurn = false;
-                    if (!customAgents.ContainsKey(SystemAgents.Walker)) return await Recall();
+                    if (!customAgents.TryGetValue(SystemAgents.Walker, out CustomAgent? walker)) return await Recall();
                     if (memory is null || !thread.HasMemoryAccess) return null;
-                    StartingPoints start = new MemoryApi(memory, thread, contextSummary, privacy).Start(message);
+                    threadCode ??= RECALL_CODE;
+                    Thread recall = thread.GetOrCreateChild(threadCode, walker.Name, () => NewOwnThread(thread, threadCode, walker));
+                    StartingPoints start = new MemoryApi(memory, thread, contextSummary, privacy).Start(message, recall);
                     if (start.Text is null) return null;
                     inputs["starting"] = start.Text;
                     inputs["audience"] = start.Audience;
                     // Every block sent since the window last moved is still in Dialogue's view, so ask only for what's new.
                     thread.MemoryDeltaThisTurn = thread.MemoryBlockStart >= 0 && thread.MemoryBlockStart == thread.ContextStart;
-                    inputs["task"] = (thread.MemoryDeltaThisTurn ? SystemAgents.WalkerDeltaTask : SystemAgents.WalkerFullTask) + SystemAgents.WalkerLengthRule;
+                    inputs["task"] = (start.UnreadLeads.Count > 0 ? SystemAgents.WalkerUnreadHint(start.UnreadLeads) : "")
+                                     + (thread.MemoryDeltaThisTurn ? SystemAgents.WalkerDeltaTask : SystemAgents.WalkerFullTask);
                     agentName  = SystemAgents.Walker;
-                    threadCode ??= "memory";
                 }
 
                 if (agentName.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
@@ -239,11 +248,8 @@ internal sealed class GraphPipeline : Pipeline
                     filled["since"] = own is null ? history : SinceText(chat, own);
                     using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(agent.AgentPrompt, filled));
                     string userText = string.IsNullOrWhiteSpace(agent.MessagePrompt) ? message : PipelineGraph.Fill(agent.MessagePrompt, filled);
-                    // Recall messages saved before {task} existed end with the full-block instruction; swap it for the delta one.
-                    if (agentName == SystemAgents.Walker && !agent.MessagePrompt.Contains("{task}") && inputs.GetValueOrDefault("task") is { } task)
-                        userText = userText.Contains(SystemAgents.WalkerFullTask)
-                            ? userText.Replace(SystemAgents.WalkerFullTask, task)
-                            : userText + "\n\n" + task;
+                    if (agentName == SystemAgents.Walker && inputs.GetValueOrDefault("task") is { } task)
+                        userText = WithTask(agent, userText, task);
                     if (isReply)
                     {
                         // The reply agent answers the user's own message, which is already in the thread; a message template only applies to steps behind the scenes.
@@ -254,15 +260,24 @@ internal sealed class GraphPipeline : Pipeline
                     }
                     else
                     {
-                        try { result = await agent.Prompt(own ?? NewScratch(agent), userText, new PromptOptions { Username = username, Ct = cts.Token }); }
+                        if (agentName == SystemAgents.Walker) agent.OnStepCompletePipeline ??= AskToWriteUp;
+                        int maxTokens = agentName == SystemAgents.Walker ? RECALL_MAX_TOKENS : 0;
+                        try { result = await agent.Prompt(own ?? NewScratch(agent), userText, new PromptOptions { Username = username, Ct = cts.Token, MaxTokensOverride = maxTokens }); }
                         catch
                         {
                             if (own is not null && own.History.Count > checkpoint) own.History.RemoveRange(checkpoint, own.History.Count - checkpoint);
                             throw;
                         }
-                        if (own is not null) own.LastChatCount = chat.Count;
                         // A step that used tools comes back with the chat's display markers in its text; what the next box receives is plain text.
                         result = System.Text.RegularExpressions.Regex.Replace(result, @"<!--ari-[^>]*-->", "").Trim();
+                        if (agentName == SystemAgents.Walker) result = WithoutEcho(result, username);
+                        // A "Nothing new." left in Recall's thread is what it copies next time (measured: once it said it at turn 2 it said it every
+                        // turn after, even having just read the note the message was about). Without it, the message it skipped is simply still
+                        // in what it's told next time, since the chat count stays put.
+                        bool forgettable = agentName == SystemAgents.Walker && Agent.IsNothingNew(result)
+                                           && own is not null && OpenedNotes(own.History.Skip(checkpoint)).Count == 0;
+                        if (forgettable) own!.History.RemoveRange(checkpoint, own.History.Count - checkpoint);
+                        else if (own is not null) own.LastChatCount = chat.Count;
                     }
                 }
                 finally { own?.RunLock.Release(); }
@@ -287,6 +302,61 @@ internal sealed class GraphPipeline : Pipeline
         }
     }
 
+    // ── Recall ───────────────────────────────────────────────────────────────────
+
+    /// <summary>Recall's message with this run's task in it. Messages saved before {task} existed end with the full-block instruction instead.</summary>
+    private static string WithTask(CustomAgent walker, string userText, string task)
+    {
+        if (walker.MessagePrompt?.Contains("{task}") == true) return userText;
+        return userText.Contains(SystemAgents.WalkerFullTask)
+            ? userText.Replace(SystemAgents.WalkerFullTask, task)
+            : $"{userText}\n\n{task}";
+    }
+
+    /// <summary>Recall's block without the speaker tag ("ARI:", "Sam:") it sometimes copies from the history it's shown.</summary>
+    private static string WithoutEcho(string block, string username)
+    {
+        string speakers = $"ARI|{System.Text.RegularExpressions.Regex.Escape(username)}";
+        return System.Text.RegularExpressions.Regex.Replace(block, $@"^\s*(?:{speakers})\s*:\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>Notes these thread items actually read (not the "already open" reminders), by title.</summary>
+    private static List<string> OpenedNotes(IEnumerable<ThreadItem> items)
+    {
+        List<string> titles = new();
+        foreach (Response response in items.OfType<Response>())
+            foreach (TraceStep step in response.Trace?.ToList() ?? [])
+                if (step is { Kind: "tool_result", Name: "recall_memory" } && step.Text?.StartsWith("# ") == true)
+                    titles.Add(step.Text[2..].Split('\n')[0].Trim());
+        return titles.Distinct().ToList();
+    }
+
+    /// <summary>Recall opened notes for this message and then said "Nothing new.": it's asked, once, to write up what it read.</summary>
+    private static string? AskToWriteUp(Thread recall, string stepText, bool hadTools)
+    {
+        if (!Agent.IsNothingNew(stepText) || recall.streamingResponse is not { } turn || recall.WriteUpAsked == turn) return null;
+        List<string> opened = OpenedNotes([turn]);
+        if (opened.Count == 0) return null;
+        recall.WriteUpAsked = turn;
+        return SystemAgents.WalkerWriteUp(opened);
+    }
+
+    /// <summary>Reads Recall's opening (its prompt and tools) into its slot at startup, so the first conversation doesn't spend seconds on it.</summary>
+    internal async Task WarmRecallAsync(string username)
+    {
+        if (memory is null || !customAgents.TryGetValue(SystemAgents.Walker, out CustomAgent? walker)) return;
+        Thread chat = new(ThreadPipeline.Dialogue, "warmup-recall") { Internal = true, HasMemoryAccess = true };
+        chat.History.Add(new Prompt { AuthorName = username, Text = ".", Timestamp = DateTime.Now });
+        Thread recall = chat.GetOrCreateChild(RECALL_CODE, walker.Name, () => NewOwnThread(chat, RECALL_CODE, walker));
+        StartingPoints start = new MemoryApi(memory, chat, null, PrivacyMode.Unrestricted).Start(".", recall);
+        Dictionary<string, string> filled = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["audience"] = start.Audience, ["since"] = $"{username}: .", ["starting"] = start.Text ?? "", ["task"] = SystemAgents.WalkerFullTask, ["message"] = ".",
+        };
+        using IDisposable _ = CustomAgent.Resolve(PipelineGraph.Fill(walker.AgentPrompt, filled));
+        await walker.Prompt(recall, PipelineGraph.Fill(walker.MessagePrompt ?? "", filled), new PromptOptions { Username = username, WarmOnly = true });
+    }
+
     /// <summary>A throw-away thread for one run of a step: read-only tools, and any tool groups the agent starts with.</summary>
     private static Thread NewScratch(CustomAgent agent)
     {
@@ -301,7 +371,7 @@ internal sealed class GraphPipeline : Pipeline
     {
         Thread child = new(ThreadPipeline.Dialogue, $"{parent.Key}:{code}")
         {
-            Internal = true, ReadOnlyTools = true, KeepToolHistory = true, Parent = parent, Code = code, OwnerAgent = agent.Name, Label = $"{agent.Name} ({code})",
+            Internal = true, ReadOnlyTools = true, KeepToolHistory = true, KeepToolResults = true, Parent = parent, Code = code, OwnerAgent = agent.Name, Label = $"{agent.Name} ({code})",
         };
         EquipThread(child, agent);
         return child;

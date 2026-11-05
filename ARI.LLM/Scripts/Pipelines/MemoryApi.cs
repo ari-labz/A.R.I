@@ -8,21 +8,28 @@ namespace ARI.LLM;
 /// (names only, never the notes themselves).</summary>
 internal sealed class MemoryApi(Memory memory, Thread thread, string? contextSummary, PrivacyMode privacy)
 {
-    public StartingPoints Start(string message)
+    // The best few matches are the ones a reply is likely to need, so Recall is told which of them it hasn't read yet.
+    private const int TOP_LEADS = 3;
+
+    /// <summary><paramref name="recall"/> is Recall's own thread: notes already in front of it are marked as open, so it doesn't read them again.</summary>
+    public StartingPoints Start(string message, Thread? recall = null)
     {
         string audience = thread.IsGuarded
             ? "GUARDED. The person talking is not the Master. Share what is safe and relevant; leave out anything private or sensitive."
             : "MASTER. The person talking is the Master, so everything relevant can be shared.";
         // The same gate recall has always had: nothing for a conversation without memory access.
-        if (memory.HopLimit <= 0 || !thread.HasMemoryAccess) return new StartingPoints(null, audience);
+        if (memory.HopLimit <= 0 || !thread.HasMemoryAccess) return new StartingPoints(null, audience, []);
         Memory.MemoryPrep prep = memory.Prepare(thread.GetChatHistory(), message, contextSummary, privacy);
+        bool IsOpen(string name) => recall is not null && Brain.GetNote(name) is { } note && recall.HasInView(note.Content);
+        string Mark(string name) => IsOpen(name) ? $"{name} (already open above)" : name;
         // Names only, never the notes themselves: the walker has to open a note with its tools before it can use anything in it.
         StringBuilder text = new();
-        if (prep.SpeakerNoteName is { Length: > 0 }) text.AppendLine("THE SPEAKER'S OWN NOTE: " + prep.SpeakerNoteName).AppendLine();
-        if (Brain.GetNote("ARI") is { } self) text.AppendLine("ARI'S OWN NOTE (who she is; open it first): " + self.Title).AppendLine();
+        if (prep.SpeakerNoteName is { Length: > 0 }) text.AppendLine("THE SPEAKER'S OWN NOTE: " + Mark(prep.SpeakerNoteName)).AppendLine();
+        if (Brain.GetNote("ARI") is { } self)
+            text.AppendLine(IsOpen(self.Title) ? $"ARI'S OWN NOTE (who she is): {self.Title} (already open above)" : "ARI'S OWN NOTE (who she is; open it first): " + self.Title).AppendLine();
         if (prep.Terms.Count > 0) text.AppendLine("WORDS FROM THE MESSAGE THAT WERE SEARCHED FOR: " + string.Join(", ", prep.Terms)).AppendLine();
         text.AppendLine(prep.Offered.Count > 0
-            ? "NOTES THAT MIGHT BE RELEVANT, BEST MATCH FIRST (names only: open a note with recall_memory to read it):\n" + string.Join("\n", prep.Offered.Select(n => "- " + n))
+            ? "NOTES THAT MIGHT BE RELEVANT, BEST MATCH FIRST (names only: open a note with recall_memory to read it):\n" + string.Join("\n", prep.Offered.Select(n => "- " + Mark(n)))
             : "No note matched those words directly. Search for the people and things the conversation is about.");
         // A capitalised name in the message that no note matches: ARI doesn't know who or what it is, so she should ask, not guess.
         string speaker = thread.History.OfType<Prompt>().Select(p => p.AuthorName).FirstOrDefault(a => !string.IsNullOrWhiteSpace(a)) ?? "";
@@ -31,10 +38,12 @@ internal sealed class MemoryApi(Memory memory, Thread thread, string? contextSum
             .Where(w => !prep.Offered.Any(n => n.Contains(w, StringComparison.OrdinalIgnoreCase)))
             .Where(w => Brain.GetNote(w) is null).ToList();
         if (unknown.Count > 0) text.AppendLine().AppendLine("NAMES IN THE MESSAGE WITH NO NOTE AT ALL: " + string.Join(", ", unknown) + ". Nothing is known about them yet.");
-        return new StartingPoints(text.ToString().TrimEnd(), audience);
+        List<string> unreadLeads = prep.Offered.Take(TOP_LEADS).Where(n => !IsOpen(n)).ToList();
+        return new StartingPoints(text.ToString().TrimEnd(), audience, unreadLeads);
     }
 
 }
 
-/// <summary><see cref="Text"/> is null when this conversation has no memory access, which tells a step that depends on it to skip itself.</summary>
-internal sealed record StartingPoints(string? Text, string Audience);
+/// <summary><see cref="Text"/> is null when this conversation has no memory access, which tells a step that depends on it to skip itself.
+/// <see cref="UnreadLeads"/> are the best few matches Recall hasn't got open yet.</summary>
+internal sealed record StartingPoints(string? Text, string Audience, IReadOnlyList<string> UnreadLeads);

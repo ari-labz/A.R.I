@@ -165,8 +165,9 @@ internal sealed class MergeNotesTool : Tool
 // ── recall_memory ──────────────────────────────────────────────────────────────────────
 
 // Reads a brain note's full content. Sensitive content is fine to read in any conversation — the
-// restriction is on repeating it to someone other than the master, not on reading it.
-internal sealed class RecallMemory : Tool
+// restriction is on repeating it to someone other than the master, not on reading it. Given the thread it runs on, a note that is
+// already in front of the model comes back as a one-line reminder instead of being read (and paid for) again.
+internal sealed class RecallMemory(Thread? thread = null) : Tool
 {
     internal override string     Name   => "recall_memory";
     internal override ToolAccess Access => ToolAccess.Read;
@@ -200,6 +201,7 @@ internal sealed class RecallMemory : Tool
 
         string content = note.Content;
         if (content.Trim().Length == 0) return Task.FromResult<ToolResult>($"'{note.Title}' exists but has no content yet.");
+        if (thread?.HasInView(content) == true) return Task.FromResult<ToolResult>($"{note.Title} is already open above, unchanged.");
         return Task.FromResult<ToolResult>($"# {note.Title}\n\n{note.SensitivityNotice}{content}");
     }
 }
