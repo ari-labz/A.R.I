@@ -29,7 +29,6 @@ interface Props {
     onRemoveAttach:   (idOrName: string) => void
     onHeartbeatStart: () => void
     onHeartbeatStop:  () => void
-    onDraft:          (text: string) => void
     codeMode:         boolean
     safetyMode:       boolean
     onToggleSafety:   () => void
@@ -45,7 +44,7 @@ export default function InputArea({
     projects, selectedProject, onProjectChange,
     pipelines, selectedPipeline, onPipelineChange, onBeginSpeech, threadLocked, serverReady,
     onSend, onUploadFiles, onRemoveAttach,
-    onHeartbeatStart, onHeartbeatStop, onDraft,
+    onHeartbeatStart, onHeartbeatStop,
     codeMode, safetyMode, onToggleSafety,
 }: Props) {
     const aiName = useAssistantName()
@@ -239,7 +238,7 @@ export default function InputArea({
                         : amending    ? "Describe the changes to the plan…"
                         : `Message ${aiName}...`
                     }
-                    onChange={e => { setInput(e.target.value); updateCmdPopup(e.target.value); onDraft(e.target.value) }}
+                    onChange={e => { setInput(e.target.value); updateCmdPopup(e.target.value) }}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
                     onFocus={() => { if (input.trim()) onHeartbeatStart() }}

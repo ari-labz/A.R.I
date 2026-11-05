@@ -53,7 +53,7 @@ public class Thread
     public bool Internal { get; init; }
 
     /// <summary>The thread that spawned this one (e.g. a CodeArchitect plan), or null for a top-level thread.</summary>
-    public Thread? Parent { get; internal set; }
+    public Thread? Parent { get; init; }
 
     /// <summary>True when this thread was spawned by another thread.</summary>
     public bool IsSubThread => Parent is not null;
@@ -76,76 +76,33 @@ public class Thread
     /// small; a step's own sub-thread needs its reading kept, because remembering what it read is the point.</summary>
     internal bool KeepToolHistory { get; init; }
 
+    /// <summary>Replay those tool calls exactly as they ran, results in full, instead of stubbed: a step's own sub-thread, so the notes
+    /// Recall read on earlier messages are still open on the next one and it doesn't read them again.</summary>
+    internal bool KeepToolResults { get; init; }
+
     /// <summary>Only one run at a time uses a sub-thread, so a new message waits for a cancelled run to finish unwinding.</summary>
     internal readonly SemaphoreSlim RunLock = new(1, 1);
 
     /// <summary>How many of the parent chat's messages this sub-thread has already been told about.</summary>
     internal int LastChatCount;
 
-    /// <summary>A run that reads ahead on this sub-thread while nobody is waiting (Recall's look-ahead or a draft), so a live run can stop it.</summary>
-    internal CancellationTokenSource? Prefetch;
-    internal Task? PrefetchRun;
-
-    /// <summary>The newest draft that arrived while a read-ahead was already running; it runs next if it brings new words.</summary>
-    internal string? PendingDraft;
-
-    /// <summary>The last draft read ahead for, so one that adds no new words isn't read for again.</summary>
-    internal string? LastDraft;
-
-    /// <summary>Draft read-aheads since the last message was sent: each one adds a whole Recall prompt to this thread.</summary>
-    internal int DraftReads;
-
     /// <summary>The turn Recall was already asked to write up its reading in, so it's asked only once.</summary>
     internal Response? WriteUpAsked;
 
-    /// <summary>Notes put in front of the agent before it starts, in the opening context (Recall's own note and the speaker's).</summary>
-    internal string? OpenNotes;
-
-    internal void StopPrefetch()
-    {
-        PendingDraft = null;
-        try { Prefetch?.Cancel(); }
-        catch (ObjectDisposedException) { }
-    }
-
-    /// <summary>A live run is about to use this sub-thread: a read-ahead still going gets up to <paramref name="grace"/> to finish, since what it
-    /// is reading is what the live run would read anyway, and is stopped after that.</summary>
-    internal async Task SettlePrefetch(TimeSpan grace)
-    {
-        PendingDraft = null;
-        LastDraft    = null;
-        DraftReads   = 0;
-        if (PrefetchRun is not { IsCompleted: false } run) return;
-        await Task.WhenAny(run, Task.Delay(grace));
-        if (!run.IsCompleted) StopPrefetch();
-    }
-
     /// <summary>True if <paramref name="text"/> is in front of the model on this thread right now: in the opening context, in this turn's
-    /// tool results, or (for a thread that keeps its reading) in an earlier turn's still inside the window.</summary>
+    /// tool results, or (for a thread that keeps its tool results) in an earlier turn's still inside the window.</summary>
     internal bool HasInView(string text)
     {
         if (text.Trim().Length == 0) return false;
-        if (OpenNotes?.Contains(text, StringComparison.Ordinal) == true) return true;
         if (OpeningContext?.Contains(text, StringComparison.Ordinal) == true) return true;
         for (int i = Math.Min(contextStartIndex, History.Count); i < History.Count; i++)
         {
             if (History[i] is not Response { Trace: { } trace } response) continue;
-            if (!(KeepToolHistory && RecallExperiment.KeepNotes) && response != streamingResponse) continue;
+            if (!KeepToolResults && response != streamingResponse) continue;
             foreach (TraceStep step in trace.ToList())
                 if (step.Kind == "tool_result" && step.Text?.Contains(text, StringComparison.Ordinal) == true) return true;
         }
         return false;
-    }
-
-    /// <summary>Makes a sub-thread that was started before this thread existed (Recall reading ahead on a first message's draft) one of its own.</summary>
-    internal void AdoptChild(Thread child)
-    {
-        lock (children)
-        {
-            child.Parent = this;
-            children.Add(child);
-        }
-        Updated?.Invoke();
     }
 
     private readonly List<Thread> children = new();
@@ -541,7 +498,7 @@ public class Thread
             IReadOnlyList<IReadOnlyList<HistoryToolCall>>? toolBatches = null;
             if ((!Internal || KeepToolHistory) && item is Response { Trace: { } trace } && replayedTraces.Add(trace))
             {
-                List<IReadOnlyList<HistoryToolCall>> batches = ToolHistory.Batches(trace, keepResults: KeepToolHistory && RecallExperiment.KeepNotes);
+                List<IReadOnlyList<HistoryToolCall>> batches = ToolHistory.Batches(trace, keepResults: KeepToolResults);
                 if (batches.Count > 0)
                 {
                     toolBatches = batches;

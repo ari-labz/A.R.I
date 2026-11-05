@@ -4,7 +4,7 @@ import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
 import {
     useThreads, createThread, createThreadWithMode, closeThread, loadHistory, fetchThread, pollThreadWhileStreaming,
-    openEventStream, openWatchStream, useTypingHeartbeat, useDraftPrefetch,
+    openEventStream, openWatchStream, useTypingHeartbeat,
     type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project, type ThreadStatus, type WatchEvent,
 } from "./hooks/useThreads"
 import { usePipelines } from "./hooks/usePipelines"
@@ -289,7 +289,6 @@ export default function App() {
     }, [])
 
     const heartbeat = useTypingHeartbeat(() => activeThreadRef.current)
-    const draft     = useDraftPrefetch(() => activeThreadRef.current)
 
     const loadProjects = useCallback(async () => {
         try {
@@ -1020,7 +1019,6 @@ export default function App() {
 
     // ── send ──────────────────────────────────────────────
     const send = useCallback(async (prompt: string) => {
-        draft.clear()
         if (!prompt && pendingAttach.length === 0) return
 
         // Approving a plan lifts safe mode (the server clears it too) — so the toggle doesn't silently
@@ -1485,7 +1483,6 @@ export default function App() {
                     onRemoveMessageAttach={removeMessageAttachment}
                     onHeartbeatStart={heartbeat.start}
                     onHeartbeatStop={heartbeat.stop}
-                    onDraft={draft.update}
                     safetyMode={safetyMode}
                     onToggleSafety={() => setSafetyMode(m => !m)}
                     commands={COMMANDS}
