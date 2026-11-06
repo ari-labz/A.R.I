@@ -61,6 +61,8 @@ internal static class PersistedThreads
         public int      ContextStart    { get; set; }
         public int      TurnSerial      { get; set; }
         public int      ItemCount       { get; set; }
+        // Messages Engram had swept when this was saved. Older snapshots don't have it and count as fully swept.
+        public int?     EngramSwept     { get; set; }
         public DateTime SavedAt         { get; set; }
     }
 
@@ -140,7 +142,7 @@ internal static class PersistedThreads
                 FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault,
                 IsRemoteProject = thread.IsRemoteProject, IsAdminChat = thread.IsAdminChat, HasMemoryAccess = thread.HasMemoryAccess,
                 SafeMode = thread.SafeMode, LastMessageAt = thread.LastMessageAt, ContextStart = thread.ContextStart,
-                TurnSerial = thread.TurnSerial, ItemCount = items.Count, SavedAt = DateTime.UtcNow,
+                TurnSerial = thread.TurnSerial, ItemCount = items.Count, EngramSwept = Engram.Current?.SweptCount(thread.Key), SavedAt = DateTime.UtcNow,
             };
 
             StringBuilder sb = new();
@@ -272,7 +274,9 @@ internal static class PersistedThreads
 
             thread.ContextStart    = meta.ContextStart;
             thread.LastMessageAt   = meta.LastMessageAt;
-            thread.EngramProcessed = true;   // everything saved here has already been through Engram
+            // Messages after the saved sweep mark (a shutdown before Engram got to them) still need sweeping.
+            int conversation = Engram.ConversationCount(thread);
+            thread.EngramProcessed = (meta.EngramSwept ?? conversation) >= conversation;
             return true;
         }
         catch (Exception ex)
