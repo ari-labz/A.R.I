@@ -573,7 +573,7 @@ internal class Engram : MemoryAgent, IDisposable
             ExtractedEntity lead = entities[group.OrderByDescending(i => entities[i].Correction).First()];
             string meta = $"Kind: {lead.Kind}" + (lead.Theme.Length > 0 ? $" · Theme: {lead.Theme}" : "") + (lead.Involves.Length > 0 ? $" · Involves: {lead.Involves}" : "")
                         + (lead.Date.Length > 0 ? $" · Date: {lead.Date}" : "");
-            string note = lead.Correction ? "\nCORRECTION: the speaker said the older version of this was wrong or out of date. Replace it; do not keep both." : "";
+            string note = lead.Correction ? "\nCORRECTION: the speaker said the older version of this is wrong, out of date or replaced by something newer. Find it, on this note or another, and replace it; do not keep both." : "";
             string thought = string.Join(" ", group.Select(i => entities[i].Thought).Where(t => t.Length > 0));
             if (thought.Length > 0) note += $"\nMARGIN THOUGHT to leave beside the fact it relates to (as a thought, never as a fact): {thought}";
             string groupHint = "";
