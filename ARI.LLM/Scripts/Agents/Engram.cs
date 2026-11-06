@@ -221,9 +221,6 @@ internal class Engram : MemoryAgent, IDisposable
             int lastCount = lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
             List<ThreadItem> recentItems = conversationItems.Skip(lastCount).ToList();
 
-            lastRun[threadKey]          = DateTime.UtcNow;
-            lastHistoryCount[threadKey] = conversationItems.Count;
-
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
 
             // No user messages — ARI-only thread (proactive, internal monologue, etc.). Nothing to
@@ -232,6 +229,7 @@ internal class Engram : MemoryAgent, IDisposable
             {
                 outcome   = "skipped — no user messages (ARI-only thread)";
                 processed = true;
+                MarkSwept(threadKey, conversationItems.Count);
                 return;
             }
 
@@ -258,7 +256,17 @@ internal class Engram : MemoryAgent, IDisposable
             //     tool-free call, so it can't wander; the excerpt it captures per entity is what keeps
             //     Stage 3 faithful to what was actually said without needing one continuous thread. ---
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] extracting entities...", threadKey);
-            List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary, code, project);
+            List<ExtractedEntity>? extracted = await ExtractAsync(transcript, contextSummary, code, project);
+
+            // The model server couldn't answer (stopped, restarting, out of memory). That is not "nothing to remember":
+            // these messages stay unswept and the thread stays unprocessed, so the delete gate's retry sweeps them again.
+            if (extracted is null)
+            {
+                outcome = "failed — the model server didn't answer; the messages stay unswept for the next try";
+                Shared.Logger.LogWarning("[Engram] [{ThreadKey}] sweep failed — extraction got no answer; will try again.", threadKey);
+                return;
+            }
+            List<ExtractedEntity> entities = extracted;
 
             // The conversation's own date — not "today", since Engram can run well after the fact.
             // Stage 3 is told this explicitly so it never has to guess or invent one.
@@ -292,6 +300,7 @@ internal class Engram : MemoryAgent, IDisposable
                     AppendToConversationLog(logStart, logLine, logStart, logEnd);
             }
 
+            MarkSwept(threadKey, conversationItems.Count);
             committed    = commits;
             blockedCount = blocked;
             outcome      = entities.Count == 0
@@ -325,6 +334,16 @@ internal class Engram : MemoryAgent, IDisposable
         }
     }
 
+    /// <summary>Moves the sweep mark forward. Only a sweep that got its extraction back calls this, so a failed one is tried again.</summary>
+    private void MarkSwept(string threadKey, int conversationCount)
+    {
+        lock (lastRun)
+        {
+            lastRun[threadKey]          = DateTime.UtcNow;
+            lastHistoryCount[threadKey] = conversationCount;
+        }
+    }
+
     // Test-only: runs Extract like RunEngram, then stops — never touches Save or writes anything.
     internal async Task<List<(string Entity, bool IsNew, string Excerpt, bool Sensitive)>> DebugExtractOnly(string threadKey)
     {
@@ -334,7 +353,7 @@ internal class Engram : MemoryAgent, IDisposable
 
         string transcript = BuildTranscript(recentItems);
         string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
-        List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary);
+        List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary) ?? new();
         return entities.Select(e => (e.Entity, e.IsNew, e.Excerpt, e.Sensitive)).ToList();
     }
 
@@ -352,16 +371,19 @@ internal class Engram : MemoryAgent, IDisposable
     // keeps each answer short and complete, so nothing in the middle is skipped.
     private const int EXTRACT_CHUNK_CHARS = 1600;
 
-    private async Task<List<ExtractedEntity>> ExtractAsync(string transcript, string contextSummary, bool code = false, string? project = null)
+    // Null when the model server didn't answer for any part of the transcript: the caller must not treat that as "nothing to remember".
+    private async Task<List<ExtractedEntity>?> ExtractAsync(string transcript, string contextSummary, bool code = false, string? project = null)
     {
         if (code || transcript.Length <= EXTRACT_CHUNK_CHARS) return await ExtractChunkAsync(transcript, contextSummary, code, project);
 
         List<ExtractedEntity> all = new();
+        bool failed = false;
         StringBuilder chunk = new();
         async Task Flush()
         {
             if (chunk.ToString().Trim().Length == 0) return;
-            all.AddRange(await ExtractChunkAsync(chunk.ToString(), contextSummary, code, project));
+            if (!failed && await ExtractChunkAsync(chunk.ToString(), contextSummary, code, project) is { } found) all.AddRange(found);
+            else failed = true;
             chunk.Clear();
         }
         // A chunk that starts mid-message would lose who is speaking, and the model then takes the most-named person for the speaker.
@@ -377,10 +399,10 @@ internal class Engram : MemoryAgent, IDisposable
             chunk.Append(paragraph).Append("\n\n");
         }
         await Flush();
-        return all;
+        return failed ? null : all;
     }
 
-    private async Task<List<ExtractedEntity>> ExtractChunkAsync(string transcript, string contextSummary, bool code = false, string? project = null)
+    private async Task<List<ExtractedEntity>?> ExtractChunkAsync(string transcript, string contextSummary, bool code = false, string? project = null)
     {
         string context = string.IsNullOrWhiteSpace(contextSummary)
             ? ""
@@ -422,8 +444,8 @@ internal class Engram : MemoryAgent, IDisposable
         }
         catch (Exception ex)
         {
-            Shared.Logger.LogWarning("[Engram] Extraction failed ({Error}) — treating as nothing extracted.", ex.Message);
-            return new();
+            Shared.Logger.LogWarning("[Engram] Extraction failed ({Error}).", ex.Message);
+            return null;
         }
     }
 
