@@ -14,7 +14,8 @@ internal class Engram : MemoryAgent, IDisposable
     // ── Constants ────────────────────────────────────────────────────────────────
     private const int    EXTRACT_MAX_TOKENS   = 6000;
     private const double EXTRACT_TEMPERATURE = 0.3;
-    private const int    SAVE_MAX_TOKENS      = 300;
+    // A day-log entry covers every topic of a long conversation; at 300 tokens entries were cut off mid-sentence.
+    private const int    LOG_SUMMARY_MAX_TOKENS = 800;
     private const int    OVERSIZED_BLOCK_CHARS = 600;
 
     // Each Stage-3 call now places exactly one entity in its own short-lived thread, so there's no
@@ -804,7 +805,7 @@ internal class Engram : MemoryAgent, IDisposable
                 new { role = "user",   content = user }
             },
             stream      = false,
-            max_tokens  = SAVE_MAX_TOKENS,
+            max_tokens  = LOG_SUMMARY_MAX_TOKENS,
             temperature = EXTRACT_TEMPERATURE,
             thinking             = false,
             enable_thinking      = false,
@@ -822,17 +823,34 @@ internal class Engram : MemoryAgent, IDisposable
 
             string json = await response.Content.ReadAsStringAsync();
             using JsonDocument doc = JsonDocument.Parse(json);
-            return doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString()?.Trim() ?? "";
+            JsonElement choice = doc.RootElement.GetProperty("choices")[0];
+            string text = choice.GetProperty("message").GetProperty("content").GetString()?.Trim() ?? "";
+            if (choice.TryGetProperty("finish_reason", out JsonElement finish) && finish.GetString() == "length")
+            {
+                Shared.Logger.LogInformation("[Engram] Summary hit the token cap — keeping only the finished part.");
+                text = TrimToLastComplete(text);
+            }
+            return text;
         }
         catch (Exception ex)
         {
             Shared.Logger.LogWarning("[Engram] Summary generation failed: {Err}", ex.Message);
             return "";
         }
+    }
+
+    /// <summary>A summary cut off by the token cap ends mid-sentence. Keeps the whole lines before the cut, and the finished
+    /// sentences of the line it stopped in.</summary>
+    private static string TrimToLastComplete(string text)
+    {
+        string t = text.TrimEnd();
+        if (t.Length == 0 || ".!?)]\"'".Contains(t[^1])) return t;
+        int newline = t.LastIndexOf('\n');
+        string head = newline >= 0 ? t[..newline] : "";
+        string last = newline >= 0 ? t[(newline + 1)..] : t;
+        int stop = new[] { last.LastIndexOf(". "), last.LastIndexOf("! "), last.LastIndexOf("? ") }.Max();
+        string finished = stop > 0 ? last[..(stop + 1)] : "";
+        return (finished.Length > 0 ? (head.Length > 0 ? head + "\n" : "") + finished : head).TrimEnd();
     }
 
     // Each entry carries the actual time range of that conversation (first message → last message),
