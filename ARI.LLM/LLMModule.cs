@@ -1762,7 +1762,7 @@ public class LLMModule : ILLMModule, IDisposable
     }
 
     /// <summary>Brings a saved thread back to life: registered like any other, with its history, context window and owner
-    /// restored. Engram is told the saved messages are already done, so only new ones are swept.</summary>
+    /// restored. Engram is told how far it had swept when the thread was saved, so only the rest is swept.</summary>
     public Thread? ReopenPersisted(string key)
     {
         if (threads.TryGetValue(key, out Thread? live)) return live;
@@ -1770,7 +1770,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         Thread thread = GetOrCreateThread(ThreadPipeline.Dialogue, key);
         if (!PersistedThreads.Restore(key, thread)) { threads.TryRemove(key, out _); return null; }
-        engram?.MarkHistoryRestored(key, thread.History.Count);
+        engram?.MarkHistoryRestored(key, PersistedThreads.ReadMeta(key)?.EngramSwept ?? Engram.ConversationCount(thread));
         Broadcast(new AppEvent("threadUpdated", key));
         return thread;
     }

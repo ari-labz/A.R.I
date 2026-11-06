@@ -34,8 +34,14 @@ internal class Engram : MemoryAgent, IDisposable
     private readonly Dictionary<string, int>            lastHistoryCount = new();
     private readonly ConcurrentDictionary<string, int>  exchangeCounts   = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>A thread restored from disk (Persistent Threads) already went through Engram: sweeps start after these items.</summary>
-    internal void MarkHistoryRestored(string threadKey, int itemCount) { lock (lastRun) lastHistoryCount[threadKey] = itemCount; }
+    /// <summary>A thread restored from disk (Persistent Threads): sweeps start after the messages Engram had already swept when it was saved.</summary>
+    internal void MarkHistoryRestored(string threadKey, int sweptCount) { lock (lastRun) lastHistoryCount[threadKey] = sweptCount; }
+
+    /// <summary>How many of the thread's messages (the user's and ARI's replies) Engram has swept so far. Saved with a persisted thread.</summary>
+    internal int SweptCount(string threadKey) { lock (lastRun) return lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0; }
+
+    /// <summary>The messages a sweep reads: the user's and ARI's replies, nothing else in the history. The sweep mark counts these.</summary>
+    internal static int ConversationCount(Thread thread) => thread.History.Count(i => i is LLM.Prompt or Response);
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
     private readonly SemaphoreSlim                      reflexLock       = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
