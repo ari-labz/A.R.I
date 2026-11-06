@@ -42,7 +42,8 @@ internal class Engram : MemoryAgent, IDisposable
     internal int SweptCount(string threadKey) { lock (lastRun) return lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0; }
 
     /// <summary>The messages a sweep reads: the user's and ARI's replies, nothing else in the history. The sweep mark counts these.</summary>
-    internal static int ConversationCount(Thread thread) => thread.History.Count(i => i is LLM.Prompt or Response);
+    internal static int ConversationCount(Thread thread) => ConversationCount(thread.History);
+    internal static int ConversationCount(IEnumerable<ThreadItem> items) => items.Count(i => i is LLM.Prompt or Response);
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
     private readonly SemaphoreSlim                      reflexLock       = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
@@ -167,7 +168,8 @@ internal class Engram : MemoryAgent, IDisposable
         return new List<ThreadItem>();
     }
 
-    internal async Task RunEngram(string threadKey, string trigger, bool force = false)
+    /// <param name="saved">A saved conversation that isn't live (Persistent Threads), swept in place of the live thread with this key.</param>
+    internal async Task RunEngram(string threadKey, string trigger, bool force = false, Thread? saved = null)
     {
         // In DevMode Engram still runs in full: the brain it writes to is a throwaway copy (see LLMModule.PrepareDevSandbox), so nothing it does is kept.
 
@@ -177,7 +179,7 @@ internal class Engram : MemoryAgent, IDisposable
         // filters recall, not writes. Master-only filtering is not a substitute: the misfiled note that
         // prompted this gate was built from the Master's own messages, misread by pronoun resolution.
         // Force-proof like the DevMode gate above — a manual close must not be a way around it either.
-        threads.TryGetValue(threadKey, out Thread? sweptThread);
+        Thread? sweptThread = saved ?? threads.GetValueOrDefault(threadKey);
         (ThreadMedium medium, bool shared) = sweptThread is not null ? (sweptThread.Medium, sweptThread.InSharedChannel) : Channels.PlaceOf(threadKey);
         if (medium == ThreadMedium.Channel && shared && !EngramOthersSetting.Enabled)
         {
@@ -217,7 +219,8 @@ internal class Engram : MemoryAgent, IDisposable
 
         try
         {
-            List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? SnapshotHistory(dialogueThread) : new List<ThreadItem>();
+            Thread? dialogueThread = sweptThread;
+            List<ThreadItem> allItems = dialogueThread is not null ? SnapshotHistory(dialogueThread) : new List<ThreadItem>();
             List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
 
             // A code thread is swept with its own prompts: what was done and decided, filed on the project's note —
@@ -285,7 +288,7 @@ internal class Engram : MemoryAgent, IDisposable
             //     still resolved by exact match beforehand and the write tool is still confined to that
             //     pre-resolved set of paths — one call now covers the whole sweep's entities instead of
             //     one call per entity, but no entity can still reach a note it wasn't resolved against. ---
-            (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate, code, project);
+            (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate, code, project, source: saved);
 
             // A short linked summary of what was concluded; falls back to a linked entity list if the summary call fails.
             if (entities.Count > 0)
@@ -309,6 +312,8 @@ internal class Engram : MemoryAgent, IDisposable
             if (!code && entities.Count > 0) CleanLinks();
 
             MarkSwept(threadKey, conversationItems.Count);
+            // The saved copy (Persistent Threads) records it too, so the next start doesn't sweep these messages again.
+            PersistedThreads.SetEngramSwept(threadKey, conversationItems.Count);
             committed    = commits;
             blockedCount = blocked;
             outcome      = entities.Count == 0
@@ -332,8 +337,8 @@ internal class Engram : MemoryAgent, IDisposable
             });
 
             // The invariant latch: a completed sweep (or a "nothing to store") releases the thread for deletion.
-            if (processed && threads.TryGetValue(threadKey, out Thread? processedThread))
-                processedThread.EngramProcessed = true;
+            if (processed && sweptThread is not null)
+                sweptThread.EngramProcessed = true;
 
             sweepingThreads.TryRemove(threadKey, out _);
             backgroundSweeps.TryRemove(threadKey, out _);
@@ -553,7 +558,7 @@ internal class Engram : MemoryAgent, IDisposable
         return chat is null ? Make(null, $"engram:{threadKey}:{Guid.NewGuid():N}") : chat.GetOrCreateChild("engram", Name, () => Make(chat, $"{chat.Key}:engram"));
     }
 
-    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate, bool code = false, string? project = null, bool reflex = false)
+    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate, bool code = false, string? project = null, bool reflex = false, Thread? source = null)
     {
         if (entities.Count == 0) return (0, 0);
 
@@ -600,7 +605,7 @@ internal class Engram : MemoryAgent, IDisposable
         // A quick save leads with the conversation and treats the noted facts as the headline of what to change; a sweep keeps them first and adds the source after.
         if (!code) task = reflex
             ? RecentConversation(threadKey, true) + "\n\nHEADLINE: the chat noted these facts as what changed in the conversation above. Change only this, writing from the conversation, not from the headline's wording.\n\n" + task
-            : task + RecentConversation(threadKey, false);
+            : task + RecentConversation(threadKey, false, source);
 
         await Prompt(mini, task, new PromptOptions
         {
@@ -721,9 +726,9 @@ internal class Engram : MemoryAgent, IDisposable
 
     /// <summary>The last few turns, word for word. The facts above are someone's summary of them (the chat's notes, or the extraction), and a summary can
     /// be wrong, so Engram checks every fact against what was actually said and writes from that.</summary>
-    private string RecentConversation(string threadKey, bool leading)
+    private string RecentConversation(string threadKey, bool leading, Thread? source = null)
     {
-        if (threads.GetValueOrDefault(threadKey) is not { } chat) return "";
+        if ((source ?? threads.GetValueOrDefault(threadKey)) is not { } chat) return "";
         List<ThreadItem> recent = chat.History.Where(i => i is LLM.Prompt or Response).TakeLast(SOURCE_ITEMS).ToList();
         string text = BuildTranscript(recent);
         if (text.Length > SOURCE_CHARS) text = text[^SOURCE_CHARS..];
@@ -753,20 +758,30 @@ internal class Engram : MemoryAgent, IDisposable
         return (a, null);
     }
 
-    // ── Closing ARI: finish the conversations that haven't been swept yet ───────────────
+    // ── Starting ARI: finish the conversations she closed on before Engram reached them ──
 
-    internal async Task FlushAsync(TimeSpan limit)
+    private int sweepingSaved;
+
+    /// <summary>Sweeps the saved conversations (Persistent Threads) that still hold messages Engram never reached. Nothing is swept
+    /// at shutdown: a sweep takes minutes and ARI.Console ends the process seconds after asking it to close. Runs once the model is up.</summary>
+    internal async Task SweepSavedAsync()
     {
-        if (!IsEnabled) return;
-        using CancellationTokenSource cts = new(limit);
-        foreach (Thread thread in threads.Values.ToList())
+        if (!IsEnabled || Interlocked.Exchange(ref sweepingSaved, 1) == 1) return;
+        try
         {
-            if (cts.IsCancellationRequested) break;
-            if (thread.EngramProcessed || !MaySweep(thread)) continue;
-            try { await RunEngram(thread.Key, "shutdown", force: true).WaitAsync(cts.Token); }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Shared.Logger.LogWarning("[Engram] shutdown sweep failed for {Key}: {Error}", thread.Key, ex.Message); }
+            foreach (PersistedThreads.Meta meta in PersistedThreads.ListMeta())
+            {
+                if (meta.EngramSwept is not int swept || meta.Messages is not int messages || swept >= messages) continue;
+                if (threads.ContainsKey(meta.Key)) continue;   // reopened: its own sweeps cover it
+                Thread saved = new(ThreadPipeline.Dialogue, meta.Key);
+                if (!PersistedThreads.Restore(meta.Key, saved) || !MaySweep(saved)) continue;
+                MarkHistoryRestored(meta.Key, swept);
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] {Count} message(s) were never swept before ARI closed — sweeping them now.", meta.Key, messages - swept);
+                try { await RunEngram(meta.Key, "start-up", force: true, saved: saved); }
+                catch (Exception ex) { Shared.Logger.LogWarning("[Engram] start-up sweep failed for {Key}: {Error}", meta.Key, ex.Message); }
+            }
         }
+        finally { Interlocked.Exchange(ref sweepingSaved, 0); }
     }
 
     // ── Code threads ───────────────────────────────────────────────────────────────────

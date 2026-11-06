@@ -61,8 +61,10 @@ internal static class PersistedThreads
         public int      ContextStart    { get; set; }
         public int      TurnSerial      { get; set; }
         public int      ItemCount       { get; set; }
-        // Messages Engram had swept when this was saved. Older snapshots don't have it and count as fully swept.
+        // Messages Engram had swept, out of the snapshot's messages (the user's and ARI's replies). Older snapshots have
+        // neither and count as fully swept.
         public int?     EngramSwept     { get; set; }
+        public int?     Messages        { get; set; }
         public DateTime SavedAt         { get; set; }
     }
 
@@ -142,7 +144,8 @@ internal static class PersistedThreads
                 FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault,
                 IsRemoteProject = thread.IsRemoteProject, IsAdminChat = thread.IsAdminChat, HasMemoryAccess = thread.HasMemoryAccess,
                 SafeMode = thread.SafeMode, LastMessageAt = thread.LastMessageAt, ContextStart = thread.ContextStart,
-                TurnSerial = thread.TurnSerial, ItemCount = items.Count, EngramSwept = Engram.Current?.SweptCount(thread.Key), SavedAt = DateTime.UtcNow,
+                TurnSerial = thread.TurnSerial, ItemCount = items.Count, EngramSwept = Engram.Current?.SweptCount(thread.Key), Messages = Engram.ConversationCount(items),
+                SavedAt = DateTime.UtcNow,
             };
 
             StringBuilder sb = new();
@@ -213,6 +216,31 @@ internal static class PersistedThreads
     // ── Read ──────────────────────────────────────────────────────────────────────
 
     internal static bool Exists(string key) => File.Exists(FileFor(key));
+
+    /// <summary>Records how far Engram has swept a saved thread, rewriting only its metadata line. A no-op when the thread isn't saved.</summary>
+    internal static void SetEngramSwept(string key, int swept)
+    {
+        try
+        {
+            lock (WriteGate)
+            {
+                string file = FileFor(key);
+                if (!File.Exists(file)) return;
+                string[] lines = File.ReadAllLines(file);
+                Meta? meta = lines.Length > 0 ? JsonSerializer.Deserialize<Meta>(lines[0], Json) : null;
+                if (meta is null || meta.EngramSwept == swept) return;
+                meta.EngramSwept = swept;
+                lines[0] = JsonSerializer.Serialize(meta, Json);
+                string tmp = file + ".tmp";
+                File.WriteAllLines(tmp, lines);
+                File.Move(tmp, file, overwrite: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("[PersistedThreads] could not record the sweep mark for {Key}: {Error}", key, ex.Message);
+        }
+    }
 
     /// <summary>The metadata line of one saved thread, or null if there is no usable file.</summary>
     internal static Meta? ReadMeta(string key) => ReadMetaFile(FileFor(key));

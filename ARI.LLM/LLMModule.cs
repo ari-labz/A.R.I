@@ -876,6 +876,8 @@ public class LLMModule : ILLMModule, IDisposable
         dreamOrchestrator?.Start();
         _ = WarmDialogueAsync();
         _ = WarmRecallAsync();
+        // Conversations ARI closed on before Engram reached them, now that the model is up to sweep them.
+        if (engram is not null) _ = Task.Run(engram.SweepSavedAsync);
 
         async Task BootOne(Server server, Model? model)
         {
@@ -1051,8 +1053,8 @@ public class LLMModule : ILLMModule, IDisposable
         dreamOrchestrator?.Dispose();
         brainWatchCts?.Cancel();
         brainWatchCts?.Dispose();
-        // Conversations that haven't been swept yet are swept before the servers go, so closing ARI doesn't lose them.
-        try { engram?.FlushAsync(TimeSpan.FromMinutes(3)).GetAwaiter().GetResult(); } catch { /* best effort */ }
+        // No sweep here: one takes minutes and ARI.Console ends the process seconds after asking it to close. Saved conversations
+        // keep their sweep mark and are finished on the next start (Engram.SweepSavedAsync).
         engram?.Dispose();
         foreach (Server server in _servers)
             server.Dispose();
