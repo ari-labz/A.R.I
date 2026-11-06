@@ -286,7 +286,6 @@ internal class Engram : MemoryAgent, IDisposable
             //     pre-resolved set of paths — one call now covers the whole sweep's entities instead of
             //     one call per entity, but no entity can still reach a note it wasn't resolved against. ---
             (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate, code, project);
-            if (!code && entities.Count > 0) CleanLinks();
 
             // A short linked summary of what was concluded; falls back to a linked entity list if the summary call fails.
             if (entities.Count > 0)
@@ -306,6 +305,8 @@ internal class Engram : MemoryAgent, IDisposable
                 else
                     AppendToConversationLog(logStart, logLine, logStart, logEnd);
             }
+            // After the day-log entry, so the links it adds are checked too.
+            if (!code && entities.Count > 0) CleanLinks();
 
             MarkSwept(threadKey, conversationItems.Count);
             committed    = commits;
