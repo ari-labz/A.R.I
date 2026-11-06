@@ -950,17 +950,29 @@ internal class Engram : MemoryAgent, IDisposable
         return prose.Length <= CODE_TURN_MAX_CHARS ? prose : prose[..CODE_TURN_MAX_CHARS] + " […]";
     }
 
+    // A voice turn carries notes for the reply on their own lines ("[Voice: the speech recogniser wasn't sure of ...]"). They are
+    // instructions to ARI, not something the person said. A turn the recogniser marked as badly garbled is mostly guesswork.
+    private static readonly System.Text.RegularExpressions.Regex VoiceNote =
+        new(@"^\[Voice: .*$\n?", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private const string GARBLED_NOTE = "[Voice: this came through badly garbled";
+
     private static string BuildTranscript(IEnumerable<ThreadItem> items, bool code = false)
     {
         StringBuilder sb = new();
+        Dictionary<string, string> lastSaid = new(StringComparer.OrdinalIgnoreCase);
         foreach (ThreadItem item in items)
         {
             switch (item)
             {
                 case Prompt u:
+                    if (u.Text.Contains(GARBLED_NOTE, StringComparison.Ordinal)) break;
+                    string text = VoiceNote.Replace(u.Text, "").Trim();
                     // A pasted or attached text file is part of what the person said: without it a message with only an attachment is empty.
                     string attached = string.Join("\n\n", (u.Attachments ?? new()).Where(a => !a.IsImage && !string.IsNullOrWhiteSpace(a.Content)).Select(a => a.Content.Trim()));
-                    string said = string.IsNullOrWhiteSpace(attached) ? u.Text : $"{attached}\n\n{u.Text}".Trim();
+                    string said = string.IsNullOrWhiteSpace(attached) ? text : $"{attached}\n\n{text}".Trim();
+                    // A message that arrived twice (a resend) is said once.
+                    if (said.Length > 0 && lastSaid.TryGetValue(u.AuthorName ?? "", out string? previous) && previous == said) break;
+                    lastSaid[u.AuthorName ?? ""] = said;
                     sb.AppendLine($"{u.AuthorName}: {(code ? ForCodeTranscript(said) : said)}");
                     break;
                 case Response r: sb.AppendLine($"ARI: {(code ? ForCodeTranscript(r.ContentText) : r.ContentText)}"); break;
