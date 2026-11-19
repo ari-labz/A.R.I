@@ -249,6 +249,9 @@ export default function App() {
     const [protocolMismatch, setProtocolMismatch] = useState<number | null>(null)
     // Assume ready until told otherwise, so a slow/failed check never blocks the composer.
     const [serverReady,    setServerReady]    = useState(true)
+    // Why the models are down when it is on purpose (a 3D model or image is being made), so the composer can say so.
+    const [pausedFor,      setPausedFor]      = useState<string | null>(null)
+    const [modelsStarting, setModelsStarting] = useState(false)
 
     const globalEsRef      = useRef<EventSource | null>(null)
     const abortRef         = useRef<AbortController | null>(null)
@@ -435,8 +438,10 @@ export default function App() {
         async function checkReady() {
             const res = await apiFetch("/api/v1/info/ready").catch(() => null)
             if (!res?.ok) return
-            const { ready } = await res.json()
+            const { ready, starting, pausedFor } = await res.json()
             setServerReady(!!ready)
+            setPausedFor(pausedFor ?? null)
+            setModelsStarting(!!starting)
         }
 
         env.getVersion().then(ver => { if (ver) setClientVersion(ver) })
@@ -1461,6 +1466,8 @@ export default function App() {
                 <Main
                     mode={mode}
                     serverReady={serverReady}
+                    pausedFor={pausedFor}
+                    modelsStarting={modelsStarting}
                     codeMode={codeMode}
                     shieldMode={codeMode || selectedPipeline === "code"}
                     items={items}

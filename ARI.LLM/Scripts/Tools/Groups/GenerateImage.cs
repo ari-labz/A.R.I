@@ -136,10 +136,11 @@ internal sealed class GenerateImage : Tool
 
         try
         {
-            byte[] imageBytes = await Modules.ImageGen.GenerateAsync(
+            bool stopLlms = Modules.ImageGen.StopLlmsDuringJob;
+            byte[] imageBytes = await LlmPause.Around(stopLlms, "generating an image", 10, () => Modules.ImageGen.GenerateAsync(
                 prompt, negativePrompt,
                 steps: steps, width: width, height: height,
-                referenceImages: referenceImages, denoise: denoise);
+                referenceImages: referenceImages, denoise: denoise));
 
             string dir = Paths.ScratchpadDir(boundThread.Key);
             Directory.CreateDirectory(dir);

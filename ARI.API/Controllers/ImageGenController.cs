@@ -55,6 +55,7 @@ public class ImageGenController(APIConfig config) : ControllerBase
             Steps       = Get("Steps", 25),
             Width       = Get("Width", 1024),
             Height      = Get("Height", 1024),
+            StopLlmsDuringJob = Get("StopLlmsDuringJob", false),
         });
     }
 
@@ -87,6 +88,7 @@ public class ImageGenController(APIConfig config) : ControllerBase
         if (req.Steps       is { } steps)       ig["Steps"]       = steps;
         if (req.Width       is { } width)       ig["Width"]       = width;
         if (req.Height      is { } height)      ig["Height"]      = height;
+        if (req.StopLlmsDuringJob is { } stopLlms) ig["StopLlmsDuringJob"] = stopLlms;
 
         // Write back under whichever key exists
         if (modules["ImageGen"] is not null) modules["ImageGen"] = ig;
@@ -107,6 +109,7 @@ public class ImageGenController(APIConfig config) : ControllerBase
             if (req.Width      is { } w)  live.Width      = w;
             if (req.Height     is { } h)  live.Height     = h;
             if (req.RemoteUrl  is { } ru) live.RemoteUrl  = ru.Trim();
+            if (req.StopLlmsDuringJob is { } sl) live.StopLlmsDuringJob = sl;
         }
 
         bool serverChanged = req.ComfyUiPath is not null || req.Port is not null || req.IdleSeconds is not null || req.RemoteUrl is not null;
@@ -119,7 +122,19 @@ public class ImageGenController(APIConfig config) : ControllerBase
         Ready  = Modules.ImageGen?.IsReady ?? false,
         Active = Modules.ImageGen is not null,
         Remote = Live?.IsRemote ?? false,
+        Memory = ImageMemory(),
     });
+
+    // A rough memory need for the active checkpoint: its file size, a third more for the working buffers, and a couple of GB
+    // for the text encoder and decoder. Free memory is read here, so it only describes a ComfyUI on this machine.
+    private object ImageMemory()
+    {
+        (double total, double free) = SystemMemory.Read();
+        string name = Live?.Checkpoint ?? ConfiguredCheckpoint();
+        string file = Path.Combine(CheckpointDownloads.CheckpointsDir, name);
+        double need = name.Length > 0 && System.IO.File.Exists(file) ? Math.Round(new FileInfo(file).Length / 1073741824.0 * 1.3 + 2, 1) : 0;
+        return new { totalGb = total, freeGb = free, needGb = need, reservedGb = SystemMemory.ReservedGb, local = !(Live?.IsRemote ?? false) };
+    }
 
     /// <summary>The checkpoints the server can draw with: the files in the managed ComfyUI's folder, or whatever a
     /// remote ComfyUI says it has.</summary>
@@ -208,4 +223,4 @@ public class ImageGenController(APIConfig config) : ControllerBase
 }
 
 public record ImageGenConfigRequest(bool? Enabled, string? Checkpoint, string? ComfyUiPath, int? Port, int? IdleSeconds,
-                                    string? RemoteUrl, string? Sampler, string? Scheduler, double? Cfg, int? Steps, int? Width, int? Height);
+                                    string? RemoteUrl, string? Sampler, string? Scheduler, double? Cfg, int? Steps, int? Width, int? Height, bool? StopLlmsDuringJob = null);

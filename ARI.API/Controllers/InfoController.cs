@@ -43,6 +43,7 @@ public class InfoController : ControllerBase
         {
             ready         = servers.Any(s => s.Status == ServerStatus.Online),
             starting      = servers.Any(s => s.Status == ServerStatus.Starting),
+            pausedFor     = Modules.LlmPausedFor,
             serverCount   = servers.Count,
             protocol      = ReadProtocol(),
         });

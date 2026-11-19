@@ -9,6 +9,7 @@ using ARI.VoiceSynthesis;
 using ARI.API;
 using ARI.Listener;
 using ARI.ImageGen;
+using ARI.Mesh;
 using ARI.Calendar;
 
 namespace ARI.Core;
@@ -115,6 +116,7 @@ public class Modules
     public BrainConfig Brain { get; init; }
     public ListenerConfig Listener { get; init; } = new();
     public ImageGenConfig   ImageGen  { get; init; } = new();
+    public MeshConfig       Mesh      { get; init; } = new();
     public CalendarConfig   Calendar  { get; init; } = new();
 }
 

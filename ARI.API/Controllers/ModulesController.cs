@@ -37,6 +37,8 @@ public class ModulesController(ILogger<ModulesController> logger) : ControllerBa
          "Stores Ari's long-term memory as an Obsidian vault of notes she can search and add to.", false),
         ("ImageGen", "Image generation",
          "Draws images for Ari with Stable Diffusion through ComfyUI, which Ari installs and starts only while it is making one.", false),
+        ("Mesh", "Mesh generation",
+         "Turns an image into a low-poly 3D model (.glb) through MeshServer, which holds the 3D models and does the work.", false),
         ("Calendar", "Calendar",
          "Ari's own calendar of events and reminders — events feed her context, reminders trigger a real message from her at their scheduled time.", false),
     ];
@@ -51,6 +53,7 @@ public class ModulesController(ILogger<ModulesController> logger) : ControllerBa
         "Listener"       => Modules.Listener       is not null,
         "Brain"          => Modules.Brain          is not null,
         "ImageGen"       => Modules.ImageGen       is not null,
+        "Mesh"           => Modules.Mesh           is not null,
         "Calendar"       => Modules.Calendar       is not null,
         // Answering this request is itself proof the web panel is up.
         "API"            => true,

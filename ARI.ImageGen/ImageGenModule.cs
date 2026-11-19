@@ -23,6 +23,7 @@ public class ImageGenModule : IImageGenModule
     public bool IsReady => config.IsRemote || Dependency.Status == "";
 
     public ImageGenConfig Config => config;
+    public bool StopLlmsDuringJob => config.StopLlmsDuringJob;
 
     /// <summary>Where ComfyUI answers: the configured remote URL, or the copy ARI runs on this machine.</summary>
     public string BaseUrl => config.IsRemote ? config.RemoteUrl.Trim().TrimEnd('/') : $"http://127.0.0.1:{config.Port}";

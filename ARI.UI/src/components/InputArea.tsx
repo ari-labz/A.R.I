@@ -24,6 +24,8 @@ interface Props {
     // False when no model server is online — the composer is disabled and says why, rather than
     // accepting a message nothing can answer. Null while we have not checked yet (assume fine).
     serverReady:      boolean
+    pausedFor?:       string | null
+    modelsStarting?:  boolean
     onSend:           (text: string) => void
     onUploadFiles:    (files: File[]) => void
     onRemoveAttach:   (idOrName: string) => void
@@ -42,7 +44,7 @@ function fileExtLabel(name: string) {
 export default function InputArea({
     isStreaming, planProposed, pendingAttach, commands,
     projects, selectedProject, onProjectChange,
-    pipelines, selectedPipeline, onPipelineChange, onBeginSpeech, threadLocked, serverReady,
+    pipelines, selectedPipeline, onPipelineChange, onBeginSpeech, threadLocked, serverReady, pausedFor, modelsStarting,
     onSend, onUploadFiles, onRemoveAttach,
     onHeartbeatStart, onHeartbeatStop,
     codeMode, safetyMode, onToggleSafety,
@@ -222,8 +224,11 @@ export default function InputArea({
 
                 {!serverReady && (
                     <div id="no-server-warning">
-                        No model server is running. Open the control panel, choose the model you want to run,
-                        and start the server.
+                        {pausedFor
+                            ? <>Ari is {pausedFor}. She has paused her language models to free memory and will carry on with your chat when it's done (a minute or two).</>
+                            : modelsStarting
+                                ? <>Ari's models are starting up. You can send a message as soon as they're ready.</>
+                                : <>No model server is running. Open the control panel, choose the model you want to run, and start the server.</>}
                     </div>
                 )}
 

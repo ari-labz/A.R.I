@@ -30,6 +30,7 @@ function renderFileMarkers(s: string): string {
              + `<span class="file-card-icon">${escHtml(ext)}</span>`
              + `<span class="file-card-name">${escHtml(name)}</span>`
              + `<span class="file-card-dl" aria-hidden="true"></span></a>\n\n`
+             + (["FBX", "GLB", "GLTF"].includes(ext) ? `<div class="ari-model" data-model-src="${escHtml(href)}" data-model-name="${escHtml(name)}"><span class="ari-model-loading">Loading model…</span></div>\n\n` : "")
     })
 }
 

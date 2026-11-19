@@ -133,6 +133,7 @@ internal static class ToolFactories
 
         ["generate_image"] = t => Modules.ImageGen?.IsReady == true ? new GenerateImage(t) : null,
         ["present_image"]  = t => Modules.ImageGen?.IsReady == true ? new PresentImage(t)  : null,
+        ["image_to_mesh"]  = t => Modules.Mesh?.IsReady == true ? new ImageToMesh(t) : null,
     };
 
     private static Tool With<T>(Thread t) where T : Tool, new() => new T { CallThread = t };

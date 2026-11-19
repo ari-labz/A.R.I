@@ -13,6 +13,7 @@ using ARI.API.Data;
 using ARI.Listener;
 using ARI.BrainVault;
 using ARI.ImageGen;
+using ARI.Mesh;
 using ImageGenDependency = ARI.ImageGen.Dependency;
 using ARI.Calendar;
 using Microsoft.Extensions.Hosting;
@@ -34,6 +35,7 @@ public class ARI : BackgroundService, IModuleLifecycle
     private LLMModule?           llmModule;
     private CalendarModule?      calendarModule;
     private ImageGenModule?      imageGenModule;
+    private MeshModule?          meshModule;
 
     private readonly ILoggerFactory loggerFactory;
     private ILogger _logger = Shared.Logger;
@@ -173,6 +175,9 @@ public class ARI : BackgroundService, IModuleLifecycle
         if (config.modules.ImageGen.Enabled)
             await StartImageGenAsync();
 
+        if (config.modules.Mesh.Enabled)
+            StartMesh();
+
         // Plugins (Discord, GitHub and the rest) are installed from .ari files; the host gives each one what it needs when it is created.
         CompiledPlugins.Host = new PluginHost(loggerFactory, () => llmModule, () => appStoppingToken, moduleTasks.Add);
         await ScriptPlugins.StartAsync();       // plugins written as source (the owner's, and Ari's) and plugins installed from built .ari files
@@ -256,6 +261,9 @@ public class ARI : BackgroundService, IModuleLifecycle
             case "ImageGen":
                 await StartImageGenAsync();
                 return imageGenModule is not null ? null : "Could not start — check the server log for details.";
+            case "Mesh":
+                StartMesh();
+                return null;
             case "Calendar":
                 StartCalendar();
                 return null;
@@ -272,6 +280,7 @@ public class ARI : BackgroundService, IModuleLifecycle
             case "Voice":          StopVoice(); StopVoiceSynthesis(); return null;
             case "Listener":       StopListener();           return null;
             case "ImageGen":       StopImageGen();           return null;
+            case "Mesh":           StopMesh();               return null;
             case "Calendar":       StopCalendar();           return null;
             default:               return $"{key} requires a restart to stop.";
         }
@@ -467,6 +476,20 @@ public class ARI : BackgroundService, IModuleLifecycle
         imageGenModule = null;
         CommonModules.ClearImageGen();
         _logger.LogInformation("ImageGen stopped.");
+    }
+
+    private void StartMesh()
+    {
+        meshModule = new MeshModule(config.modules.Mesh);
+        CommonModules.Register(mesh: meshModule);
+        _logger.LogInformation("Mesh ready, using the server at {Url}.", config.modules.Mesh.ServerUrl);
+    }
+
+    private void StopMesh()
+    {
+        meshModule = null;
+        CommonModules.ClearMesh();
+        _logger.LogInformation("Mesh stopped.");
     }
 
     private void StartCalendar()

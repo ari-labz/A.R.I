@@ -624,6 +624,9 @@ body.cp-win32 #cp-win-controls { display: flex; }
         <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">ImageGen<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="imagegen-model" data-group="imagegen" id="nav-imagegen-model">Models</div>
         <div class="cp-nav-item" data-tab="imagegen-settings" data-group="imagegen" id="nav-imagegen-settings">Settings</div>
+        <div class="cp-nav-group" id="nav-group-mesh" data-group-id="mesh">Mesh<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="mesh-model" data-group="mesh" id="nav-mesh-model">Models</div>
+        <div class="cp-nav-item" data-tab="mesh-settings" data-group="mesh" id="nav-mesh-settings">Settings</div>
       </div>
     </div>
   </aside>
@@ -1514,6 +1517,45 @@ body.cp-win32 #cp-win-controls { display: flex; }
       </div>
     </div>
 
+    <!-- Mesh — Models tab -->
+    <div id="tab-mesh-model" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">3D models</div>
+        <p style="font-size:13px;color:var(--text-dim);margin:0 0 4px;">The model Ari uses to turn an image into a 3D asset. Weights live on the mesh server. Pick one and download it there.</p>
+        <div id="mesh-status" style="font-size:12.5px;color:var(--text-dim);margin-bottom:14px;">Loading…</div>
+        <div id="mesh-models" style="display:flex;flex-direction:column;gap:6px;"></div>
+      </div>
+      <div id="mesh-models-mem" style="margin-top:24px;"></div>
+    </div>
+
+    <!-- Mesh — Settings tab -->
+    <div id="tab-mesh-settings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">Server</div>
+        <p style="font-size:13px;color:var(--text-dim);margin:0 0 12px;">Where MeshServer runs (see <code>MeshServer/README.md</code>). Turn the whole module on or off in Modules.</p>
+        <div class="vs-form-grid">
+          <label class="vs-label">Server address
+            <input type="text" id="mesh-url" class="vs-input" placeholder="http://127.0.0.1:8199" autocomplete="off">
+          </label>
+          <label class="vs-label">Triangle limit (0 = no decimation)
+            <input type="number" id="mesh-faces" class="vs-input" min="0" max="200000" step="100">
+          </label>
+        </div>
+      </div>
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Memory</div>
+        <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer;">
+          <input type="checkbox" id="mesh-stop-llms" style="margin-top:3px;accent-color:var(--accent);">
+          <span><b>Stop the language models while a mesh is made</b><br><span style="color:var(--text-dim);">When there isn't enough free memory for the 3D model, Ari stops her language model servers before the job and starts them again afterwards, then re-reads the chat (a minute or two). With plenty of memory free she leaves them running.</span></span>
+        </label>
+        <div id="mesh-mem" style="margin-top:14px;"></div>
+      </div>
+      <div style="margin-top:20px;">
+        <button class="vs-btn-primary" id="mesh-save-btn" type="button">Save settings</button>
+        <span id="mesh-save-status" style="margin-left:10px;font-size:12px;color:var(--text-dim);"></span>
+      </div>
+    </div>
+
     <!-- ImageGen — Settings tab -->
     <div id="tab-imagegen-settings" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
@@ -1553,6 +1595,14 @@ body.cp-win32 #cp-win-controls { display: flex; }
           <label class="vs-label">Width <input type="number" id="ig-width" class="vs-input" step="64" min="64" max="4096"></label>
           <label class="vs-label">Height <input type="number" id="ig-height" class="vs-input" step="64" min="64" max="4096"></label>
         </div>
+      </div>
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Memory</div>
+        <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer;">
+          <input type="checkbox" id="ig-stop-llms" style="margin-top:3px;accent-color:var(--accent);">
+          <span><b>Stop the language models while an image is drawn</b><br><span style="color:var(--text-dim);">When there isn't enough free memory for the checkpoint, Ari stops her language model servers before the image job and starts them again afterwards, then re-reads the chat (a minute or two). With plenty of memory free she leaves them running.</span></span>
+        </label>
+        <div id="ig-mem" style="margin-top:14px;"></div>
       </div>
       <div style="margin-top:8px;">
         <button class="vs-btn-primary" id="ig-save-settings-btn" type="button">Save settings</button>
@@ -1675,8 +1725,8 @@ cpGetSettings().then(d => { if (d.userName) window._ariUserName = d.userName; })
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), plugins: document.getElementById('tab-plugins'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), tools: document.getElementById('tab-tools'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', tools: 'Tools', brain: 'Brain', plugins: 'Plugins',  llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'ImageGen — Models', 'imagegen-settings': 'ImageGen — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), plugins: document.getElementById('tab-plugins'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), 'mesh-model': document.getElementById('tab-mesh-model'), 'mesh-settings': document.getElementById('tab-mesh-settings'), tools: document.getElementById('tab-tools'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', tools: 'Tools', brain: 'Brain', plugins: 'Plugins',  llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'ImageGen — Models', 'imagegen-settings': 'ImageGen — Settings', 'mesh-model': 'Mesh — Models', 'mesh-settings': 'Mesh — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
 
 let srvPollTimer = null;
 // The streams below are declared further down the page, so they are only touched once the page has finished loading.
@@ -1714,6 +1764,7 @@ function switchTab(name) {
     if (name === 'voices') { closeVoiceDetail(); loadVoicesList(); }
     if (name === 'voice') vsRestoreTraining();
     if (name === 'imagegen-model' || name === 'imagegen-settings') igLoad();
+    if (name === 'mesh-model' || name === 'mesh-settings') meshLoad();
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 
@@ -1928,11 +1979,14 @@ const NAV_ITEM_MODULES = {
     'nav-calendar':          ['Calendar'],
     'nav-imagegen-model':    ['ImageGen'],
     'nav-imagegen-settings': ['ImageGen'],
+    'nav-mesh-model':        ['Mesh'],
+    'nav-mesh-settings':     ['Mesh'],
 };
 const NAV_GROUP_ITEMS = {
     'nav-group-voice':        ['nav-voices', 'nav-voice', 'nav-dataset'],
     'nav-group-memory':       ['nav-brain'],
     'nav-group-imagegen':     ['nav-imagegen-model', 'nav-imagegen-settings'],
+    'nav-group-mesh':         ['nav-mesh-model', 'nav-mesh-settings'],
 };
 
 async function applyModuleVisibility() {
@@ -8738,6 +8792,7 @@ async function igLoad() {
     set('ig-remote-url', igConfig.remoteUrl); set('ig-sampler', igConfig.sampler); set('ig-scheduler', igConfig.scheduler);
     set('ig-cfg', igConfig.cfg); set('ig-steps', igConfig.steps); set('ig-width', igConfig.width); set('ig-height', igConfig.height);
     igRenderMode(!!(igConfig.remoteUrl || '').trim());
+    document.getElementById('ig-stop-llms').checked = !!igConfig.stopLlmsDuringJob;
 
     try {
         const status = await cpFetch('/api/v1/admin/imageGen/status').then(r => r.json());
@@ -8751,7 +8806,131 @@ async function igLoad() {
 
     await igLoadModels();
     igWatchDownload();
+    igRenderMemory();
 }
+
+// The memory card for image drawing. Free memory is read on the machine ARI runs on, so it only describes a ComfyUI that runs here.
+let igMem = null;
+async function igRenderMemory() {
+    try { igMem = (await cpFetch('/api/v1/admin/imageGen/status').then(r => r.json())).memory; } catch { igMem = null; }
+    const m = igMem;
+    memCard('ig-mem', m && { stop: document.getElementById('ig-stop-llms').checked, total: m.totalGb, free: m.freeGb, need: m.needGb,
+        reserved: m.reservedGb, same: m.local, what: 'The active checkpoint' });
+}
+document.getElementById('ig-stop-llms').addEventListener('change', async e => {
+    await igPatch({ stopLlmsDuringJob: e.target.checked });
+    igConfig.stopLlmsDuringJob = e.target.checked;
+    igRenderMemory();
+});
+
+// Shared by the Image and Mesh settings: a bar of what is in use, and the warning when the job will not fit.
+// stop = the language models are stopped for the job. same = the job runs on this machine, so stopping them helps it.
+function memCard(id, o) {
+    const el = document.getElementById(id);
+    if (!o || o.total == null) { el.innerHTML = '<span style="font-size:12.5px;color:var(--text-dim);">Memory could not be read.</span>'; return; }
+    const usable = Math.max(0, o.total - o.reserved), used = Math.max(0, o.total - o.free);
+    const pct = v => Math.min(100, Math.round(v / o.total * 100));
+    const needNow = o.need || 0;
+    let msg = '', warn = false;
+    if (!o.stop && needNow > o.free) {
+        warn = true;
+        msg = `<b>There is not enough memory to keep the language models running.</b> ${escHtml(o.what)} needs about ${needNow} GB. Only ${o.free} GB is free with them loaded, ${(needNow - o.free).toFixed(1)} GB short. A job would fail or push the machine into swap. Turn the switch back on, choose a smaller model, or add memory.`;
+    } else if (o.stop && needNow > usable) {
+        warn = true;
+        msg = `<b>This will not fit even with the language models stopped.</b> ${escHtml(o.what)} needs about ${needNow} GB and only ${usable.toFixed(1)} GB is usable. Choose a smaller model.`;
+    } else if (o.stop && !o.same) {
+        msg = `The ${id === 'ig-mem' ? 'ComfyUI' : 'mesh server'} is on another machine, so stopping Ari's language models here frees nothing for it. Turn the switch off unless they share memory.`;
+    } else if (o.stop) {
+        msg = `The language models are stopped for the length of each job, so ${escHtml(o.what.toLowerCase())} can use up to ${usable.toFixed(1)} GB. Expect a pause while they reload and re-read the chat afterwards.`;
+    } else {
+        msg = `${escHtml(o.what)} needs about ${needNow || 'an unknown amount of'} GB and fits beside the language models, with ${(o.free - needNow).toFixed(1)} GB to spare.`;
+    }
+    el.innerHTML = `<div style="height:14px;border-radius:5px;overflow:hidden;background:var(--border);display:flex;">`
+        + `<div style="width:${pct(used)}%;background:var(--text-dim);" title="In use"></div>`
+        + `<div style="width:${o.stop ? 0 : pct(Math.min(needNow, o.free))}%;background:${warn ? '#c0392b' : 'var(--accent)'};" title="This job"></div></div>`
+        + `<div style="font-size:11.5px;color:var(--text-dim);margin:5px 0 10px;">${o.total} GB total · ${used.toFixed(1)} GB in use now · ${o.free} GB free${needNow ? ' · job needs ~' + needNow + ' GB' : ''}</div>`
+        + `<div style="font-size:12.5px;padding:10px 12px;border-radius:8px;border:1px solid ${warn ? '#c0392b' : 'var(--border)'};color:${warn ? '#c0392b' : 'var(--text-dim)'};">${msg}</div>`;
+}
+
+// ── Mesh ─────────────────────────────────────────────────────────────────────
+// Models live on the mesh server; ARI proxies the list, choosing, downloading and removing.
+let meshConfig = {}, meshStatus = null, meshModels = [], meshPoll = null;
+const meshPatch = body => cpFetch('/api/v1/admin/mesh/config', { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+const meshPost = (path, body) => cpFetch('/api/v1/admin/mesh/' + path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+
+async function meshLoad() {
+    try { meshConfig = await cpFetch('/api/v1/admin/mesh/config').then(r => r.json()); } catch (e) { console.error('Mesh config load failed', e); }
+    document.getElementById('mesh-url').value = meshConfig.serverUrl ?? '';
+    document.getElementById('mesh-faces').value = meshConfig.maxFaces ?? 0;
+    document.getElementById('mesh-stop-llms').checked = !!meshConfig.stopLlmsDuringJob;
+    await meshRefresh();
+}
+
+async function meshRefresh() {
+    clearTimeout(meshPoll);
+    try { meshStatus = await cpFetch('/api/v1/admin/mesh/status').then(r => r.json()); } catch { meshStatus = null; }
+    const st = document.getElementById('mesh-status'), box = document.getElementById('mesh-models');
+    if (!meshStatus?.reachable) {
+        st.textContent = 'The mesh server is not answering at ' + (meshConfig.serverUrl || '(no address)') + '. Start MeshServer (see MeshServer/README.md), or change the address in Settings.';
+        box.innerHTML = ''; meshModels = [];
+    } else {
+        const s = meshStatus.server;
+        st.textContent = 'Connected. ' + s.device + (s.totalGb ? ', ' + s.totalGb + ' GB, ' + s.freeGb + ' GB free now.' : '.');
+        try { meshModels = (await cpFetch('/api/v1/admin/mesh/models').then(r => r.json())).models || []; } catch { meshModels = []; }
+        meshRenderModels();
+    }
+    meshRenderMemory();
+    if (meshModels.some(m => m.download && !m.download.error)) meshPoll = setTimeout(meshRefresh, 1500);
+}
+
+function meshRenderModels() {
+    const box = document.getElementById('mesh-models');
+    box.innerHTML = '';
+    for (const m of meshModels) {
+        const row = document.createElement('div');
+        row.className = 'ig-row' + (m.active ? ' act' : '');
+        row.style.alignItems = 'flex-start';
+        const d = m.download;
+        const info = `<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13px;">${escHtml(m.name)} ${m.tag ? `<span class="mdl-badge">${escHtml(m.tag)}</span>` : ''}</div>`
+            + `<div style="font-size:11.5px;color:var(--text-dim);">${escHtml(m.note)}</div>`
+            + `<div style="font-size:11.5px;color:var(--text-dim);">${m.disk} GB on disk · about ${m.mem} GB of memory while it runs</div>`
+            + (d ? `<div class="ig-bar"><i style="width:${Math.round(d.pct)}%"></i></div>` : '') + (d?.error ? `<div style="font-size:12px;color:#c0392b;">${escHtml(d.error)}</div>` : '') + `</div>`;
+        row.innerHTML = info;
+        const btn = (label, fn) => { const b = document.createElement('button'); b.className = 'vs-btn-outline'; b.type = 'button'; b.textContent = label; b.style.cssText = 'font-size:12px;padding:3px 10px;'; b.onclick = fn; row.appendChild(b); };
+        if (m.active) row.insertAdjacentHTML('beforeend', '<span class="mdl-badge active">Active</span>');
+        else if (m.installed) btn('Use', async () => { await meshPost('models/select', { id: m.id }); meshRefresh(); });
+        if (!m.installed && !d) btn('Download', async () => { const r = await meshPost('models/download', { id: m.id }); if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'Could not start the download.'); meshRefresh(); });
+        if (d && !d.error) row.insertAdjacentHTML('beforeend', `<span style="font-size:12px;color:var(--text-dim);">${Math.round(d.pct)}%</span>`);
+        if (m.installed && m.repo && !m.active) btn('Delete', async () => {
+            if (!confirm(`Delete ${m.name}? It can be downloaded again.`)) return;
+            const r = await cpFetch('/api/v1/admin/mesh/models/' + encodeURIComponent(m.id), { method: 'DELETE' });
+            if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'Could not delete it.');
+            meshRefresh();
+        });
+        box.appendChild(row);
+    }
+}
+
+function meshRenderMemory() {
+    const s = meshStatus?.server, active = meshModels.find(m => m.active);
+    const o = s && s.totalGb != null ? { stop: document.getElementById('mesh-stop-llms').checked, total: s.totalGb, free: s.freeGb, need: active?.mem || 0,
+        reserved: meshStatus.reservedGb, same: meshStatus.sameMachine, what: active ? active.name : 'The 3D model' } : null;
+    memCard('mesh-mem', o); memCard('mesh-models-mem', o);
+}
+
+document.getElementById('mesh-stop-llms').addEventListener('change', async e => {
+    await meshPatch({ stopLlmsDuringJob: e.target.checked });
+    meshConfig.stopLlmsDuringJob = e.target.checked;
+    meshRenderMemory();
+});
+document.getElementById('mesh-save-btn').addEventListener('click', async () => {
+    const status = document.getElementById('mesh-save-status');
+    status.textContent = 'Saving…';
+    const r = await meshPatch({ serverUrl: document.getElementById('mesh-url').value.trim(), maxFaces: parseInt(document.getElementById('mesh-faces').value) || 0 });
+    const j = await r.json().catch(() => ({}));
+    status.textContent = r.ok ? 'Saved.' : (j.error || 'Could not save.');
+    if (r.ok) meshLoad();
+});
 
 async function igLoadModels() {
     const box = document.getElementById('ig-installed');
