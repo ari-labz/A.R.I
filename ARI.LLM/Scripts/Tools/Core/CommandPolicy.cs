@@ -18,7 +18,7 @@ public enum CommandTier
 
 /// <summary>One command in a command line: as written, its allowlist key (null when it can't be stored), and why it
 /// is dangerous or opaque, for the prompt.</summary>
-public sealed record CommandSegment(string Text, string? Key, CommandTier Tier, string? Reason = null);
+public sealed record CommandSegment(string Text, string? Key, CommandTier Tier, string? Reason = null, bool ThreadScoped = false);
 
 /// <summary>
 /// Whether a command may run without asking the owner, for the shell tool and the desktop app's run_command alike.
