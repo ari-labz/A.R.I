@@ -28,11 +28,11 @@ internal static class PersistedThreads
 
     // ── What gets saved ───────────────────────────────────────────────────────────
 
-    /// <summary>A user-facing Dialogue conversation that belongs to somebody. Discord chats, internal worker threads and
+    /// <summary>A user-facing Dialogue or Code conversation that belongs to somebody. Discord chats, internal worker threads and
     /// threads nobody owns are never saved.</summary>
     internal static bool IsEligible(Thread t) =>
-        t.Pipeline == ThreadPipeline.Dialogue && !t.Internal && t.OwnerId is not null && t.HasUserMessages
-        && t.Medium != ThreadMedium.Channel;
+        (t.Pipeline == ThreadPipeline.Dialogue || t.Pipeline == ThreadPipeline.Code) && !t.Internal && t.OwnerId is not null
+        && t.HasUserMessages && t.Medium != ThreadMedium.Channel;
 
     internal static bool ShouldSave(Thread t) => PersistedThreadsSetting.Enabled && IsEligible(t);
 
@@ -45,6 +45,7 @@ internal static class PersistedThreads
         public string   Pipeline        { get; set; } = "Dialogue";
         public string?  OwnerId         { get; set; }
         public string?  Title           { get; set; }
+        public string?  CustomTitle     { get; set; }
         public string   Medium          { get; set; } = "Web";
         public ulong    DiscordChannelId { get; set; }   // before chat services were plugins; read so old threads still reply
         public string?  ChannelService { get; set; }
@@ -134,7 +135,7 @@ internal static class PersistedThreads
 
             Meta meta = new()
             {
-                Key = thread.Key, Pipeline = thread.Pipeline.ToString(), OwnerId = thread.OwnerId, Title = thread.Title,
+                Key = thread.Key, Pipeline = thread.Pipeline.ToString(), OwnerId = thread.OwnerId, Title = thread.Title, CustomTitle = thread.CustomTitle,
                 Medium = thread.Medium.ToString(), ChannelService = thread.ChannelService, ChannelTarget = thread.ChannelTarget, PlatformContext = thread.PlatformContext,
                 ApiContext = thread.ApiContext,
                 FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault,
@@ -215,6 +216,35 @@ internal static class PersistedThreads
     /// <summary>The metadata line of one saved thread, or null if there is no usable file.</summary>
     internal static Meta? ReadMeta(string key) => ReadMetaFile(FileFor(key));
 
+    /// <summary>Sets a saved (not live) thread's custom title in place — rewrites only the meta line, keeps every item.
+    /// Returns false when the file is missing or unreadable.</summary>
+    internal static bool UpdateCustomTitle(string key, string? customTitle)
+    {
+        try
+        {
+            if (ReadMeta(key) is not { } meta) return false;
+            string file = FileFor(key);
+            string[] lines = File.ReadAllLines(file);
+            if (lines.Length == 0) return false;
+
+            meta.CustomTitle = customTitle;
+            lines[0] = JsonSerializer.Serialize(meta, Json);
+
+            lock (WriteGate)
+            {
+                string tmp = file + ".tmp";
+                File.WriteAllLines(tmp, lines);
+                File.Move(tmp, file, overwrite: true);
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Shared.Logger.LogWarning("[PersistedThreads] could not rename {Key}: {Error}", key, ex.Message);
+            return false;
+        }
+    }
+
     /// <summary>Every saved thread's metadata, newest first.</summary>
     internal static List<Meta> ListMeta()
     {
@@ -250,6 +280,7 @@ internal static class PersistedThreads
 
             thread.OwnerId         = meta.OwnerId;
             thread.Title           = meta.Title;
+            thread.CustomTitle     = meta.CustomTitle;
             thread.Medium          = meta.Medium == "Discord" ? ThreadMedium.Channel : Enum.TryParse(meta.Medium, out ThreadMedium medium) ? medium : ThreadMedium.Web;
             thread.ChannelService  = meta.ChannelService ?? (meta.Medium == "Discord" ? "discord" : null);
             thread.ChannelTarget   = meta.ChannelTarget ?? (meta.DiscordChannelId != 0 ? meta.DiscordChannelId.ToString() : null);

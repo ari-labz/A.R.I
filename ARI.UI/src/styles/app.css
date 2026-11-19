@@ -156,6 +156,28 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 }
 .thread-close:hover { background: var(--col-thread-close-hover-colour); color: var(--col-thread-close-hover-colour-2); }
 :is(#thread-list, .thread-list) li:hover .thread-close { display: flex; }
+
+.thread-menu-backdrop { position: fixed; inset: 0; z-index: 900; background: transparent; }
+.thread-menu {
+    position: fixed;
+    z-index: 901;
+    min-width: 130px;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    border-radius: 8px;
+    background: var(--col-surface-2, #2a2d34);
+    color: var(--col-text, #e6e6e6);
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    border: 1px solid var(--col-border, rgba(255,255,255,.08));
+}
+.thread-menu li {
+    padding: 6px 10px;
+    font-size: 13px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.thread-menu li:hover { background: var(--col-thread-close-hover-colour, rgba(255,255,255,.1)); }
 :is(#thread-list, .thread-list) li:hover .thread-time { display: none; }
 
 /* Connection-error overlay (issue #68) */
