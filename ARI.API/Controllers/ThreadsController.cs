@@ -86,16 +86,16 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     private bool CanAccessOwner(string? ownerId) =>
-        User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin
-        || (ownerId is not null && ownerId == User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier));
+        User.FindFirstValue(ClaimTypes.Role) == ARI.API.Auth.Roles.Admin
+        || (ownerId is not null && ownerId == User.FindFirstValue(ClaimTypes.NameIdentifier));
 
     void Microsoft.AspNetCore.Mvc.Filters.IActionFilter.OnActionExecuted(Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext context) { }
 
     /// <summary>True if the current caller may read/write this thread.</summary>
     private bool CanAccessThread(ARI.LLM.Thread thread)
     {
-        if (User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin) return true;
-        string? callerId = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        if (User.FindFirstValue(ClaimTypes.Role) == ARI.API.Auth.Roles.Admin) return true;
+        string? callerId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         return thread.OwnerId == callerId;
     }
 
@@ -113,9 +113,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         bool isCode = Llm!.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? existing)
                       && existing.Pipeline == ARI.LLM.ThreadPipeline.Code;
         ARI.LLM.Thread thread = isCode ? Llm.GetOrCreateCodeThread(threadKey) : Llm.GetOrCreateDialogueThread(threadKey);
-        bool isAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        bool isAdmin = User.FindFirstValue(ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
         // Track who created the thread so guests only see their own.
-        string? callerId = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        string? callerId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         thread.OwnerId ??= callerId;
         // Memory and Engram belong to the Master's and admins' own chats. An admin replying inside someone else's thread
         // must not turn it into one of theirs.
@@ -144,8 +144,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
         IReadOnlyDictionary<string, ARI.LLM.Thread> allThreads = Llm.Threads;
 
-        bool   callerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
-        string? selfId       = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        bool   callerIsAdmin = User.FindFirstValue(ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        string? selfId       = User.FindFirstValue(ClaimTypes.NameIdentifier);
         string? callerId     = callerIsAdmin ? null : selfId;
         HashSet<string> hidden = LoadHiddenKeys(selfId);
 
@@ -231,7 +231,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     }
 
     private static string HiddenFile(string? userId) =>
-        Path.Combine(ARI.Common.Paths.HiddenThreads, $"{(userId ?? "anon")}.json");
+        Path.Combine(Paths.HiddenThreads, $"{(userId ?? "anon")}.json");
 
     private HashSet<string> LoadHiddenKeys(string? userId)
     {
@@ -241,7 +241,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             if (!System.IO.File.Exists(file)) return new(StringComparer.OrdinalIgnoreCase);
             return new HashSet<string>(JsonSerializer.Deserialize<List<string>>(System.IO.File.ReadAllText(file)) ?? new(), StringComparer.OrdinalIgnoreCase);
         }
-        catch { return new HashSet<string>(StringComparer.OrdinalIgnoreCase); }
+        catch (Exception ex)
+        {
+            Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>(HttpContext.RequestServices).CreateLogger("ARI.Threads").LogWarning(ex, "Failed to read hidden-keys file for user {User}; treating as empty", userId ?? "anon");
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>Hides a thread from the caller's sidebar (it stays saved and can be unhidden later). Writes only this user's hidden-keys file.</summary>
@@ -249,8 +253,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     public IActionResult HideThread([FromRoute(Name = "id")] string threadKey, bool hide = true)
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
-        string? selfId      = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
-        bool   callerAdmin  = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        string? selfId      = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        bool   callerAdmin  = User.FindFirstValue(ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
 
         // The thread must be one this user can see — a live conversation they may access, or a persisted one in their list.
         bool visible = Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? live) && CanAccessThread(live);
@@ -285,7 +289,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
     private static void SaveHiddenKeys(string? userId, HashSet<string> keys)
     {
-        string dir = ARI.Common.Paths.HiddenThreads;
+        string dir = Paths.HiddenThreads;
         Directory.CreateDirectory(dir);
         System.IO.File.WriteAllText(HiddenFile(userId), JsonSerializer.Serialize(keys.ToList()));
     }
@@ -331,8 +335,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // guest's own empty thread isn't in their list and an admin can't tell whose it is.
         if (Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? created))
         {
-            created.HasMemoryAccess = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
-            created.OwnerId ??= User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+            created.HasMemoryAccess = User.FindFirstValue(ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+            created.OwnerId ??= User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (!string.IsNullOrWhiteSpace(req?.Context)) created.ApiContext = req.Context.Trim();
         }
         bool isCodeMode = Llm.Threads.TryGetValue(key, out ARI.LLM.Thread? made) && made.Pipeline == ARI.LLM.ThreadPipeline.Code;
@@ -576,8 +580,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             return;
         }
 
-        bool   evtCallerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
-        string? evtCallerId     = evtCallerIsAdmin ? null : User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        bool   evtCallerIsAdmin = User.FindFirstValue(ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+        string? evtCallerId     = evtCallerIsAdmin ? null : User.FindFirstValue(ClaimTypes.NameIdentifier);
 
         Channel<AppEvent> channel = Channel.CreateUnbounded<AppEvent>(new UnboundedChannelOptions { SingleReader = true });
         using IDisposable sub = Llm.Subscribe(channel);
@@ -789,7 +793,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             else if (!User.IsInRole(ARI.API.Auth.Roles.Admin) && !ARI.API.Auth.ThreadAccess.IsClientKey(req.ThreadKey)) return StatusCode(403);
         }
 
-        bool isMaster = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier) == ARI.Common.Shared.MasterUserId;
+        bool isMaster = User.FindFirstValue(ClaimTypes.NameIdentifier) == ARI.Common.Shared.MasterUserId;
         string? result = await Llm.HandleCommand(req.ThreadKey, req.Input, isMaster);
         if (result is null) return BadRequest(new { error = $"Unknown command: {req.Input}" });
         return Ok(new { result });
