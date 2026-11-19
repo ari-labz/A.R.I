@@ -150,6 +150,22 @@ export async function closeThread(key: string): Promise<boolean> {
     return res.ok
 }
 
+// Hide (or unhide) a thread in the caller's sidebar. It stays saved; only this user's view changes.
+export async function hideThread(key: string, hide = true): Promise<boolean> {
+    const res = await apiFetch(`/api/v1/threads/${key}/hide?hide=${hide}`, { method: "POST" })
+    return res.ok
+}
+
+// Rename a thread the user named it themselves. Sets CustomTitle, which also stops auto-renaming.
+export async function renameThread(key: string, title: string): Promise<boolean> {
+    const res = await apiFetch(`/api/v1/threads/${key}/title`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+    })
+    return res.ok
+}
+
 export async function loadHistory(key: string, raw = false): Promise<ThreadItem[]> {
     const url = raw ? `/api/v1/threads/${key}/messages?raw=true` : `/api/v1/threads/${key}/messages`
     const res = await apiFetch(url)

@@ -1,5 +1,5 @@
+import { useState } from "react"
 import type { ThreadEntry } from "../hooks/useThreads"
-
 interface Props {
     threads:             ThreadEntry[]
     activeThread:        string | null
@@ -15,9 +15,12 @@ interface Props {
     userDisplayName?:    string
     onOpenPreferences?:  () => void
     isAdmin?:            boolean
+    onRenameThread?:     (t: ThreadEntry) => void
+    onHideThread?:       (t: ThreadEntry) => void
 }
 
-export default function Sidebar({ threads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, clientVersion, outdated, userDisplayName, onOpenPreferences, isAdmin }: Props) {
+export default function Sidebar({ threads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, clientVersion, outdated, userDisplayName, onOpenPreferences, isAdmin, onRenameThread, onHideThread }: Props) {
+    const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
     return (
         <aside id="sidebar" className={collapsed ? "collapsed" : ""}>
             <div id="sidebar-inner">
@@ -67,7 +70,8 @@ const baseName = t.isInternal
                             t.state === "inactive" || t.state === "dormant" || t.state === "expired" ? "inactive" : "",
                         ].filter(Boolean).join(" ")
                         return (
-                            <li key={t.key} className={classes} onClick={() => onSelectThread(t)}>
+                            <li key={t.key} className={classes} onClick={() => onSelectThread(t)}
+                                onContextMenu={e => { if (t.isInternal) return; e.preventDefault(); e.stopPropagation(); setMenu({ key: t.key, x: e.clientX, y: e.clientY }) }}>
                                 <span className="thread-name">
                                     {t.projectName && (
                                         <span className="thread-project">{t.projectName}/</span>
@@ -138,6 +142,21 @@ const baseName = t.isInternal
                     )}
                 </div>
             </div>
+
+            {menu && (() => {
+                const t = threads.find(x => x.key === menu.key)
+                if (!t) return null
+                const close = () => setMenu(null)
+                return (
+                    <>
+                        <div className="thread-menu-backdrop" onClick={close} onContextMenu={e => { e.preventDefault(); close() }} />
+                        <ul className="thread-menu" style={{ left: menu.x, top: menu.y }}>
+                            <li onClick={() => { close(); onRenameThread?.(t) }}>Rename</li>
+                            <li onClick={() => { close(); onHideThread?.(t) }}>Hide</li>
+                        </ul>
+                    </>
+                )
+            })()}
         </aside>
     )
 }
