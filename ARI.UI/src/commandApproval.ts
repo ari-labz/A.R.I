@@ -10,6 +10,7 @@ export interface SegmentInfo {
     key:     string | null    // allowlist key; null for dangerous/opaque (never stored)
     tier:    SegmentTier
     reason?: string           // why it is dangerous/opaque — shown in the prompt
+    threadScoped?: boolean    // true when "always" stores per-thread, not globally
 }
 
 export type CommandDecision = "deny" | "allow" | "whitelist"

@@ -140,13 +140,25 @@ internal static class ShellGate
 
     /// <summary>Null when the command may run; otherwise the message to give Ari. allowListed is false for things that
     /// aren't shell command lines (code to run, an SSH host): those are asked about as a whole, once, every time.</summary>
-    internal static async Task<string?> Approve(Thread? thread, string title, string command, bool allowListed = true)
+    internal static async Task<string?> Approve(Thread? thread, string title, string command, bool allowListed = true, string? codeKey = null)
     {
         if (thread is null || !thread.IsAdminChat) return "Only the owner, chatting in the app, can run commands.";
         if (AutoApprove) return null;
         const string denied = "The owner didn't approve this, so it was not run. Ask them what they'd like instead.";
         if (!allowListed)
+        {
+            if (codeKey is not null)
+            {
+                if (ARI.Common.ThreadCommandAllowlist.Contains(thread.Key, codeKey)) return null;
+                CommandSegment segment = new(command, codeKey, CommandTier.Allowable, null, ThreadScoped: true);
+                ApprovalDecision decision = await ToolApprovals.DecideAsync(thread, title, command, segment);
+                if (decision == ApprovalDecision.Deny) return denied;
+                if (decision == ApprovalDecision.Always)
+                    ARI.Common.ThreadCommandAllowlist.Add(thread.Key, codeKey);
+                return null;
+            }
             return await ToolApprovals.DecideAsync(thread, title, command) == ApprovalDecision.Deny ? denied : null;
+        }
 
         // Every command in the line that isn't read-only or already allowed is asked about on its own; one denial stops
         // the whole line. "Every time" stores the command's key, never for a dangerous or opaque one.

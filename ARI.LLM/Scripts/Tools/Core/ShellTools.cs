@@ -78,7 +78,7 @@ public class RunCode : Tool
 
     public override async Task<string> Run()
     {
-        if (await ShellGate.Approve(CallThread, $"Run {Language} code", Code, allowListed: false) is { } refusal) return refusal;
+        if (await ShellGate.Approve(CallThread, $"Run {Language} code", Code, allowListed: false, codeKey: Language) is { } refusal) return refusal;
 
         (string exe, string ext) = Language switch
         {
