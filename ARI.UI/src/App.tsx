@@ -115,7 +115,7 @@ const cmdOverlayStyle: CSSProperties = { position: "fixed", inset: 0, background
 const cmdModalStyle:   CSSProperties = { background: "var(--col-app-line-108-background)", border: "1px solid var(--col-app-line-108-border)", borderRadius: 10, padding: "20px 22px", width: "min(560px, 90vw)", boxShadow: "0 12px 40px var(--col-app-line-108-shadow)", color: "var(--col-app-line-108-text)" }
 const cmdTitleStyle:   CSSProperties = { fontSize: 15, fontWeight: 600, marginBottom: 4 }
 const cmdSubStyle:     CSSProperties = { fontSize: 12.5, opacity: 0.7, marginBottom: 12 }
-const cmdCodeStyle:    CSSProperties = { background: "var(--col-app-line-111-background)", border: "1px solid var(--col-app-line-111-border)", borderRadius: 6, padding: "10px 12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, marginBottom: 16 }
+const cmdCodeStyle:    CSSProperties = { background: "var(--col-app-line-111-background)", border: "1px solid var(--col-app-line-111-border)", borderRadius: 6, padding: "10px 12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, marginBottom: 16, maxHeight: 160, overflowY: "auto" }
 const cmdActionsStyle: CSSProperties = { display: "flex", gap: 8, justifyContent: "flex-end" }
 const cmdBtnBase:      CSSProperties = { padding: "7px 14px", borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid transparent" }
 
@@ -1552,7 +1552,7 @@ export default function App() {
                             {pendingCommand.segment?.tier === "allowable" && pendingCommand.segment.key && (
                                 <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1413-background)", color: "var(--col-app-line-1413-text)" }}
                                         onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>
-                                    Allow "{pendingCommand.segment.key}" every time
+{pendingCommand.segment.threadScoped ? `Allow "${pendingCommand.segment.key}" for this chat` : `Allow "${pendingCommand.segment.key}" every time`}
                                 </button>
                             )}
                         </div>
