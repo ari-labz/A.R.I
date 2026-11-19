@@ -14,7 +14,8 @@ internal class Engram : MemoryAgent, IDisposable
     // ── Constants ────────────────────────────────────────────────────────────────
     private const int    EXTRACT_MAX_TOKENS   = 6000;
     private const double EXTRACT_TEMPERATURE = 0.3;
-    private const int    SAVE_MAX_TOKENS      = 300;
+    // A day-log entry covers every topic of a long conversation; at 300 tokens entries were cut off mid-sentence.
+    private const int    LOG_SUMMARY_MAX_TOKENS = 800;
     private const int    OVERSIZED_BLOCK_CHARS = 600;
 
     // Each Stage-3 call now places exactly one entity in its own short-lived thread, so there's no
@@ -34,8 +35,15 @@ internal class Engram : MemoryAgent, IDisposable
     private readonly Dictionary<string, int>            lastHistoryCount = new();
     private readonly ConcurrentDictionary<string, int>  exchangeCounts   = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>A thread restored from disk (Persistent Threads) already went through Engram: sweeps start after these items.</summary>
-    internal void MarkHistoryRestored(string threadKey, int itemCount) { lock (lastRun) lastHistoryCount[threadKey] = itemCount; }
+    /// <summary>A thread restored from disk (Persistent Threads): sweeps start after the messages Engram had already swept when it was saved.</summary>
+    internal void MarkHistoryRestored(string threadKey, int sweptCount) { lock (lastRun) lastHistoryCount[threadKey] = sweptCount; }
+
+    /// <summary>How many of the thread's messages (the user's and ARI's replies) Engram has swept so far. Saved with a persisted thread.</summary>
+    internal int SweptCount(string threadKey) { lock (lastRun) return lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0; }
+
+    /// <summary>The messages a sweep reads: the user's and ARI's replies, nothing else in the history. The sweep mark counts these.</summary>
+    internal static int ConversationCount(Thread thread) => ConversationCount(thread.History);
+    internal static int ConversationCount(IEnumerable<ThreadItem> items) => items.Count(i => i is LLM.Prompt or Response);
     private readonly SemaphoreSlim                      engramLock       = new(1, 1);
     private readonly SemaphoreSlim                      reflexLock       = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> sweepingThreads  = new(StringComparer.OrdinalIgnoreCase);
@@ -160,7 +168,8 @@ internal class Engram : MemoryAgent, IDisposable
         return new List<ThreadItem>();
     }
 
-    internal async Task RunEngram(string threadKey, string trigger, bool force = false)
+    /// <param name="saved">A saved conversation that isn't live (Persistent Threads), swept in place of the live thread with this key.</param>
+    internal async Task RunEngram(string threadKey, string trigger, bool force = false, Thread? saved = null)
     {
         // In DevMode Engram still runs in full: the brain it writes to is a throwaway copy (see LLMModule.PrepareDevSandbox), so nothing it does is kept.
 
@@ -170,7 +179,7 @@ internal class Engram : MemoryAgent, IDisposable
         // filters recall, not writes. Master-only filtering is not a substitute: the misfiled note that
         // prompted this gate was built from the Master's own messages, misread by pronoun resolution.
         // Force-proof like the DevMode gate above — a manual close must not be a way around it either.
-        threads.TryGetValue(threadKey, out Thread? sweptThread);
+        Thread? sweptThread = saved ?? threads.GetValueOrDefault(threadKey);
         (ThreadMedium medium, bool shared) = sweptThread is not null ? (sweptThread.Medium, sweptThread.InSharedChannel) : Channels.PlaceOf(threadKey);
         if (medium == ThreadMedium.Channel && shared && !EngramOthersSetting.Enabled)
         {
@@ -210,7 +219,8 @@ internal class Engram : MemoryAgent, IDisposable
 
         try
         {
-            List<ThreadItem> allItems = threads.TryGetValue(threadKey, out Thread? dialogueThread) ? SnapshotHistory(dialogueThread) : new List<ThreadItem>();
+            Thread? dialogueThread = sweptThread;
+            List<ThreadItem> allItems = dialogueThread is not null ? SnapshotHistory(dialogueThread) : new List<ThreadItem>();
             List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
 
             // A code thread is swept with its own prompts: what was done and decided, filed on the project's note —
@@ -221,9 +231,6 @@ internal class Engram : MemoryAgent, IDisposable
             int lastCount = lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
             List<ThreadItem> recentItems = conversationItems.Skip(lastCount).ToList();
 
-            lastRun[threadKey]          = DateTime.UtcNow;
-            lastHistoryCount[threadKey] = conversationItems.Count;
-
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
 
             // No user messages — ARI-only thread (proactive, internal monologue, etc.). Nothing to
@@ -232,6 +239,7 @@ internal class Engram : MemoryAgent, IDisposable
             {
                 outcome   = "skipped — no user messages (ARI-only thread)";
                 processed = true;
+                MarkSwept(threadKey, conversationItems.Count);
                 return;
             }
 
@@ -258,7 +266,17 @@ internal class Engram : MemoryAgent, IDisposable
             //     tool-free call, so it can't wander; the excerpt it captures per entity is what keeps
             //     Stage 3 faithful to what was actually said without needing one continuous thread. ---
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] extracting entities...", threadKey);
-            List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary, code, project);
+            List<ExtractedEntity>? extracted = await ExtractAsync(transcript, contextSummary, code, project);
+
+            // The model server couldn't answer (stopped, restarting, out of memory). That is not "nothing to remember":
+            // these messages stay unswept and the thread stays unprocessed, so the delete gate's retry sweeps them again.
+            if (extracted is null)
+            {
+                outcome = "failed — the model server didn't answer; the messages stay unswept for the next try";
+                Shared.Logger.LogWarning("[Engram] [{ThreadKey}] sweep failed — extraction got no answer; will try again.", threadKey);
+                return;
+            }
+            List<ExtractedEntity> entities = extracted;
 
             // The conversation's own date — not "today", since Engram can run well after the fact.
             // Stage 3 is told this explicitly so it never has to guess or invent one.
@@ -270,8 +288,7 @@ internal class Engram : MemoryAgent, IDisposable
             //     still resolved by exact match beforehand and the write tool is still confined to that
             //     pre-resolved set of paths — one call now covers the whole sweep's entities instead of
             //     one call per entity, but no entity can still reach a note it wasn't resolved against. ---
-            (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate, code, project);
-            if (!code && entities.Count > 0) CleanLinks();
+            (int commits, int blocked) = await SaveAllAsync(threadKey, entities, speaker, conversationDate, code, project, source: saved);
 
             // A short linked summary of what was concluded; falls back to a linked entity list if the summary call fails.
             if (entities.Count > 0)
@@ -291,7 +308,12 @@ internal class Engram : MemoryAgent, IDisposable
                 else
                     AppendToConversationLog(logStart, logLine, logStart, logEnd);
             }
+            // After the day-log entry, so the links it adds are checked too.
+            if (!code && entities.Count > 0) CleanLinks();
 
+            MarkSwept(threadKey, conversationItems.Count);
+            // The saved copy (Persistent Threads) records it too, so the next start doesn't sweep these messages again.
+            PersistedThreads.SetEngramSwept(threadKey, conversationItems.Count);
             committed    = commits;
             blockedCount = blocked;
             outcome      = entities.Count == 0
@@ -315,13 +337,23 @@ internal class Engram : MemoryAgent, IDisposable
             });
 
             // The invariant latch: a completed sweep (or a "nothing to store") releases the thread for deletion.
-            if (processed && threads.TryGetValue(threadKey, out Thread? processedThread))
-                processedThread.EngramProcessed = true;
+            if (processed && sweptThread is not null)
+                sweptThread.EngramProcessed = true;
 
             sweepingThreads.TryRemove(threadKey, out _);
             backgroundSweeps.TryRemove(threadKey, out _);
             engramLock.Release();
             SweepCompleted?.Invoke(threadKey);
+        }
+    }
+
+    /// <summary>Moves the sweep mark forward. Only a sweep that got its extraction back calls this, so a failed one is tried again.</summary>
+    private void MarkSwept(string threadKey, int conversationCount)
+    {
+        lock (lastRun)
+        {
+            lastRun[threadKey]          = DateTime.UtcNow;
+            lastHistoryCount[threadKey] = conversationCount;
         }
     }
 
@@ -334,7 +366,7 @@ internal class Engram : MemoryAgent, IDisposable
 
         string transcript = BuildTranscript(recentItems);
         string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
-        List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary);
+        List<ExtractedEntity> entities = await ExtractAsync(transcript, contextSummary) ?? new();
         return entities.Select(e => (e.Entity, e.IsNew, e.Excerpt, e.Sensitive)).ToList();
     }
 
@@ -352,16 +384,19 @@ internal class Engram : MemoryAgent, IDisposable
     // keeps each answer short and complete, so nothing in the middle is skipped.
     private const int EXTRACT_CHUNK_CHARS = 1600;
 
-    private async Task<List<ExtractedEntity>> ExtractAsync(string transcript, string contextSummary, bool code = false, string? project = null)
+    // Null when the model server didn't answer for any part of the transcript: the caller must not treat that as "nothing to remember".
+    private async Task<List<ExtractedEntity>?> ExtractAsync(string transcript, string contextSummary, bool code = false, string? project = null)
     {
         if (code || transcript.Length <= EXTRACT_CHUNK_CHARS) return await ExtractChunkAsync(transcript, contextSummary, code, project);
 
         List<ExtractedEntity> all = new();
+        bool failed = false;
         StringBuilder chunk = new();
         async Task Flush()
         {
             if (chunk.ToString().Trim().Length == 0) return;
-            all.AddRange(await ExtractChunkAsync(chunk.ToString(), contextSummary, code, project));
+            if (!failed && await ExtractChunkAsync(chunk.ToString(), contextSummary, code, project) is { } found) all.AddRange(found);
+            else failed = true;
             chunk.Clear();
         }
         // A chunk that starts mid-message would lose who is speaking, and the model then takes the most-named person for the speaker.
@@ -377,10 +412,10 @@ internal class Engram : MemoryAgent, IDisposable
             chunk.Append(paragraph).Append("\n\n");
         }
         await Flush();
-        return all;
+        return failed ? null : all;
     }
 
-    private async Task<List<ExtractedEntity>> ExtractChunkAsync(string transcript, string contextSummary, bool code = false, string? project = null)
+    private async Task<List<ExtractedEntity>?> ExtractChunkAsync(string transcript, string contextSummary, bool code = false, string? project = null)
     {
         string context = string.IsNullOrWhiteSpace(contextSummary)
             ? ""
@@ -422,8 +457,8 @@ internal class Engram : MemoryAgent, IDisposable
         }
         catch (Exception ex)
         {
-            Shared.Logger.LogWarning("[Engram] Extraction failed ({Error}) — treating as nothing extracted.", ex.Message);
-            return new();
+            Shared.Logger.LogWarning("[Engram] Extraction failed ({Error}).", ex.Message);
+            return null;
         }
     }
 
@@ -523,7 +558,7 @@ internal class Engram : MemoryAgent, IDisposable
         return chat is null ? Make(null, $"engram:{threadKey}:{Guid.NewGuid():N}") : chat.GetOrCreateChild("engram", Name, () => Make(chat, $"{chat.Key}:engram"));
     }
 
-    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate, bool code = false, string? project = null, bool reflex = false)
+    private async Task<(int Commits, int Blocked)> SaveAllAsync(string threadKey, List<ExtractedEntity> entities, string speaker, string conversationDate, bool code = false, string? project = null, bool reflex = false, Thread? source = null)
     {
         if (entities.Count == 0) return (0, 0);
 
@@ -543,7 +578,7 @@ internal class Engram : MemoryAgent, IDisposable
             ExtractedEntity lead = entities[group.OrderByDescending(i => entities[i].Correction).First()];
             string meta = $"Kind: {lead.Kind}" + (lead.Theme.Length > 0 ? $" · Theme: {lead.Theme}" : "") + (lead.Involves.Length > 0 ? $" · Involves: {lead.Involves}" : "")
                         + (lead.Date.Length > 0 ? $" · Date: {lead.Date}" : "");
-            string note = lead.Correction ? "\nCORRECTION: the speaker said the older version of this was wrong or out of date. Replace it; do not keep both." : "";
+            string note = lead.Correction ? "\nCORRECTION: the speaker said the older version of this is wrong, out of date or replaced by something newer. Find it, on this note or another, and replace it; do not keep both." : "";
             string thought = string.Join(" ", group.Select(i => entities[i].Thought).Where(t => t.Length > 0));
             if (thought.Length > 0) note += $"\nMARGIN THOUGHT to leave beside the fact it relates to (as a thought, never as a fact): {thought}";
             string groupHint = "";
@@ -570,7 +605,7 @@ internal class Engram : MemoryAgent, IDisposable
         // A quick save leads with the conversation and treats the noted facts as the headline of what to change; a sweep keeps them first and adds the source after.
         if (!code) task = reflex
             ? RecentConversation(threadKey, true) + "\n\nHEADLINE: the chat noted these facts as what changed in the conversation above. Change only this, writing from the conversation, not from the headline's wording.\n\n" + task
-            : task + RecentConversation(threadKey, false);
+            : task + RecentConversation(threadKey, false, source);
 
         await Prompt(mini, task, new PromptOptions
         {
@@ -691,9 +726,9 @@ internal class Engram : MemoryAgent, IDisposable
 
     /// <summary>The last few turns, word for word. The facts above are someone's summary of them (the chat's notes, or the extraction), and a summary can
     /// be wrong, so Engram checks every fact against what was actually said and writes from that.</summary>
-    private string RecentConversation(string threadKey, bool leading)
+    private string RecentConversation(string threadKey, bool leading, Thread? source = null)
     {
-        if (threads.GetValueOrDefault(threadKey) is not { } chat) return "";
+        if ((source ?? threads.GetValueOrDefault(threadKey)) is not { } chat) return "";
         List<ThreadItem> recent = chat.History.Where(i => i is LLM.Prompt or Response).TakeLast(SOURCE_ITEMS).ToList();
         string text = BuildTranscript(recent);
         if (text.Length > SOURCE_CHARS) text = text[^SOURCE_CHARS..];
@@ -723,20 +758,30 @@ internal class Engram : MemoryAgent, IDisposable
         return (a, null);
     }
 
-    // ── Closing ARI: finish the conversations that haven't been swept yet ───────────────
+    // ── Starting ARI: finish the conversations she closed on before Engram reached them ──
 
-    internal async Task FlushAsync(TimeSpan limit)
+    private int sweepingSaved;
+
+    /// <summary>Sweeps the saved conversations (Persistent Threads) that still hold messages Engram never reached. Nothing is swept
+    /// at shutdown: a sweep takes minutes and ARI.Console ends the process seconds after asking it to close. Runs once the model is up.</summary>
+    internal async Task SweepSavedAsync()
     {
-        if (!IsEnabled) return;
-        using CancellationTokenSource cts = new(limit);
-        foreach (Thread thread in threads.Values.ToList())
+        if (!IsEnabled || Interlocked.Exchange(ref sweepingSaved, 1) == 1) return;
+        try
         {
-            if (cts.IsCancellationRequested) break;
-            if (thread.EngramProcessed || !MaySweep(thread)) continue;
-            try { await RunEngram(thread.Key, "shutdown", force: true).WaitAsync(cts.Token); }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Shared.Logger.LogWarning("[Engram] shutdown sweep failed for {Key}: {Error}", thread.Key, ex.Message); }
+            foreach (PersistedThreads.Meta meta in PersistedThreads.ListMeta())
+            {
+                if (meta.EngramSwept is not int swept || meta.Messages is not int messages || swept >= messages) continue;
+                if (threads.ContainsKey(meta.Key)) continue;   // reopened: its own sweeps cover it
+                Thread saved = new(ThreadPipeline.Dialogue, meta.Key);
+                if (!PersistedThreads.Restore(meta.Key, saved) || !MaySweep(saved)) continue;
+                MarkHistoryRestored(meta.Key, swept);
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] {Count} message(s) were never swept before ARI closed — sweeping them now.", meta.Key, messages - swept);
+                try { await RunEngram(meta.Key, "start-up", force: true, saved: saved); }
+                catch (Exception ex) { Shared.Logger.LogWarning("[Engram] start-up sweep failed for {Key}: {Error}", meta.Key, ex.Message); }
+            }
         }
+        finally { Interlocked.Exchange(ref sweepingSaved, 0); }
     }
 
     // ── Code threads ───────────────────────────────────────────────────────────────────
@@ -776,7 +821,7 @@ internal class Engram : MemoryAgent, IDisposable
                 new { role = "user",   content = user }
             },
             stream      = false,
-            max_tokens  = SAVE_MAX_TOKENS,
+            max_tokens  = LOG_SUMMARY_MAX_TOKENS,
             temperature = EXTRACT_TEMPERATURE,
             thinking             = false,
             enable_thinking      = false,
@@ -794,17 +839,34 @@ internal class Engram : MemoryAgent, IDisposable
 
             string json = await response.Content.ReadAsStringAsync();
             using JsonDocument doc = JsonDocument.Parse(json);
-            return doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString()?.Trim() ?? "";
+            JsonElement choice = doc.RootElement.GetProperty("choices")[0];
+            string text = choice.GetProperty("message").GetProperty("content").GetString()?.Trim() ?? "";
+            if (choice.TryGetProperty("finish_reason", out JsonElement finish) && finish.GetString() == "length")
+            {
+                Shared.Logger.LogInformation("[Engram] Summary hit the token cap — keeping only the finished part.");
+                text = TrimToLastComplete(text);
+            }
+            return text;
         }
         catch (Exception ex)
         {
             Shared.Logger.LogWarning("[Engram] Summary generation failed: {Err}", ex.Message);
             return "";
         }
+    }
+
+    /// <summary>A summary cut off by the token cap ends mid-sentence. Keeps the whole lines before the cut, and the finished
+    /// sentences of the line it stopped in.</summary>
+    private static string TrimToLastComplete(string text)
+    {
+        string t = text.TrimEnd();
+        if (t.Length == 0 || ".!?)]\"'".Contains(t[^1])) return t;
+        int newline = t.LastIndexOf('\n');
+        string head = newline >= 0 ? t[..newline] : "";
+        string last = newline >= 0 ? t[(newline + 1)..] : t;
+        int stop = new[] { last.LastIndexOf(". "), last.LastIndexOf("! "), last.LastIndexOf("? ") }.Max();
+        string finished = stop > 0 ? last[..(stop + 1)] : "";
+        return (finished.Length > 0 ? (head.Length > 0 ? head + "\n" : "") + finished : head).TrimEnd();
     }
 
     // Each entry carries the actual time range of that conversation (first message → last message),
@@ -903,17 +965,29 @@ internal class Engram : MemoryAgent, IDisposable
         return prose.Length <= CODE_TURN_MAX_CHARS ? prose : prose[..CODE_TURN_MAX_CHARS] + " […]";
     }
 
+    // A voice turn carries notes for the reply on their own lines ("[Voice: the speech recogniser wasn't sure of ...]"). They are
+    // instructions to ARI, not something the person said. A turn the recogniser marked as badly garbled is mostly guesswork.
+    private static readonly System.Text.RegularExpressions.Regex VoiceNote =
+        new(@"^\[Voice: .*$\n?", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private const string GARBLED_NOTE = "[Voice: this came through badly garbled";
+
     private static string BuildTranscript(IEnumerable<ThreadItem> items, bool code = false)
     {
         StringBuilder sb = new();
+        Dictionary<string, string> lastSaid = new(StringComparer.OrdinalIgnoreCase);
         foreach (ThreadItem item in items)
         {
             switch (item)
             {
                 case Prompt u:
+                    if (u.Text.Contains(GARBLED_NOTE, StringComparison.Ordinal)) break;
+                    string text = VoiceNote.Replace(u.Text, "").Trim();
                     // A pasted or attached text file is part of what the person said: without it a message with only an attachment is empty.
                     string attached = string.Join("\n\n", (u.Attachments ?? new()).Where(a => !a.IsImage && !string.IsNullOrWhiteSpace(a.Content)).Select(a => a.Content.Trim()));
-                    string said = string.IsNullOrWhiteSpace(attached) ? u.Text : $"{attached}\n\n{u.Text}".Trim();
+                    string said = string.IsNullOrWhiteSpace(attached) ? text : $"{attached}\n\n{text}".Trim();
+                    // A message that arrived twice (a resend) is said once.
+                    if (said.Length > 0 && lastSaid.TryGetValue(u.AuthorName ?? "", out string? previous) && previous == said) break;
+                    lastSaid[u.AuthorName ?? ""] = said;
                     sb.AppendLine($"{u.AuthorName}: {(code ? ForCodeTranscript(said) : said)}");
                     break;
                 case Response r: sb.AppendLine($"ARI: {(code ? ForCodeTranscript(r.ContentText) : r.ContentText)}"); break;
