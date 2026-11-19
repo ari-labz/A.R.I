@@ -215,7 +215,8 @@ public class LLMModule : ILLMModule, IDisposable
             // Each context update yields a fresh short title — rename the thread and notify the UI.
             context.TitleUpdated = (key, title) =>
             {
-                if (threads.TryGetValue(key, out Thread? t) && t.Title != title)
+                // A custom title wins forever: once the user names a thread themselves, stop auto-renaming it.
+                if (threads.TryGetValue(key, out Thread? t) && string.IsNullOrWhiteSpace(t.CustomTitle) && t.Title != title)
                 {
                     t.Title = title;
                     Broadcast(new AppEvent("threadUpdated", key));
@@ -1739,20 +1740,23 @@ public class LLMModule : ILLMModule, IDisposable
     // ── Persistent Threads ────────────────────────────────────────────────────────────
     // An expired conversation lives only in its saved file (see PersistedThreads); a live one lives only in memory.
 
-    public sealed record PersistedThreadInfo(string Key, string? OwnerId, string? Title, DateTime LastMessageAt);
+    public sealed record PersistedThreadInfo(string Key, string? OwnerId, string? Title, string? CustomTitle, string Pipeline, DateTime LastMessageAt);
 
     /// <summary>Saved threads that are not currently live, newest first. Empty when the setting is off.</summary>
     public IReadOnlyList<PersistedThreadInfo> ListPersistedThreads() =>
         !PersistedThreadsSetting.Enabled
             ? []
             : PersistedThreads.ListMeta().Where(m => !threads.ContainsKey(m.Key))
-                .Select(m => new PersistedThreadInfo(m.Key, m.OwnerId, m.Title, m.LastMessageAt)).ToList();
+                .Select(m => new PersistedThreadInfo(m.Key, m.OwnerId, m.Title, m.CustomTitle, m.Pipeline, m.LastMessageAt)).ToList();
 
     public PersistedThreadInfo? GetPersistedInfo(string key) =>
         PersistedThreadsSetting.Enabled && PersistedThreads.ReadMeta(key) is { } m
-            ? new PersistedThreadInfo(m.Key, m.OwnerId, m.Title, m.LastMessageAt)
+            ? new PersistedThreadInfo(m.Key, m.OwnerId, m.Title, m.CustomTitle, m.Pipeline, m.LastMessageAt)
             : null;
 
+    /// <summary>How many saved conversations exist and how much disk they use (bytes).</summary>
+    public (int Count, long Bytes) PersistedStats() =>
+        PersistedThreadsSetting.Enabled ? PersistedThreads.Stats() : (0, 0);
     /// <summary>A saved thread rebuilt for viewing only — never registered, so it has no timers and no hooks.</summary>
     public Thread? LoadPersistedForView(string key)
     {
@@ -1785,8 +1789,24 @@ public class LLMModule : ILLMModule, IDisposable
         return true;
     }
 
-    public (int Count, long Bytes) PersistedStats() => PersistedThreads.Stats();
+    /// <summary>Renames a thread the user named it themselves: sets CustomTitle (which also stops auto-renaming).
+    /// Handles both live threads and saved ones. Empty title clears the custom name.</summary>
+    public bool SetCustomTitle(string key, string? customTitle)
+    {
+        customTitle = string.IsNullOrWhiteSpace(customTitle) ? null : customTitle.Trim();
 
+        if (threads.TryGetValue(key, out Thread? live))
+        {
+            live.CustomTitle = customTitle;
+            Broadcast(new AppEvent("threadUpdated", key));
+            return true;
+        }
+        if (!PersistedThreadsSetting.Enabled || !PersistedThreads.Exists(key)) return false;
+
+        bool ok = PersistedThreads.UpdateCustomTitle(key, customTitle);
+        if (ok) Broadcast(new AppEvent("threadUpdated", key));
+        return ok;
+    }
     public int DeleteAllPersisted()
     {
         int n = PersistedThreads.DeleteAll();

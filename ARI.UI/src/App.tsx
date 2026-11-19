@@ -3,7 +3,7 @@ import Sidebar from "./components/Sidebar"
 import Main from "./components/Main"
 import ProjectsPage from "./components/ProjectsPage"
 import {
-    useThreads, createThread, createThreadWithMode, closeThread, loadHistory, fetchThread, pollThreadWhileStreaming,
+    useThreads, createThread, createThreadWithMode, closeThread, hideThread, renameThread, loadHistory, fetchThread, pollThreadWhileStreaming,
     openEventStream, openWatchStream, useTypingHeartbeat,
     type ThreadItem, type ThreadEntry, type AppEvent, type Attachment, type Project, type ThreadStatus, type WatchEvent,
 } from "./hooks/useThreads"
@@ -1442,6 +1442,14 @@ export default function App() {
                     // On an expired (saved) thread the button deletes it for good, so ask first.
                     if (t.state === "expired" && !window.confirm("Delete this saved conversation forever? This cannot be undone.")) return
                     void closeThread(t.key)
+                }}
+                onRenameThread={(t: ThreadEntry) => {
+                    const name = window.prompt("New conversation name", t.title ?? "")
+                    if (!name) return
+                    void renameThread(t.key, name.trim()).then(ok => { if (ok) void loadThreads() })
+                }}
+                onHideThread={(t: ThreadEntry) => {
+                    void hideThread(t.key, true).then(ok => { if (ok) void loadThreads() })
                 }}
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(c => !c)}

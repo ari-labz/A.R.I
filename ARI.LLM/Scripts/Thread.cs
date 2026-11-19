@@ -64,6 +64,9 @@ public class Thread
     /// <summary>Short (3-4 word) auto-generated title reflecting the conversation, refreshed by the Context agent each exchange. Null until the first update.</summary>
     public string? Title { get; set; }
 
+    /// <summary>User-set title override. When set, the Context agent stops auto-renaming and the sidebar shows this instead of Title.</summary>
+    public string? CustomTitle { get; set; }
+
     /// <summary>The code this thread is known by under its parent ("memory"), or null for a sub-thread that has none. A chat can have
     /// several sub-threads, and this is how a step finds its own again on the next message.</summary>
     public string? Code { get; init; }

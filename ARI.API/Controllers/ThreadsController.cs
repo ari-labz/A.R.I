@@ -147,6 +147,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         bool   callerIsAdmin = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
         string? selfId       = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
         string? callerId     = callerIsAdmin ? null : selfId;
+        HashSet<string> hidden = LoadHiddenKeys(selfId);
 
         // An admin sees everyone's threads, so each one that belongs to somebody else carries that person's
         // name and the sidebar groups it under them — otherwise it reads as if the admin's list were shared.
@@ -167,7 +168,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             .Where(kvp => kvp.Value.Pipeline is ARI.LLM.ThreadPipeline.Dialogue or ARI.LLM.ThreadPipeline.Code or ARI.LLM.ThreadPipeline.Speech
                           && !kvp.Value.Internal
                           && !kvp.Key.StartsWith(ARI.LLM.LLMModule.WarmupKeyPrefix)   // startup cache warm-ups, not conversations
-                          && (callerIsAdmin || kvp.Value.OwnerId == callerId))
+                          && (callerIsAdmin || kvp.Value.OwnerId == callerId)
+                          && !hidden.Contains(kvp.Key))
             .Select(kvp =>
             {
                 string? projectId   = ThreadProjects.TryGetValue(kvp.Key, out string? pid) ? pid : null;
@@ -179,7 +181,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                     IsCodeMode: kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code,
                     ProjectName: projectName, ProjectId: projectId,
                     Pipeline: kvp.Value.Pipeline.ToString().ToLowerInvariant(),
-                    Title: kvp.Value.Title, OwnerName: OwnerNameFor(kvp.Value.OwnerId));
+                    Title: kvp.Value.CustomTitle ?? kvp.Value.Title, OwnerName: OwnerNameFor(kvp.Value.OwnerId));
             })
             .ToList();
 
@@ -188,8 +190,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         foreach (ARI.LLM.LLMModule.PersistedThreadInfo saved in Llm.ListPersistedThreads())
         {
             if (!callerIsAdmin && saved.OwnerId != callerId) continue;
+            if (hidden.Contains(saved.Key)) continue;
+            bool savedIsCode = saved.Pipeline == "Code";
             threads.Add(new ThreadEntry(saved.Key, AgentName: null, IsInternal: false, LastMessageAt: saved.LastMessageAt, MessageCount: 0,
-                State: "expired", IsCodeMode: false, Pipeline: "dialogue", Title: saved.Title, OwnerName: OwnerNameFor(saved.OwnerId)));
+                State: "expired", IsCodeMode: savedIsCode, Pipeline: saved.Pipeline.ToLowerInvariant(),
+                Title: saved.CustomTitle ?? saved.Title, OwnerName: OwnerNameFor(saved.OwnerId)));
         }
 
         if (includeInternal)
@@ -223,6 +228,66 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         }
 
         return Ok(this.Page(threads.OrderByDescending(t => t.LastMessageAt).ToList()));
+    }
+
+    private static string HiddenFile(string? userId) =>
+        Path.Combine(ARI.Common.Paths.HiddenThreads, $"{(userId ?? "anon")}.json");
+
+    private HashSet<string> LoadHiddenKeys(string? userId)
+    {
+        try
+        {
+            string file = HiddenFile(userId);
+            if (!System.IO.File.Exists(file)) return new(StringComparer.OrdinalIgnoreCase);
+            return new HashSet<string>(JsonSerializer.Deserialize<List<string>>(System.IO.File.ReadAllText(file)) ?? new(), StringComparer.OrdinalIgnoreCase);
+        }
+        catch { return new HashSet<string>(StringComparer.OrdinalIgnoreCase); }
+    }
+
+    /// <summary>Hides a thread from the caller's sidebar (it stays saved and can be unhidden later). Writes only this user's hidden-keys file.</summary>
+    [HttpPost("{id}/hide")]
+    public IActionResult HideThread([FromRoute(Name = "id")] string threadKey, bool hide = true)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        string? selfId      = User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+        bool   callerAdmin  = User.FindFirstValue(System.Security.Claims.ClaimTypes.Role) == ARI.API.Auth.Roles.Admin;
+
+        // The thread must be one this user can see — a live conversation they may access, or a persisted one in their list.
+        bool visible = Llm.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? live) && CanAccessThread(live);
+        if (!visible)
+            foreach (ARI.LLM.LLMModule.PersistedThreadInfo saved in Llm.ListPersistedThreads())
+                if (saved.Key == threadKey && (callerAdmin || saved.OwnerId == selfId)) { visible = true; break; }
+        if (!visible) return NotFound();
+
+        HashSet<string> hidden = LoadHiddenKeys(selfId);
+        if (hide) hidden.Add(threadKey); else hidden.Remove(threadKey);
+        SaveHiddenKeys(selfId, hidden);
+        return Ok(new { ok = true, hidden = hide });
+    }
+
+    /// <summary>Renames a thread to a user-chosen title. Sets the CustomTitle, which also stops auto-renaming it.</summary>
+    [HttpPut("{id}/title")]
+    public IActionResult RenameThread([FromRoute(Name = "id")] string threadKey, [FromBody] RenameThreadRequest req)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+
+        string? title = req?.Title;
+        if (!string.IsNullOrWhiteSpace(title)) title = title.Trim();
+        if (string.IsNullOrWhiteSpace(title)) return BadRequest(new { error = "title must be a non-empty string." });
+
+        // SetCustomTitle handles live and saved threads alike, broadcasts the update itself, returns false when unknown.
+        bool ok = Llm.SetCustomTitle(threadKey, title);
+        if (!ok) return NotFound(new { error = "Thread not found." });
+        return Ok(new { ok = true, title });
+    }
+
+    public sealed record RenameThreadRequest(string? Title);
+
+    private static void SaveHiddenKeys(string? userId, HashSet<string> keys)
+    {
+        string dir = ARI.Common.Paths.HiddenThreads;
+        Directory.CreateDirectory(dir);
+        System.IO.File.WriteAllText(HiddenFile(userId), JsonSerializer.Serialize(keys.ToList()));
     }
 
     [HttpPost]
