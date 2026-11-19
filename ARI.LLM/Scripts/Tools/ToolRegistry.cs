@@ -49,7 +49,7 @@ public static class ToolRegistry
         ["search_brain"] = "Brain", ["recall_memory"] = "Brain", ["memories_on"] = "Brain", ["create_memory"] = "Brain",
         ["edit_memory"] = "Brain", ["delete_memory"] = "Brain", ["neighbours"] = "Brain",
         ["create_event"] = "Calendar", ["create_reminder"] = "Calendar", ["list_events"] = "Calendar", ["delete_entry"] = "Calendar",
-        ["generate_image"] = "ImageGen", ["present_image"] = "ImageGen",
+        ["generate_image"] = "ImageGen", ["present_image"] = "ImageGen", ["image_to_mesh"] = "Mesh",
     };
 
     private static Dictionary<string, ToolSetting> Load()

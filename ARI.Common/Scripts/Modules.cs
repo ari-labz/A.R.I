@@ -51,6 +51,8 @@ public interface IBrainModule { }
 public interface IImageGenModule
 {
     bool IsReady { get; }
+    /// <summary>Stop the language models while an image is drawn, to free memory.</summary>
+    bool StopLlmsDuringJob { get; }
     Task<byte[]> GenerateAsync(
         string   prompt,
         string   negativePrompt     = "",
@@ -63,6 +65,17 @@ public interface IImageGenModule
         float    denoise            = 1.0f,
         CancellationToken ct        = default);
     void Shutdown();
+}
+
+public interface IMeshModule
+{
+    bool IsReady { get; }
+    /// <summary>Stop the language models while a mesh is made, to free memory.</summary>
+    bool StopLlmsDuringJob { get; }
+    /// <summary>Default triangle budget.</summary>
+    int MaxFaces { get; }
+    /// <summary>Makes a 3D model (.glb) from an image. Returns the file's bytes.</summary>
+    Task<byte[]> GenerateAsync(byte[] image, int maxFaces, long? seed = null, string format = "glb", CancellationToken ct = default);
 }
 
 public enum RecurrenceFrequency { None, Daily, Weekly, Monthly, Yearly }
@@ -158,6 +171,9 @@ public interface IModuleLifecycle
 
 public static class Modules
 {
+    /// <summary>Set while the language models are stopped for a memory-hungry job ("making a 3D model"), so the UI can say why.</summary>
+    public static string? LlmPausedFor { get; set; }
+
     public static ILLMModule?            Llm            { get; private set; }
     public static IVoiceModule?          Voice          { get; private set; }
     public static IVoiceSynthesisModule? VoiceSynthesis { get; private set; }
@@ -166,6 +182,7 @@ public static class Modules
     public static IWebPushModule?        WebPush        { get; private set; }
     public static IProjectService?       Projects       { get; private set; }
     public static IImageGenModule?       ImageGen       { get; private set; }
+    public static IMeshModule?           Mesh           { get; private set; }
     public static ICalendarModule?       Calendar       { get; private set; }
     public static IModuleLifecycle?      Lifecycle      { get; private set; }
 
@@ -178,6 +195,7 @@ public static class Modules
         IWebPushModule?        webPush        = null,
         IProjectService?       projects       = null,
         IImageGenModule?       imageGen       = null,
+        IMeshModule?           mesh           = null,
         ICalendarModule?       calendar       = null,
         IModuleLifecycle?      lifecycle      = null)
     {
@@ -189,6 +207,7 @@ public static class Modules
         if (webPush        is not null) WebPush        = webPush;
         if (projects       is not null) Projects       = projects;
         if (imageGen       is not null) ImageGen       = imageGen;
+        if (mesh           is not null) Mesh           = mesh;
         if (calendar       is not null) Calendar       = calendar;
         if (lifecycle      is not null) Lifecycle      = lifecycle;
     }
@@ -201,5 +220,6 @@ public static class Modules
     public static void ClearVoiceSynthesis() => VoiceSynthesis = null;
     public static void ClearListener()       => Listener       = null;
     public static void ClearImageGen()       => ImageGen       = null;
+    public static void ClearMesh()           => Mesh           = null;
     public static void ClearCalendar()       => Calendar       = null;
 }

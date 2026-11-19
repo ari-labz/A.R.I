@@ -57,6 +57,8 @@ interface Props {
     speechLevels:     { current: number[] }
     speechMic:        { current: number }
     serverReady:      boolean
+    pausedFor?:       string | null
+    modelsStarting?:  boolean
 }
 
 export default function Main({
@@ -71,7 +73,7 @@ export default function Main({
     pipelines, selectedPipeline, onPipelineChange,
     speechMode, onBeginSpeech, speechCaption, speechState,
     speechInCall, speechMuted, speechCallStart, onSpeechMute, onHangUp, speechLevels, speechMic,
-    safetyMode, onToggleSafety, serverReady,
+    safetyMode, onToggleSafety, serverReady, pausedFor, modelsStarting,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
     const [closedWindows,   setClosedWindows]   = useState<Set<string>>(new Set())
@@ -266,6 +268,8 @@ export default function Main({
                         onBeginSpeech={onBeginSpeech}
                         threadLocked={activeThread !== null}
                         serverReady={serverReady}
+                        pausedFor={pausedFor}
+                        modelsStarting={modelsStarting}
                         onSend={onSend}
                         onUploadFiles={onUploadMessageFiles}
                         onRemoveAttach={onRemoveMessageAttach}

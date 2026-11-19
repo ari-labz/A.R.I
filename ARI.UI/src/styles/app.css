@@ -1798,3 +1798,7 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 .ari-visual { margin: 10px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; max-width: 760px; }
 .ari-visual iframe { display: block; width: 100%; }
 .ari-visual .ari-visual-loading { display: block; padding: 18px; color: var(--text-dim); font-size: 13px; }
+
+.ari-model { margin: 10px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; max-width: 560px; background: var(--bg-sunken, transparent); }
+.ari-model .ari-model-loading { display: block; padding: 18px; color: var(--text-dim); font-size: 13px; }
+.ari-model .ari-model-hint { padding: 6px 12px; font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border); }

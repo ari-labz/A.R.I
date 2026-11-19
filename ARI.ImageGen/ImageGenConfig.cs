@@ -26,5 +26,9 @@ public class ImageGenConfig
     public int    Width     { get; set; } = 1024;
     public int    Height    { get; set; } = 1024;
 
+    // Stop the language-model servers while an image is drawn, then start them again. Off by default: a Stable Diffusion
+    // checkpoint usually fits beside them, and reloading the models costs minutes.
+    public bool StopLlmsDuringJob { get; set; }
+
     public bool IsRemote => !string.IsNullOrWhiteSpace(RemoteUrl);
 }

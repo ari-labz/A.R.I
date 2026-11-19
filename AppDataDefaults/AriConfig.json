@@ -46,7 +46,14 @@
       "ComfyUiPath": "",
       "Port": 8188,
       "IdleSeconds": 300,
-      "Checkpoint": ""
+      "Checkpoint": "",
+      "StopLlmsDuringJob": false
+    },
+    "Mesh": {
+      "Enabled": false,
+      "ServerUrl": "http://127.0.0.1:8199",
+      "StopLlmsDuringJob": true,
+      "MaxFaces": 0
     }
   },
   "PersistedThreads": {

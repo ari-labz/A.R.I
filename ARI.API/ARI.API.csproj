@@ -14,6 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ARI.LLM\ARI.LLM.csproj" />
     <ProjectReference Include="..\ARI.ImageGen\ARI.ImageGen.csproj" />
+    <ProjectReference Include="..\ARI.Mesh\ARI.Mesh.csproj" />
     <ProjectReference Include="..\ARI.VoiceSynthesis\ARI.VoiceSynthesis.csproj" />
     <ProjectReference Include="..\ARI.Voice\ARI.Voice.csproj" />
     <ProjectReference Include="..\ARI.Common\ARI.Common.csproj" />
