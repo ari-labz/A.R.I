@@ -1873,5 +1873,5 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 .ew-add { background: rgba(127,211,160,.2); color: #7fd3a0; border-radius: 2px; margin-left: 6px; }
 .ew-block { margin-left: 0; }
 .ew-caret { display: inline-block; width: 2px; height: 1.1em; margin-left: 1px; vertical-align: text-bottom; background: #a07ae6; }
-@media (max-width: 800px) { #main.with-windows #chat-col { flex: 1 1 100%; } .edit-pane { display: none; } }
+@media (max-width: 640px) { #main.with-windows #chat-col { flex: 1 1 100%; } .edit-pane { display: none; } }
 @media (prefers-reduced-motion: reduce) { .ew, .ew-fold, #chat-col { transition: none; } }

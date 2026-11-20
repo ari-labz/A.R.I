@@ -51,6 +51,10 @@ function renderBrowserMarkers(s: string): string {
 }
 
 // A visual Ari drew (show_visual): an empty frame the page mounts a sandboxed iframe into (see visuals.ts).
+// An edit window's data rides in the text as a marker; the window is drawn beside the chat, so the text shows nothing.
+const EDIT_WINDOW_RE = /<!--ari-edit:[^>]*?-->/g
+function hideEditMarkers(s: string): string { return s.replace(EDIT_WINDOW_RE, "") }
+
 function renderVisualMarkers(s: string): string {
     return s.replace(VISUAL_RE, (_, threadKey, filename) => {
         const src = `/api/v1/threads/${encodeURIComponent(threadKey)}/files/content?path=${encodeURIComponent(filename)}`
@@ -222,7 +226,7 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     // Delivered file: a download card ARI emitted with deliver_file. Also applied in the finished-blocks
     // path (renderBlockHtml) so the card survives after streaming — the marker rides in a text block there.
     out = renderFileMarkers(out)
-    out = renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(out)))
+    out = renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(hideEditMarkers(out))))
 
     // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
@@ -527,7 +531,7 @@ export function renderBlockHtml(block: BlockLike): string {
     const done = (block.state ?? 0) === 1
     const err  = (block.state ?? 0) === 2
 
-    if (block.type === "text")     return marked.parse(renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(renderFileMarkers(block.text ?? "")))), { async: false }) as string
+    if (block.type === "text")     return marked.parse(renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(renderFileMarkers(hideEditMarkers(block.text ?? ""))))), { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
 
     // Plan proposed: a subtle non-interactive chip in the transcript — the Accept/Amend actions live in the
