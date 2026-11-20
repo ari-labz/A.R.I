@@ -411,6 +411,10 @@ public class Thread
     /// <summary>Set by the <c>switch_pipeline</c> tool on a Dialogue thread: the dialogue turn finishes, then the
     /// router moves the thread onto the Code pipeline and runs the request there. Holds the tool's brief.</summary>
     internal string? PendingCoderHandoff { get; set; }
+
+    /// <summary>The lane this conversation uses in each slot pool (pool name → slot id), chosen the first time it needs one
+    /// and kept, so its prompt cache stays on one llama-server slot. See <see cref="NamedSlot.Pool"/>.</summary>
+    internal System.Collections.Concurrent.ConcurrentDictionary<string, Guid> PoolLanes { get; } = new(StringComparer.OrdinalIgnoreCase);
     public   string  Key             => threadKey;
 
     internal event Action? Updated;

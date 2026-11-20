@@ -53,6 +53,11 @@ public abstract class Agent
     [JsonIgnore] internal NamedSlot? Slot   { get; set; }
     [JsonIgnore] internal LLMQueue? Queue { get; set; }
 
+    /// <summary>The slot this agent runs the thread on: its own bound slot, or, when that slot is in a pool, the lane the
+    /// thread has been given in it (see <see cref="NamedSlot.Pool"/>).</summary>
+    private NamedSlot? LaneFor(Thread thread) =>
+        Slot is null || Server is null ? Slot : Server.LaneFor(Slot, thread.PoolLanes);
+
     /// <summary>Called when the processing phase changes for a thread. Set by LLMModule to update the watch-stream status.</summary>
     [JsonIgnore] internal Action<string, ThreadPhase>? OnPhaseChange { get; set; }
 
@@ -567,9 +572,14 @@ public abstract class Agent
                 // step acquisition bounds the worst case to one step's generation time, and is released
                 // below before tool execution, which is file/network I/O, not GPU work, and shouldn't hold
                 // the inference slot while it runs.
-                LLMQueue.Slot? slot = Queue is not null
-                    ? await Queue.AcquireAsync((InferencePriority)Priority, turn.Ct)
-                    : null;
+                // A pooled slot has a queue per lane, so two conversations on different lanes generate at the same time.
+                NamedSlot? lane = LaneFor(thread);
+                bool pooled = lane is not null && Server is not null && Server.IsPooled(lane);
+                if (pooled) Server!.LaneBusy(lane!, 1);
+                LLMQueue? stepQueue = pooled ? Server!.QueueForLane(lane!) : Queue;
+                LLMQueue.Slot? slot;
+                try { slot = stepQueue is not null ? await stepQueue.AcquireAsync((InferencePriority)Priority, turn.Ct) : null; }
+                catch { if (pooled) Server!.LaneBusy(lane!, -1); throw; }
                 using CancellationTokenSource stepCts = slot is null
                     ? CancellationTokenSource.CreateLinkedTokenSource(turn.Ct)
                     : CancellationTokenSource.CreateLinkedTokenSource(turn.Ct, slot.Preempted);
@@ -637,6 +647,7 @@ public abstract class Agent
                 finally
                 {
                     slot?.Dispose();
+                    if (pooled) Server!.LaneBusy(lane!, -1);
                 }
 
                 if (turn.IsStreaming && turn.PendingCalls.Count > 0)
@@ -2254,9 +2265,9 @@ public abstract class Agent
         body["chat_template_kwargs"] = chatTemplateKwargs;
 
         if (toolSchemas is not null) body["tools"] = toolSchemas;
-        if (Slot is not null)
+        if (LaneFor(thread) is { } lane)
         {
-            int slotIndex = srv.Slots.FindIndex(sl => sl.Id == Slot.Id);
+            int slotIndex = srv.Slots.FindIndex(sl => sl.Id == lane.Id);
             if (slotIndex >= 0) body["id_slot"] = slotIndex;
         }
 

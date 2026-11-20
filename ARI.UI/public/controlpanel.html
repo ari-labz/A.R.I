@@ -5817,6 +5817,7 @@ function buildSlotsFields(body, draft, onChange) {
             row.innerHTML = `
                 <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
                     <input type="text" class="srv-slot-name vs-input" style="flex:1;font-size:12px;padding:5px 8px;" value="${escHtml(slot.name)}" placeholder="Slot name">
+                    <input type="text" class="srv-slot-pool vs-input" style="width:96px;font-size:12px;padding:5px 8px;" value="${escHtml(slot.pool || '')}" placeholder="Pool" title="Slots in the same pool are interchangeable lanes: each new chat is given the least busy one, and chats on different lanes run at the same time. Leave empty for a slot of its own.">
                     <button type="button" class="srv-slot-del mdl-btn-secondary" style="font-size:11px;padding:5px 8px;color:var(--col-control-panel-srv-slot-del-text);border-color:var(--col-control-panel-srv-slot-del-border);" ${draft.slots.length <= 1 ? 'disabled' : ''}>×</button>
                 </div>
                 <div style="display:flex;align-items:flex-start;gap:10px;">
@@ -5835,6 +5836,7 @@ function buildSlotsFields(body, draft, onChange) {
             ctxSlider.value = ctxSliderIndex(slot.contextLimit, SLOT_CTX_STEPS);
             ctxText.value   = ctxTokensToText(slot.contextLimit);
             nameInput.addEventListener('input', () => { slot.name = nameInput.value; });
+            row.querySelector('.srv-slot-pool').addEventListener('input', e => { slot.pool = e.target.value.trim() || null; onChange(); });
             ctxSlider.addEventListener('input', () => {
                 slot.contextLimit = SLOT_CTX_STEPS[parseInt(ctxSlider.value, 10)];
                 ctxText.value = ctxTokensToText(slot.contextLimit);
