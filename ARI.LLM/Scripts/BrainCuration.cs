@@ -31,7 +31,8 @@ public sealed class BrainProposal
 internal static class BrainCuration
 {
     private static readonly object Gate = new();
-    private static string StorePath => Path.Combine(Paths.PersistentData, "BrainProposals.json");
+    // A dev run curates a throwaway copy of the brain, so its suggestions are kept apart: approving one there must not mark it done for the real brain.
+    private static string StorePath => Path.Combine(Paths.PersistentData, Shared.DevMode ? "BrainProposals.devrun.json" : "BrainProposals.json");
     private static readonly string[] Types = ["person", "place", "event", "relationship", "concept", "project", "thing"];
 
     internal static List<BrainProposal> List()
@@ -84,6 +85,7 @@ internal static class BrainCuration
         {
             if (fresh.Count >= max) break;
             if (all.Any(p => p.Kind == "link" && p.A == t) || Brain.GetNote(t) is not { } n) continue;
+            if (n.Name.StartsWith("Conversations/", StringComparison.OrdinalIgnoreCase)) continue;   // diary days are reached through their month, not from each other
             string[] words = Regex.Split(n.Title + " " + string.Join(" ", n.Keywords), @"\W+").Where(w => w.Length > 2).Distinct().Take(6).ToArray();
             List<string> candidates = words.Length == 0 ? new() : Brain.Search(words, 10).Select(r => r.Note.Title).Where(x => !x.Equals(n.Title, StringComparison.OrdinalIgnoreCase)).Distinct().Take(8).ToList();
             if (candidates.Count == 0) { all.Add(new BrainProposal { Kind = "link", A = t, Status = "dismissed", Why = "no candidates" }); continue; }
@@ -96,20 +98,29 @@ internal static class BrainCuration
         }
 
         // What she once couldn't do and now can: a note that says so keeps telling her she can't.
-        Regex cant = new(@"[^.\n]*\b(can't|cannot|can not|unable to|isn't able to|doesn't have (a|the) (way|ability)|no way to)\b[^.\n]*[.\n]?", RegexOptions.IgnoreCase);
+        // Only a sentence where Ari herself says she can't: "I can't", "Ari cannot", "she has no way to" (the last only on Ari's own note).
+        // Anything else saying "unable to" is about someone else, often private, and is never a candidate.
+        Regex cant = new(@"[^.\n]*\b(?<who>I|Ari|ARI|A\.R\.I|she)\s+(can't|cannot|can not|is unable to|am unable to|isn't able to|has no way to|have no way to|doesn't have (a|the) (way|ability))\b[^.\n]*[.\n]?", RegexOptions.IgnoreCase);
         string tools = string.Join(", ", ToolFactories.AllNames().OrderBy(n => n));
         foreach (Note n in Brain.Search(["can't", "cannot", "unable", "ability"], 30).Select(r => r.Note).DistinctBy(n => n.Title))
         {
             if (fresh.Count >= max) break;
+            if (n.IsSensitive) continue;
+            bool ariNote = Regex.IsMatch(n.Title, @"^(ari|a\.r\.i)$", RegexOptions.IgnoreCase);
             foreach (Match sm in cant.Matches(n.Content).Cast<Match>().Take(3))
             {
-                string sentence = sm.Value.Trim();
+                // The whole paragraph it sits in is what gets rewritten, so the rest of it can't go on saying the opposite.
+                int start = n.Content.LastIndexOf('\n', Math.Max(0, sm.Index - 1)) + 1, end = n.Content.IndexOf('\n', sm.Index);
+                string sentence = n.Content[start..(end < 0 ? n.Content.Length : end)].Trim();
+                if (sm.Groups["who"].Value.Equals("she", StringComparison.OrdinalIgnoreCase) && !ariNote) continue;
+                if (sentence.Contains("[!sensitive]", StringComparison.OrdinalIgnoreCase) || sentence.TrimStart().StartsWith('>')) continue;
                 if (sentence.Length < 12 || Seen(all, "stale", n.Title, sentence)) continue;
-                string answer = await Ask(model, $"A note in Ari's memory (Ari is an AI assistant) says:\n\"{sentence}\"\n\nFrom the note \"{n.Title}\":\n{Clip(n.Content)}\n\n" +
-                    $"Ari's tools today are: {tools}.\n\nIs this sentence about something ARI herself can't do, which one of those tools now lets her do? " +
-                    "If yes, answer exactly: STALE | <the sentence rewritten to be true now, same voice, no tool names> | <one-sentence reason naming the tool>. Otherwise answer exactly: FINE", ct);
+                string answer = await Ask(model, $"A paragraph in Ari's memory (Ari is an AI assistant) says:\n\"{sentence}\"\n\nFrom the note \"{n.Title}\":\n{Clip(n.Content)}\n\n" +
+                    $"Ari's tools today are: {tools}.\n\nIs this paragraph about something ARI herself can't do, which one of those tools now lets her do? " +
+                    "If yes, answer exactly: STALE | <the whole paragraph rewritten to be true now, same voice and detail, nothing left that says she can't, no tool names> | <one-sentence reason naming the tool>. Otherwise answer exactly: FINE", ct);
                 Match m = Regex.Match(answer, @"STALE\s*\|\s*(?<fix>[^|]+)\|\s*(?<why>.+)", RegexOptions.IgnoreCase);
-                if (!m.Success) { all.Add(new BrainProposal { Kind = "stale", A = n.Title, B = sentence, Status = "dismissed", Why = "still true" }); continue; }
+                bool namesATool = m.Success && ToolFactories.AllNames().Any(t => m.Groups["why"].Value.Contains(t, StringComparison.OrdinalIgnoreCase));
+                if (!namesATool) { all.Add(new BrainProposal { Kind = "stale", A = n.Title, B = sentence, Status = "dismissed", Why = "still true" }); continue; }
                 fresh.Add(new BrainProposal { Kind = "stale", A = n.Title, B = sentence, Value = m.Groups["fix"].Value.Trim(), Why = m.Groups["why"].Value.Trim() });
                 if (fresh.Count >= max) break;
             }
