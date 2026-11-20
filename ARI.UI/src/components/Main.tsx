@@ -8,6 +8,7 @@ import DropOverlay from "./DropOverlay"
 import BrowserPane, { BrowserButton, BrowserNeedsYou } from "./BrowserPane"
 import { useBrowserSession } from "../hooks/useBrowserSession"
 import Hud, { type HudWindow } from "./Hud"
+import EditWindows, { editWindowsFrom } from "./EditWindows"
 import type { AppMode, PendingAttachment } from "../App"
 import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
 import { apiFetch } from "../auth"
@@ -28,6 +29,7 @@ interface Props {
     agentName:     string | null
     sidebarCollapsed: boolean
     onOpenSidebar: () => void
+    onSetSidebarCollapsed: (collapsed: boolean) => void
     pendingAttach: PendingAttachment[]
     threadAttach:  Attachment[]
     onSend:        (text: string) => void
@@ -66,7 +68,7 @@ interface Props {
 export default function Main({
     mode, codeMode, shieldMode, planProposed, items, isRemembering, isStreaming, threadStatus,
     activeThread, isInternal, agentName,
-    sidebarCollapsed, onOpenSidebar,
+    sidebarCollapsed, onOpenSidebar, onSetSidebarCollapsed,
     pendingAttach, threadAttach,
     onSend, onUploadThreadFiles, onUploadMessageFiles,
     onRemoveThreadAttach, onRemoveMessageAttach,
@@ -83,6 +85,26 @@ export default function Main({
     const hudWindows = useMemo(
         () => speechInCall ? hudWindowsFrom(items, speechCallStart).filter(w => !closedWindows.has(w.id)) : [],
         [items, speechInCall, speechCallStart, closedWindows])
+    // Files Ari edits open as windows beside the chat: the chat slides left and the sidebar folds away, then both
+    // come back when the next message clears them.
+    const liveEdits = useMemo(() => speechMode ? [] : editWindowsFrom(items), [items, speechMode])
+    const [shownEdits, setShownEdits] = useState(liveEdits)
+    const [leaving, setLeaving] = useState(false)
+    useEffect(() => {
+        if (liveEdits.length) { setShownEdits(liveEdits); setLeaving(false); return }
+        if (!shownEdits.length) return
+        setLeaving(true)
+        const t = window.setTimeout(() => { setShownEdits([]); setLeaving(false) }, 900)
+        return () => clearTimeout(t)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [liveEdits])
+    const editsOpen = shownEdits.length > 0 && !leaving
+    const sidebarFoldedForEdits = useRef(false)
+    useEffect(() => {
+        if (editsOpen && !sidebarCollapsed) { sidebarFoldedForEdits.current = true; onSetSidebarCollapsed(true) }
+        else if (!editsOpen && !shownEdits.length && sidebarFoldedForEdits.current) { sidebarFoldedForEdits.current = false; onSetSidebarCollapsed(false) }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [editsOpen, shownEdits.length])
     const [dropVisible,     setDropVisible]     = useState(false)
     const [dropHovering,    setDropHovering]    = useState(false)
     const dragCounterRef = useRef(0)
@@ -164,6 +186,7 @@ export default function Main({
         mode === "active" ? "active" : "",
         codeMode ? "code-mode" : "",
         speechMode ? "speech-mode" : "",
+        editsOpen ? "with-windows" : "",
     ].filter(Boolean).join(" ")
 
     return (
@@ -284,6 +307,8 @@ export default function Main({
                     />
                 )}
             </div>
+
+            {shownEdits.length > 0 && <EditWindows windows={shownEdits} leaving={leaving} />}
 
             <BrowserPane session={browser} />
         </div>

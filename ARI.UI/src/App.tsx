@@ -1570,6 +1570,7 @@ export default function App() {
                     agentName={agentName}
                     sidebarCollapsed={sidebarCollapsed}
                     onOpenSidebar={() => setSidebarCollapsed(false)}
+                    onSetSidebarCollapsed={setSidebarCollapsed}
                     pendingAttach={pendingAttach}
                     threadAttach={threadAttach}
                     onSend={send}
