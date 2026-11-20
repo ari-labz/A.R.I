@@ -43,6 +43,9 @@ internal sealed class PipelineGraph
     {
         ["Memory"]   = ["history"],
         ["Dialogue"] = ["history", "memories", "critique"],
+        // Only in the Code and Talk pipelines, which are drawn as graphs too.
+        ["Coder"]    = ["history", "critique"],
+        ["Talking"]  = ["history", "memories"],
     };
 
     /// <summary>Input ports a graph may leave unwired: the agent then simply runs without that input. Lets a pipeline be
@@ -101,12 +104,24 @@ internal sealed class PipelineGraph
     /// <summary>Shipped pipelines other than Default, which can be edited but never deleted.</summary>
     /// <summary>Pipelines ARI ships besides Default: none. Memory is the Recall step inside Default.</summary>
     internal const string WalkId = "memory-walk", WalkChatId = "walker-chat";
-    internal static readonly string[] ShippedIds = [];
+    /// <summary>Code and Talk are graphs too, so they show in the editor like any pipeline. Their core agent (Coder, Talking) can't be
+    /// swapped; Code can take a reviewer (a code review loop), Talk can't (a spoken reply can't be revised once said).</summary>
+    internal const string CodeId = "code", TalkId = "talk";
+    internal static readonly string[] ShippedIds = [CodeId, TalkId];
     internal static readonly string[] StepOnlyIds = [];
-    internal const string ShippedJson = "{ \"pipelines\": [] }";
+    internal const string ShippedJson = """
+        { "pipelines": [
+          { "id": "code", "name": "Code", "hidden": true,
+            "nodes": [ { "id": "start", "type": "start", "x": 20, "y": 143 }, { "id": "coder", "type": "agent", "agent": "Coder", "x": 300, "y": 110 }, { "id": "end", "type": "end", "x": 700, "y": 143 } ],
+            "edges": [ { "from": "start", "to": "coder", "port": "history", "mode": "complete" }, { "from": "coder", "to": "end", "port": "stream", "mode": "stream" } ] },
+          { "id": "talk", "name": "Talk", "hidden": true,
+            "nodes": [ { "id": "start", "type": "start", "x": 20, "y": 143 }, { "id": "mem", "type": "agent", "agent": "Memory", "x": 260, "y": 20 }, { "id": "talk", "type": "agent", "agent": "Talking", "x": 520, "y": 110 }, { "id": "end", "type": "end", "x": 860, "y": 143 } ],
+            "edges": [ { "from": "start", "to": "mem", "port": "history", "mode": "complete" }, { "from": "start", "to": "talk", "port": "history", "mode": "complete" }, { "from": "mem", "to": "talk", "port": "memories", "mode": "complete" }, { "from": "talk", "to": "end", "port": "stream", "mode": "stream" } ] }
+        ] }
+        """;
 
     /// <summary>Tokens a custom agent's prompt can use without wiring: the user's latest message.</summary>
-    internal static readonly string[] ImplicitTokens = ["message", "since", "starting", "audience", "attempt", "max_attempts", "attempt_log", "seconds_since_reply"];
+    internal static readonly string[] ImplicitTokens = ["message", "since", "starting", "audience", "attempt", "max_attempts", "attempt_log", "seconds_since_reply", "changes", "conventions"];
 
     private static readonly Regex TokenRx = new(@"\{(\w+)\}", RegexOptions.Compiled);
 
@@ -231,6 +246,16 @@ internal sealed class PipelineGraph
             Node? from = Nodes.FirstOrDefault(n => n.Id == e.From), to = Nodes.FirstOrDefault(n => n.Id == e.To);
             if (to?.Type != "agent") problems.Add($"{from?.Agent}: its {e.FromPort} pathway has to lead to an agent.");
         }
+        // The Code and Talk pipelines keep their own core agent; Coder and Talking only work there.
+        bool isCode = Id.Equals(CodeId, StringComparison.OrdinalIgnoreCase), isTalk = Id.Equals(TalkId, StringComparison.OrdinalIgnoreCase);
+        foreach (Node n in Nodes.Where(n => n.Type == "agent"))
+        {
+            if (n.Agent!.Equals("Coder", StringComparison.OrdinalIgnoreCase) && !isCode) problems.Add("The Coder agent only works in the Code pipeline.");
+            if (n.Agent!.Equals("Talking", StringComparison.OrdinalIgnoreCase) && !isTalk) problems.Add("The Talking agent only works in the Talk pipeline.");
+        }
+        if (isCode && !Nodes.Any(n => n.Agent?.Equals("Coder", StringComparison.OrdinalIgnoreCase) == true)) problems.Add("The Code pipeline needs its Coder.");
+        if (isTalk && !Nodes.Any(n => n.Agent?.Equals("Talking", StringComparison.OrdinalIgnoreCase) == true)) problems.Add("The Talk pipeline needs its Talking agent.");
+        if (isTalk && Edges.Any(IsPathway)) problems.Add("Talk replies are spoken as they are written, so they can't loop back for review.");
         if (Order() is null) problems.Add("The pipeline loops back on itself without going through a pathway tool (only a reviewer's pathway, such as Fail, may lead back).");
         return problems;
     }

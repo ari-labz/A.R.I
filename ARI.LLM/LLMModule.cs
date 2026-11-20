@@ -341,6 +341,8 @@ public class LLMModule : ILLMModule, IDisposable
             ReloadPipelines();
         }
 
+        HasCoder = codeArchitect is not null;
+        CustomAgentByName = name => customAgents.TryGetValue(name, out CustomAgent? a) ? a : null;
         if (codeArchitect is not null)
             codePipeline = new CodePipeline(codeArchitect, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
 
@@ -717,6 +719,8 @@ public class LLMModule : ILLMModule, IDisposable
         Dictionary<string, string[]> result = new(StringComparer.OrdinalIgnoreCase);
         foreach (string name in agentMap.Keys)
             if (graphPipeline?.PortsOf(name) is { } ports) result[name] = ports;
+        // The voice agent isn't in the agent list under its own name, but the Talk pipeline's graph shows it.
+        if (talkingAgent is not null) result["Talking"] = PipelineGraph.BuiltInPorts["Talking"];
         return result;
     }
 
@@ -751,6 +755,15 @@ public class LLMModule : ILLMModule, IDisposable
     /// reply type; one that can only run as a step inside another is kept for that. One that does neither (an agent it uses was
     /// deleted, say) is left out and the reasons logged; threads on it answer with Default until it is fixed. Default is always
     /// there: the one in the file, or the built-in one.</summary>
+    /// <summary>Whether a Coder agent is loaded (the Code pipeline's graph is only valid with one).</summary>
+    internal static bool HasCoder { get; private set; }
+
+    /// <summary>The Code pipeline's graph as saved, for its review loop. Null if it can't run.</summary>
+    internal static PipelineGraph? CodeGraph { get; private set; }
+
+    /// <summary>Finds a loaded custom agent by name (the Code pipeline's reviewer).</summary>
+    internal static Func<string, CustomAgent?>? CustomAgentByName { get; private set; }
+
     public void ReloadPipelines()
     {
         if (graphPipeline is null) return;
@@ -780,6 +793,7 @@ public class LLMModule : ILLMModule, IDisposable
     
         if (!loaded.ContainsKey(PipelineGraph.DefaultId)) loaded[PipelineGraph.DefaultId] = PipelineGraph.BuiltInDefault(graphPipeline.PortsOf("Memory") is not null);
 
+        CodeGraph = loaded.GetValueOrDefault(PipelineGraph.CodeId);
         foreach (string gone in graphs.Keys.Where(k => !loaded.ContainsKey(k)).ToList()) graphs.TryRemove(gone, out _);
         foreach ((string id, PipelineGraph g) in loaded) graphs[id] = g;
         foreach (string gone in subGraphs.Keys.Where(k => !loadedSub.ContainsKey(k)).ToList()) subGraphs.TryRemove(gone, out _);

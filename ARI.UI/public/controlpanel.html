@@ -5392,12 +5392,12 @@ function prRenderEditor() {
 // START (the conversation) → agents → END (the user). An agent's input ports are its {tokens} (custom agents) or fixed
 // (built-ins); each port takes one wire. The graph marked "active" answers chat messages in place of the built-in Dialogue.
 var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = {}, pipMode = 'list';
-const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories', 'critique'] };
+const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories', 'critique'], Coder: ['history', 'critique'], Talking: ['history', 'memories'] };
 // A reviewer agent's pathway tools (Pass, Fail…) are its output ports; a wire from one may lead back to the writer.
 const pipPathways = n => n.type === 'agent' ? ((pipDef(n).pathways) || []) : [];
 const pipIsPathwayEdge = (p, e) => { const f = pipNode(p, e.from); return !!f && f.type === 'agent' && !!e.fromPort && !['history', 'message', 'output'].includes(e.fromPort); };
 const pipUid = () => Math.random().toString(36).slice(2, 8);
-const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => !['message', 'since', 'attempt', 'max_attempts', 'attempt_log', 'seconds_since_reply'].includes(x));   // both are always filled in, never wired
+const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => !['message', 'since', 'attempt', 'max_attempts', 'attempt_log', 'seconds_since_reply', 'changes', 'conventions'].includes(x));   // both are always filled in, never wired
 const pipAgentTokens = d => pipTokens((d.agentPrompt || '') + '\n' + (d.messagePrompt || ''));
 function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a => a.name === n.agent) || {} : {}; }
 // A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
@@ -5458,7 +5458,9 @@ function pipRenderList() {
         const text = agEl('div', 'flex:1;min-width:0;');
         const title = agEl('div', 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;');
         title.append(agEl('span', 'font-size:14px;font-weight:600;', q.name));
+        const core = q.id === 'code' || q.id === 'talk';   // shipped with ARI and picked with the Code and Talk buttons, not this list
         if (q.id === 'default') { const b = agEl('span', '', 'Default'); b.className = 'mdl-badge startup'; title.append(b); }
+        if (core) { const b = agEl('span', '', 'Built-in'); b.className = 'mdl-badge startup'; title.append(b); }
         const probs = pipProblems(q);
         const stat = agEl('div', 'font-size:12.5px;color:' + (probs.length ? '#d9a441' : 'var(--text-dim)') + ';line-height:1.45;',
             probs.length ? '⚠ ' + probs[0] + (probs.length > 1 ? ' (+' + (probs.length - 1) + ' more)' : '') : (q.nodes.filter(n => n.type === 'agent' || n.type === 'pipeline').map(n => n.type === 'pipeline' ? (pipSubOf(n) || { name: '?' }).name : (n.agent === 'Memory' ? 'Recall' : n.agent)).join(' → ') || 'No steps yet.'));
@@ -5471,8 +5473,9 @@ function pipRenderList() {
                 try { await pipPersist(); } catch (e) { q.hidden = on; alert(e.message); pipRenderList(); }
             });
         const edit = agEl('button', '', 'Edit'); edit.className = 'agv-btn'; edit.type = 'button'; edit.onclick = () => { pipD.cur = q.id; pipSel = null; pipMode = 'edit'; pipRender(); };
-        right.append(lab, tog, edit);
-        if (q.id !== 'default') {
+        if (core) right.append(agEl('span', 'font-size:12px;color:var(--text-dim);', q.id === 'code' ? 'Used by Code chats' : 'Used by Talk'), edit);
+        else right.append(lab, tog, edit);
+        if (q.id !== 'default' && !core) {
             const del = agEl('button', '', 'Delete'); del.className = 'agv-btn'; del.type = 'button';
             del.onclick = async () => { if (!confirm('Delete "' + q.name + '"? Chats using it go back to Default.')) return; pipD.data.pipelines = pipD.data.pipelines.filter(x => x.id !== q.id); try { await pipPersist(); } catch (e) { alert(e.message); await pipLoad(); return; } pipRenderList(); };
             right.append(del);
@@ -5584,7 +5587,8 @@ function pipAddAgentNode(p, a, at) { const id = pipUid(); p.nodes.push({ id, typ
 function pipDelete(p, n) { if (!pipIsBox(n)) return; p.nodes = p.nodes.filter(x => x !== n); p.edges = p.edges.filter(e => e.from !== n.id && e.to !== n.id); if (pipSel === n.id) pipSel = null; pipTouch(); pipRender(); }
 function pipAddable(p) {   // agents that can sit in a graph and aren't in this one yet
     const have = new Set(p.nodes.filter(n => n.type === 'agent').map(n => n.agent));
-    return (agData.agents || []).filter(a => !have.has(a.name) && !a.system && (a.custom || PIP_BUILTIN[a.name]));
+    // Coder and Talking belong to the Code and Talk pipelines and are already there.
+    return (agData.agents || []).filter(a => !have.has(a.name) && !a.system && (a.custom || (PIP_BUILTIN[a.name] && !['Coder', 'Talking'].includes(a.name))));
 }
 function pipAddPipelineNode(p, sub, at) { const id = pipUid(); p.nodes.push({ id, type: 'pipeline', pipeline: sub.id, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
 function pipAddablePipelines(p) { return (pipD.data.pipelines || []).filter(x => x.id !== p.id && x.id !== 'default'); }

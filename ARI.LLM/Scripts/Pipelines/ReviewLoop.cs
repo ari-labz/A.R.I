@@ -87,6 +87,15 @@ internal sealed class ReviewLoop
         appendMarker("\n<!--ari-review:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(json)) + "-->");
     }
 
+    /// <summary>One question to the reviewer, for loops that run outside a reply's turn (the Code pipeline).</summary>
+    internal Task<(string, Dictionary<string, string>)> AskOnce(string reply, int attempt, bool outOfRounds, CancellationToken ct)
+    {
+        List<PathwayTool> all = Reviewer.Pathways ?? new();
+        List<PathwayTool> offered = outOfRounds && LoopPathway is not null
+            ? all.Where(p => !p.Name.Equals(LoopPathway, StringComparison.OrdinalIgnoreCase)).Append(Settle).ToList() : all;
+        return Ask(reply, attempt, outOfRounds, offered, new List<string>(), ct);
+    }
+
     private string WriterLabel => Writer is Dialogue ? "Dialogue" : Writer.Name;
 
     /// <summary>Asks the reviewer. It may call any of the offered pathways; the first call wins. If it calls none it is asked once more, and
@@ -218,5 +227,104 @@ internal static class ReplyDiff
         int n = 0, at = 0;
         while ((at = s.IndexOf(part, at, StringComparison.Ordinal)) >= 0) { n++; at += Math.Max(1, part.Length); }
         return n;
+    }
+}
+
+/// <summary>
+/// The Code pipeline's review loop. A reviewer wired to the Coder in the Code graph reads what changed (the diff), the coding conventions and
+/// the Coder's report once a turn has changed files. Hard rules (CodeRules.json: patterns that must never appear in added lines) fail it
+/// without asking anyone; otherwise the reviewer judges. Fail(reason) gives the Coder another turn with the reason, up to the wire's limit.
+/// Every Fail is logged with the other corrections, so the idle suggestion pass can propose new conventions from them.
+/// </summary>
+internal static class CodeReview
+{
+    internal sealed record Rule(string Pattern, string Why);
+
+    private static readonly Rule[] DefaultRules =
+    [
+        new(@"Co-Authored-By", "attribution lines are never added to code or commits"),
+        new(@"Generated with \[?Claude", "attribution lines are never added to code or commits"),
+        new(@"(?i)\b(api[_-]?key|secret|password|token)\b\s*[:=]\s*[""'][A-Za-z0-9_\-\.]{16,}[""']", "a secret is written into the code"),
+    ];
+
+    internal static List<Rule> Rules()
+    {
+        string path = Path.Combine(Paths.PersistentData, "CodeRules.json");
+        try
+        {
+            if (!File.Exists(path)) File.WriteAllText(path, JsonSerializer.Serialize(DefaultRules, new JsonSerializerOptions { WriteIndented = true }));
+            return JsonSerializer.Deserialize<List<Rule>>(File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? DefaultRules.ToList();
+        }
+        catch { return DefaultRules.ToList(); }
+    }
+
+    /// <summary>The changes to the files the Coder touched this turn: a git diff where the project is a repository on this disk, else the list of files.</summary>
+    internal static string Changes(string? root, IEnumerable<string> touched)
+    {
+        List<string> files = touched.Distinct().ToList();
+        if (files.Count == 0) return "";
+        if (root is { Length: > 0 } && Directory.Exists(Path.Combine(root, ".git")))
+        {
+            try
+            {
+                ProcessStartInfo psi = new("git") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = root };
+                foreach (string a in new[] { "diff", "--no-color", "-U2", "--" }.Concat(files)) psi.ArgumentList.Add(a);
+                using Process p = Process.Start(psi)!;
+                Task<string> output = p.StandardOutput.ReadToEndAsync();
+                if (p.WaitForExit(20000) && output.Result.Trim().Length > 0)
+                    return output.Result.Length > 14000 ? output.Result[..14000] + "\n… (diff cut short)" : output.Result;
+            }
+            catch { }
+        }
+        return "Files changed this turn:\n" + string.Join("\n", files.Select(f => "- " + f));
+    }
+
+    /// <summary>The first hard rule an added line breaks, as a reason, or null.</summary>
+    internal static string? HardRuleBroken(string diff)
+    {
+        string[] added = diff.Split('\n').Where(l => l.StartsWith('+') && !l.StartsWith("+++")).ToArray();
+        foreach (Rule r in Rules())
+            foreach (string line in added)
+                try { if (Regex.IsMatch(line, r.Pattern)) return $"Hard rule: {r.Why}. Line: {line.TrimStart('+').Trim()}"; } catch { }
+        return null;
+    }
+
+    /// <summary>Runs the review after a Code turn that changed files. <paramref name="again"/> runs the Coder once more with the reviewer's reason and returns its report.</summary>
+    internal static async Task Run(Thread thread, string message, string report, string? root, Func<List<string>> filesThisTurn, Func<string, Task<string>> again, Func<string, CustomAgent?> agentByName, CancellationToken ct)
+    {
+        PipelineGraph? graph = LLMModule.CodeGraph;
+        PipelineGraph.Node? coder = graph?.Nodes.FirstOrDefault(n => n.Agent?.Equals("Coder", StringComparison.OrdinalIgnoreCase) == true);
+        if (graph is null || coder is null) return;
+        PipelineGraph.Node? revNode = graph.Nodes.FirstOrDefault(n => n.Type == "agent" && graph.Edges.Any(e => e.From == coder.Id && e.To == n.Id) && agentByName(n.Agent!)?.Pathways is { Count: > 0 });
+        if (revNode is null || agentByName(revNode.Agent!) is not { } reviewer) return;
+        PipelineGraph.Edge? back = graph.Edges.FirstOrDefault(e => e.From == revNode.Id && graph.IsPathway(e) && e.To == coder.Id);
+        string replyPort = graph.Edges.First(e => e.From == coder.Id && e.To == revNode.Id).Port;
+        string conventions = LLMModule.ConventionsProvider?.Invoke() ?? "";
+
+        int fails = 0, max = back?.MaxRounds ?? 2;
+        for (int round = 1; round <= max + 1 && !ct.IsCancellationRequested; round++)
+        {
+            string changes = Changes(root, filesThisTurn());
+            if (changes.Length == 0) return;
+            string? hard = HardRuleBroken(changes);
+            string choice; string reason = "";
+            if (hard is not null) { choice = back?.FromPort ?? "Fail"; reason = hard; }
+            else
+            {
+                ReviewLoop ask = new()
+                {
+                    Chat = thread, Reviewer = reviewer, Writer = reviewer, ReviewerReplyPort = replyPort, Message = message, MaxRounds = max, LoopPathway = back?.FromPort,
+                    ReviewerInputs = () => new(StringComparer.OrdinalIgnoreCase) { ["changes"] = changes, ["conventions"] = conventions },
+                };
+                (choice, Dictionary<string, string> args) = await ask.AskOnce(report, round, fails >= max, ct);
+                reason = args.GetValueOrDefault("reason") ?? args.Values.FirstOrDefault() ?? "";
+            }
+            Shared.Logger.LogInformation("[CodeReview] ({Thread}) round {N}: {Choice} {Reason}", thread.Key, round, choice, reason);
+            bool loops = back is not null && choice.Equals(back.FromPort, StringComparison.OrdinalIgnoreCase) && fails < max;
+            if (!loops) return;
+            Reflector.Record(thread.Key, ReflectMode.Work, [new ReplyEdit("code review", reason)]);
+            fails++;
+            report = await again($"[Code review] {reason}\nFix this in the code. If you think the review is wrong, say why instead of changing anything.");
+        }
     }
 }
