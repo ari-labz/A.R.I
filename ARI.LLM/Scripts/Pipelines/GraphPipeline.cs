@@ -128,11 +128,20 @@ internal sealed class GraphPipeline : Pipeline
                 outputs[$"{start.Id}:{PipelineGraph.StartMessage}"] = message;
             }
 
-            string feederId = graph.Edges.First(e => graph.Nodes.First(n => n.Id == e.To).Type == "end").From;
+            string feederId = graph.Edges.First(e => graph.Nodes.First(n => n.Id == e.To).Type == "end" && !graph.IsPathway(e)).From;
             string? result = null;
+
+            // A reviewer (an agent with pathway tools, reading the reply) doesn't run as a step: it runs inside the reply's own turn.
+            HashSet<string> reviewers = isTop
+                ? graph.Nodes.Where(n => n.Type == "agent" && n.Agent is { } a && customAgents.TryGetValue(a, out CustomAgent? ca) && ca.Pathways is { Count: > 0 }
+                                         && graph.Edges.Any(e => e.From == feederId && e.To == n.Id)).Select(n => n.Id).ToHashSet()
+                : new();
+            ConcurrentDictionary<string, double> took = new();
 
             foreach (List<PipelineGraph.Node> wave in graph.Order()!)
             {
+                wave.RemoveAll(n => reviewers.Contains(n.Id));
+                if (wave.Count == 0) continue;
                 string?[] results = await Task.WhenAll(wave.Select(node => RunNode(node)));
                 for (int i = 0; i < wave.Count; i++)
                 {
@@ -145,12 +154,14 @@ internal sealed class GraphPipeline : Pipeline
             // A node that fails can carry on with its onError text instead of taking the whole reply down with it.
             async Task<string?> RunNode(PipelineGraph.Node node)
             {
+                Stopwatch nodeSw = Stopwatch.StartNew();
                 try { return await RunNodeCore(node); }
                 catch (Exception ex) when (node.OnError is not null && !cts.IsCancellationRequested)
                 {
                     Shared.Logger.LogWarning(ex, "[Graph:{Graph}] ({Thread}) {Node} failed — carrying on with its fallback text. {Error}", graph.Name, threadKey, node.Agent ?? node.Pipeline ?? node.Id, ex.Message);
                     return node.OnError;
                 }
+                finally { took[node.Id] = nodeSw.Elapsed.TotalSeconds; }
             }
 
             async Task<string?> RunNodeCore(PipelineGraph.Node node)
@@ -203,6 +214,7 @@ internal sealed class GraphPipeline : Pipeline
                     foreach (string extra in PortsOf("Dialogue") ?? []) dialogueTokens.TryAdd(extra, "");   // an input left unwired reads as empty, not as the literal {token}
                     bool placesMemory = System.Text.RegularExpressions.Regex.IsMatch(textingAgent.AgentPrompt, @"\{(memory|memories)\}");
                     Agent.PromptTokens.Value = dialogueTokens;
+                    if (isReply) ReviewLoop.Active.Value = LoopFor(node, textingAgent);
                     try
                     {
                         return await textingAgent.Prompt(thread, effectivePrompt, new PromptOptions
@@ -218,7 +230,7 @@ internal sealed class GraphPipeline : Pipeline
                             OnTextDelta         = onTextDelta,
                         });
                     }
-                    finally { Agent.PromptTokens.Value = null; }
+                    finally { Agent.PromptTokens.Value = null; ReviewLoop.Active.Value = null; }
                 }
 
                 CustomAgent agent = customAgents[agentName];
@@ -253,10 +265,15 @@ internal sealed class GraphPipeline : Pipeline
                     if (isReply)
                     {
                         // The reply agent answers the user's own message, which is already in the thread; a message template only applies to steps behind the scenes.
-                        result = await agent.Prompt(thread, message, new PromptOptions
+                        ReviewLoop.Active.Value = LoopFor(node, agent);
+                        try
                         {
-                            Username = username, ContextSummary = contextSummary, Ct = cts.Token, UserMessagePreadded = true, OnDelta = onDelta,
-                        });
+                            result = await agent.Prompt(thread, message, new PromptOptions
+                            {
+                                Username = username, ContextSummary = contextSummary, Ct = cts.Token, UserMessagePreadded = true, OnDelta = onDelta,
+                            });
+                        }
+                        finally { ReviewLoop.Active.Value = null; }
                     }
                     else
                     {
@@ -284,6 +301,27 @@ internal sealed class GraphPipeline : Pipeline
                 Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) {Agent} finished in {Sec:F1}s.", graph.Name, threadKey, agentName, sw.Elapsed.TotalSeconds);
                 return result;
 
+                // The review loop for this reply, if a reviewer is wired to it: who reviews, where its loop pathway leads, and the steps so far for the timeline.
+                ReviewLoop? LoopFor(PipelineGraph.Node writerNode, Agent writer)
+                {
+                    PipelineGraph.Node? rev = graph.Nodes.FirstOrDefault(n => reviewers.Contains(n.Id));
+                    if (rev is null || !customAgents.TryGetValue(rev.Agent!, out CustomAgent? reviewer)) return null;
+                    PipelineGraph.Edge? back = graph.Edges.FirstOrDefault(e => e.From == rev.Id && graph.IsPathway(e) && e.To == writerNode.Id);
+                    string replyPort = graph.Edges.First(e => e.From == writerNode.Id && e.To == rev.Id).Port;
+                    ReviewLoop loop = new()
+                    {
+                        Chat = thread, Reviewer = reviewer, Writer = writer, ReviewerReplyPort = replyPort, Message = message,
+                        LoopPathway = back?.FromPort, CritiquePort = back?.Port ?? "critique", MaxRounds = back?.MaxRounds ?? 2,
+                        UserSentAt = thread.History.OfType<Prompt>().LastOrDefault()?.Timestamp ?? DateTime.Now,
+                        ReviewerInputs = () => graph.Edges.Where(e => e.To == rev.Id && e.From != writerNode.Id)
+                            .ToDictionary(e => e.Port, e => outputs.TryGetValue(OutputKey(graph, e), out string? v) ? v ?? "" : "", StringComparer.OrdinalIgnoreCase),
+                    };
+                    foreach (PipelineGraph.Node done in graph.Nodes.Where(n => took.ContainsKey(n.Id) && n.Id != writerNode.Id))
+                        loop.Steps.Add(new ReviewLoop.Step(pipLabel(done), "done", took[done.Id]));
+                    loop.Steps.Add(new ReviewLoop.Step(writer is Dialogue ? "Dialogue" : writer.Name, "wrote the reply", 0, "write"));
+                    return loop;
+                }
+
                 // Same recall the Dialogue pipeline does: skipped without access, and a failed recall never blocks the reply.
                 async Task<string?> Recall()
                 {
@@ -301,6 +339,8 @@ internal sealed class GraphPipeline : Pipeline
             }
         }
     }
+
+    private static string pipLabel(PipelineGraph.Node n) => n.Agent is "Memory" ? "Recall" : n.Agent ?? n.Pipeline ?? n.Id;
 
     // ── Recall ───────────────────────────────────────────────────────────────────
 

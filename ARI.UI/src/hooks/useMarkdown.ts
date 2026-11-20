@@ -52,7 +52,7 @@ function renderBrowserMarkers(s: string): string {
 
 // A visual Ari drew (show_visual): an empty frame the page mounts a sandboxed iframe into (see visuals.ts).
 // An edit window's data rides in the text as a marker; the window is drawn beside the chat, so the text shows nothing.
-const EDIT_WINDOW_RE = /<!--ari-edit:[^>]*?-->/g
+const EDIT_WINDOW_RE = /<!--ari-(?:edit|review):[^>]*?-->/g
 function hideEditMarkers(s: string): string { return s.replace(EDIT_WINDOW_RE, "") }
 
 function renderVisualMarkers(s: string): string {

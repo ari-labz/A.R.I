@@ -102,14 +102,14 @@ internal class Reflector : Agent
         {
             Thread ephemeral = new(ThreadPipeline.Dialogue, $"__reflect_{Guid.NewGuid():N}") { Internal = true };
             string answer = await Prompt(ephemeral, prompt.ToString(), new PromptOptions { MaxTokensOverride = 500, Ct = ct });
-            return Parse(answer, reply);
+            return Parse(answer, reply, userMessage);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { Shared.Logger.LogWarning("[Reflector] couldn't review a reply: {Err}", ex.Message); return new(); }
     }
 
     /// <summary>The edits in an answer, kept only when the text to replace really is in the reply, and only once each.</summary>
-    internal static List<ReplyEdit> Parse(string answer, string reply)
+    internal static List<ReplyEdit> Parse(string answer, string reply, string userMessage = "")
     {
         List<ReplyEdit> edits = new();
         if (answer.TrimStart().StartsWith("OK", StringComparison.OrdinalIgnoreCase) && !answer.Contains("EDIT")) return edits;
@@ -120,6 +120,10 @@ internal class Reflector : Agent
             int first = reply.IndexOf(old, StringComparison.Ordinal);
             if (first < 0 || reply.IndexOf(old, first + 1, StringComparison.Ordinal) >= 0) continue;   // missing, or ambiguous
             if (edits.Any(e => e.Old.Contains(old) || old.Contains(e.Old))) continue;                   // overlapping edits would fight
+            // A fix never pastes the user's own words over hers (a message that says "repeat this back" once turned whole paragraphs into
+            // "i'm tired."), and never gives several different passages the same replacement.
+            if (repl.Length > 5 && userMessage.Contains(repl, StringComparison.OrdinalIgnoreCase) && !old.Contains(repl, StringComparison.OrdinalIgnoreCase)) continue;
+            if (repl.Length > 0 && edits.Any(e => e.New == repl)) continue;
             edits.Add(new ReplyEdit(old, repl));
             if (edits.Count == MaxEdits) break;
         }

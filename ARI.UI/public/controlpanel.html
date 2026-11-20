@@ -1411,6 +1411,11 @@ body.cp-win32 #cp-win-controls { display: flex; }
 .pip-world svg path:hover{stroke:#d9534f}
 .pip-world svg path.stream{stroke:#2aa6b8;stroke-dasharray:10 7;animation:pipflow .8s linear infinite}
 .pip-world svg path.tmp{stroke:#5aa9b8;stroke-dasharray:5 5;pointer-events:none}
+.pip-world svg path.loop{stroke:#9a72e0;stroke-dasharray:9 6}
+.pip-world svg text.loop-lab{fill:#9a72e0;font:600 12px ui-monospace,Menlo,monospace;pointer-events:all;cursor:pointer}
+.pip-tools{margin:4px 10px 0;padding:4px 0 2px;border-top:1px solid rgba(255,255,255,.18);font:700 10px ui-monospace,Menlo,monospace;letter-spacing:.08em;color:rgba(255,255,255,.65)}
+.pip-row.pathway{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.pip-row.pathway.loops{color:#d3c1f5}
 @keyframes pipflow{to{stroke-dashoffset:-17}}
 .pip-node{position:absolute;width:230px;border-radius:12px;background:#666d70;color:#fff;box-shadow:0 3px 10px rgba(0,0,0,.3);font-size:13px}
 .pip-node.sel{box-shadow:0 0 0 2.5px #5aa9b8,0 3px 10px rgba(0,0,0,.3)}
@@ -5258,6 +5263,32 @@ function agRestartNote(id) {
 // ── Prompts tab: a list on the left, one prompt at a time on the right ──
 var prSelected = 'agent:Dialogue';
 
+// A reviewer's pathway tools: name, arguments, the sentence the agent reads, and where each leads (from the pipelines it sits in).
+function prPathwayTable(ed, agent) {
+    const row = agEl('div', 'margin:0 0 18px;');
+    row.append(agEl('label', 'display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;', 'Pathway tools'));
+    row.append(agEl('div', 'font-size:12px;color:var(--text-dim);margin-bottom:8px;max-width:640px;', 'Give this agent pathway tools to make it a reviewer. It reads the reply as it is written and ends by calling one; each tool is an output in the pipeline graph. They do nothing by themselves and only this agent can call them.'));
+    const leads = name => { const out = []; ((pipD && pipD.data && pipD.data.pipelines) || []).forEach(pl => pl.nodes.filter(n => n.type === 'agent' && n.agent === agent.name).forEach(n => { const e = pl.edges.find(x => x.from === n.id && x.fromPort === name); out.push(e ? pl.name + ': ' + pipLabel(pipNode(pl, e.to)) + ' ↻' : pl.name + ': ends the turn'); })); return out.join('; ') || 'not in a pipeline yet'; };
+    const tbl = agEl('table', 'border-collapse:collapse;font-size:13px;width:100%;max-width:820px;');
+    const head = agEl('tr'); ['Tool', 'Arguments', 'The agent reads', 'Leads to', ''].forEach(t => head.append(agEl('th', 'text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);padding:4px 6px;', t))); tbl.append(head);
+    const list = agent.pathways = agent.pathways || [];
+    const input = (val, ph, w, on) => { const i = document.createElement('input'); i.type = 'text'; i.className = 'vs-input'; i.value = val; i.placeholder = ph; i.style.cssText = 'width:' + w + ';box-sizing:border-box;'; i.oninput = () => { on(i.value); agDirty(); }; return i; };
+    list.forEach((t, k) => {
+        const tr = agEl('tr'); const td = c => { const x = agEl('td', 'padding:4px 6px;border-top:1px solid var(--border);vertical-align:middle;'); x.append(c); tr.append(x); };
+        td(input(t.name || '', 'Pass', '110px', v => t.name = v.replace(/[^A-Za-z0-9_]/g, '')));
+        td(input((t.args || []).join(', '), 'reason', '120px', v => t.args = v.split(',').map(x => x.trim()).filter(Boolean)));
+        td(input(t.description || '', 'what this choice means', '100%', v => t.description = v));
+        td(agEl('span', 'font-size:12px;color:var(--text-dim);', leads(t.name)));
+        const rm = agEl('button', '', 'Remove'); rm.className = 'agv-btn'; rm.type = 'button'; rm.onclick = () => { list.splice(k, 1); agDirty(); prRenderEditor(); }; td(rm);
+        tbl.append(tr);
+    });
+    row.append(tbl);
+    const add = agEl('button', 'margin-top:8px;margin-right:8px;', '+ Add a tool'); add.className = 'agv-btn'; add.type = 'button'; add.onclick = () => { list.push({ name: '', args: [], description: '' }); agDirty(); prRenderEditor(); };
+    const pf = agEl('button', 'margin-top:8px;', 'Use Pass / Fail(reason)'); pf.className = 'agv-btn'; pf.type = 'button'; pf.onclick = () => { agent.pathways = [{ name: 'Pass', args: [], description: 'The reply is good: end the turn.' }, { name: 'Fail', args: ['reason'], description: 'The reply needs work: say exactly what to fix.' }]; agDirty(); prRenderEditor(); };
+    row.append(add, pf);
+    ed.append(row);
+}
+
 function prField(host, label, hint, tokens, value, onInput) {
     const wrap = agEl('div', 'margin-bottom:26px;');
     wrap.append(agEl('div', 'font-size:14px;font-weight:600;', label));
@@ -5327,6 +5358,7 @@ function prRenderEditor() {
             const inp = document.createElement('input'); inp.type = 'text'; inp.className = 'vs-input'; inp.style.cssText = 'width:100%;max-width:520px;box-sizing:border-box;'; inp.placeholder = 'e.g. memory_tools'; inp.value = (agent.preloadedTools || []).join(', ');
             inp.oninput = () => { agent.preloadedTools = inp.value.split(',').map(x => x.trim()).filter(Boolean); agDirty(); };
             row.append(inp, agEl('div', 'font-size:12px;color:var(--text-dim);margin-top:4px;', 'Tool groups loaded from the start, so it does not have to ask for them. Behind the scenes in a pipeline an agent can only use tools that read.')); ed.append(row); }
+        if (agent.custom) prPathwayTable(ed, agent);
         if (agent.custom) { const row = agEl('div', 'margin:0 0 18px;'); row.append(agEl('label', 'display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;', 'Max tool calls'));
             const inp = document.createElement('input'); inp.type = 'number'; inp.min = 0; inp.className = 'vs-input'; inp.style.cssText = 'width:90px;'; inp.value = agent.maxToolCalls || 0;
             inp.oninput = () => { agent.maxToolCalls = Math.max(0, parseInt(inp.value) || 0); agDirty(); };
@@ -5360,9 +5392,12 @@ function prRenderEditor() {
 // START (the conversation) → agents → END (the user). An agent's input ports are its {tokens} (custom agents) or fixed
 // (built-ins); each port takes one wire. The graph marked "active" answers chat messages in place of the built-in Dialogue.
 var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = {}, pipMode = 'list';
-const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories'] };
+const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories', 'critique'] };
+// A reviewer agent's pathway tools (Pass, Fail…) are its output ports; a wire from one may lead back to the writer.
+const pipPathways = n => n.type === 'agent' ? ((pipDef(n).pathways) || []) : [];
+const pipIsPathwayEdge = (p, e) => { const f = pipNode(p, e.from); return !!f && f.type === 'agent' && !!e.fromPort && !['history', 'message', 'output'].includes(e.fromPort); };
 const pipUid = () => Math.random().toString(36).slice(2, 8);
-const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message' && x !== 'since');   // both are always filled in, never wired
+const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => !['message', 'since', 'attempt', 'max_attempts', 'attempt_log', 'seconds_since_reply'].includes(x));   // both are always filled in, never wired
 const pipAgentTokens = d => pipTokens((d.agentPrompt || '') + '\n' + (d.messagePrompt || ''));
 function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a => a.name === n.agent) || {} : {}; }
 // A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
@@ -5370,7 +5405,7 @@ const PIP_SUB_PORTS = ['history', 'message'];
 function pipSubOf(n) { return (pipD.data.pipelines || []).find(x => x.id === n.pipeline); }
 function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n).name : '(missing pipeline)') : n.agent === 'Memory' ? 'Recall' : n.agent; }
 const pipIsBox = n => n.type === 'agent' || n.type === 'pipeline';
-function pipOutputs(n) { return n.type === 'start' ? ['history', 'message'] : ['output']; }
+function pipOutputs(n) { if (n.type === 'start') return ['history', 'message']; const pw = pipPathways(n); return pw.length ? pw.map(x => x.name) : ['output']; }
 function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipAgentTokens(d) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
 function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'pipeline' ? PIP_SUB_PORTS : n.type === 'end' ? ['stream'] : []; }
 function pipCur() { return pipD.data.pipelines.find(p => p.id === pipD.cur) || pipD.data.pipelines[0]; }
@@ -5493,7 +5528,7 @@ function pipFit() {
 }
 window.addEventListener('resize', () => { if (pipCanvas && pipCanvas.isConnected) { pipFit(); if (typeof pipCur === 'function' && pipD) { try { pipApplyView(pipCur()); } catch {} } } });
 
-function pipReaches(p, from, to) { const seen = new Set(), st = [from]; while (st.length) { const x = st.pop(); if (x === to) return true; if (seen.has(x)) continue; seen.add(x); p.edges.filter(e => e.from === x).forEach(e => st.push(e.to)); } return false; }
+function pipReaches(p, from, to, skipLoops) { const seen = new Set(), st = [from]; while (st.length) { const x = st.pop(); if (x === to) return true; if (seen.has(x)) continue; seen.add(x); p.edges.filter(e => e.from === x && !(skipLoops && pipIsPathwayEdge(p, e))).forEach(e => st.push(e.to)); } return false; }
 function pipIssues(p) {
     const out = [], end = p.nodes.find(n => n.type === 'end'), into = p.edges.filter(e => e.to === end.id);
     if (!into.length) out.push('Nothing is connected to END, so this pipeline never answers.');
@@ -5522,7 +5557,7 @@ function pipPos(n, side, port) {
     if (!pipIsBox(n)) return { x: n.x + 13, y: n.y + 13 };
     const outs = pipOutputs(n);
     if (side === 'out') return { x: n.x + PIP_W, y: n.y + 46 + Math.max(0, outs.indexOf(port)) * 28 };
-    return { x: n.x, y: n.y + 46 + outs.length * 28 + pipInputs(n).indexOf(port) * 28 };
+    return { x: n.x, y: n.y + 46 + outs.length * 28 + (pipPathways(n).length ? 22 : 0) + pipInputs(n).indexOf(port) * 28 };
 }
 const pipWirePath = (a, b) => { const d = Math.max(60, Math.abs(b.x - a.x) / 2); return `M${a.x},${a.y} C${a.x + d},${a.y} ${b.x - d},${b.y} ${b.x},${b.y}`; };
 function pipApplyView(p) {
@@ -5572,11 +5607,19 @@ function pipDraw(p) {
             const def = pipDef(n), ports = pipInputs(n), outs = pipOutputs(n), isSub = n.type === 'pipeline';
             d = agEl('div'); d.className = 'pip-node' + (pipSel === n.id ? ' sel' : '') + (def.enabled === false ? ' off' : '');
             const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', pipLabel(n))); const tg = agEl('span', '', isSub ? 'pipeline' : def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
-            d.append(h); outs.forEach(o => { const out = agEl('div', '', o === 'output' ? 'Output' : o); out.className = 'pip-row out'; d.append(out); });
+            d.append(h);
+            const pws = pipPathways(n);
+            outs.forEach(o => {
+                const pw = pws.find(x => x.name === o);
+                const loops = pw && p.edges.some(e => e.from === n.id && e.fromPort === o);
+                const out = agEl('div', '', o === 'output' ? 'Output' : pw ? '▸ ' + pw.name + '(' + (pw.args || []).join(', ') + ')' + (loops ? '  ↻' : '') : o);
+                out.className = 'pip-row out' + (pw ? ' pathway' + (loops ? ' loops' : '') : ''); d.append(out);
+            });
+            if (pws.length) { const t = agEl('div', '', 'PATHWAY TOOLS ▲'); t.className = 'pip-tools'; t.title = 'The tools this agent ends with. Each one is an output: wire it to where that answer should go. A wire back to the writer makes a loop.'; d.append(t); }
             ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
             const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
             outs.forEach((o, i) => { const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, o); d.append(po); });
-            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28}px`; d.append(pi); });
+            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28 + (pws.length ? 22 : 0)}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
             d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, pipLabel(n), [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
         } else if (n.type === 'start') {
@@ -5596,11 +5639,23 @@ function pipDraw(p) {
     });
 }
 function pipWires(p) {
-    pipSvg.querySelectorAll('path:not(.tmp)').forEach(x => x.remove());
+    pipSvg.querySelectorAll('path:not(.tmp), text.loop-lab').forEach(x => x.remove());
     p.edges.forEach((e, i) => {
         const A = pipNode(p, e.from), B = pipNode(p, e.to); if (!A || !B) return;
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', pipWirePath(pipPos(A, 'out', e.fromPort), pipPos(B, 'in', e.port))); if (e.mode === 'stream') path.setAttribute('class', 'stream');
+        const pa = pipPos(A, 'out', e.fromPort), pb = pipPos(B, 'in', e.port), loop = pipIsPathwayEdge(p, e);
+        path.setAttribute('d', loop && pb.x < pa.x ? `M${pa.x},${pa.y} C${pa.x + 120},${pa.y} ${pa.x + 120},${Math.max(pa.y, pb.y) + 170} ${(pa.x + pb.x) / 2},${Math.max(pa.y, pb.y) + 170} S${pb.x - 120},${pb.y} ${pb.x},${pb.y}` : pipWirePath(pa, pb));
+        if (e.mode === 'stream') path.setAttribute('class', 'stream');
+        if (loop) {
+            path.setAttribute('class', 'loop');
+            const setRounds = () => { const v = parseInt(prompt('How many times may this loop go round in one turn? (1-10)', e.maxRounds || 2), 10); if (v >= 1 && v <= 10) { e.maxRounds = v; pipTouch(); pipRender(); } };
+            const lab = document.createElementNS('http://www.w3.org/2000/svg', 'text'); lab.setAttribute('class', 'loop-lab');
+            lab.setAttribute('x', (pa.x + pb.x) / 2 - 50); lab.setAttribute('y', (pb.x < pa.x ? Math.max(pa.y, pb.y) + 162 : (pa.y + pb.y) / 2 - 8));
+            lab.textContent = '↻ ' + e.fromPort + ' · max ' + (e.maxRounds || 2); lab.onclick = setRounds; pipSvg.append(lab);
+            path.onclick = setRounds;
+            path.oncontextmenu = ev => pipMenu(ev, 'Loop', [['Set the round limit', setRounds], ['Disconnect', () => { p.edges.splice(i, 1); pipTouch(); pipRender(); }]]);
+            pipSvg.append(path); return;
+        }
         const flip = () => { e.mode = e.mode === 'stream' ? 'complete' : 'stream'; pipTouch(); pipRender(); };
         path.onclick = flip;
         path.oncontextmenu = ev => pipMenu(ev, 'Connection', [[e.mode === 'stream' ? 'Wait until finished' : 'Stream live (not run yet)', flip], ['Disconnect', () => { p.edges.splice(i, 1); pipTouch(); pipRender(); }]]);
@@ -5621,9 +5676,10 @@ function pipDragWire(p, from, e, fromPort) {
         document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); t.remove();
         const el = document.elementFromPoint(ev.clientX, ev.clientY);
         if (!el || !el.dataset || !el.dataset.port || el.dataset.node === from.id) return;
-        const to = pipNode(p, el.dataset.node); if (!to || pipReaches(p, to.id, from.id)) return;
+        const pathway = from.type === 'agent' && fromPort && fromPort !== 'output';
+        const to = pipNode(p, el.dataset.node); if (!to || (!pathway && pipReaches(p, to.id, from.id, true))) return;
         p.edges = p.edges.filter(x => !(x.to === to.id && x.port === el.dataset.port));
-        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' ? { fromPort: /^message$/i.test(el.dataset.port) ? 'message' : 'history' } : {}) }); pipTouch(); pipRender();
+        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' ? { fromPort: /^message$/i.test(el.dataset.port) ? 'message' : 'history' } : pathway ? { fromPort, maxRounds: 2 } : {}) }); pipTouch(); pipRender();
     };
     document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up); mv(e);
 }
@@ -5667,6 +5723,12 @@ function pipInspector(p) {
     box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
     lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName || 'default slot'));
     lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? (p.edges.find(e => e.to === n.id && e.port === q).fromPort === 'message' ? 'latest message' : 'conversation history') : pipLabel(f); })() : 'nothing') ).join('\n') || 'none');
+    if ((def.pathways || []).length) {
+        lab('Pathway tools');
+        dim(def.pathways.map(t => { const e = p.edges.find(x => x.from === n.id && x.fromPort === t.name); const to = e ? pipNode(p, e.to) : null;
+            return t.name + '(' + (t.args || []).join(', ') + ')  →  ' + (to ? pipLabel(to) + (e.port ? ' {' + e.port + '}' : '') + '  ↻ max ' + (e.maxRounds || 2) : 'ends the turn'); }).join('\n'));
+        dim('This agent reads the reply as it is written and ends by calling one of these. A tool with no wire ends the turn; a wire back to the writer gives it another go, and the user sees the fix being made.');
+    }
     lab('System prompt'); dim(((def.agentPrompt || '').slice(0, 300) + ((def.agentPrompt || '').length > 300 ? '…' : '')) || '(empty)');
     if (def.custom) {
         lab('Own sub-thread');

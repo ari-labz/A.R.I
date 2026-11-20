@@ -384,6 +384,8 @@ public abstract class Agent
     {
         Reflector? reflector = Reflector.Current;
         if (reflector is null || !UsePersona || thread.Internal || thread.Pipeline != ThreadPipeline.Dialogue || ReferenceEquals(this, reflector)) return;
+        // A pipeline with its own reviewer on this reply does the reviewing; two reviewers editing one reply would fight.
+        if (ReviewLoop.Active.Value is { } loop && ReferenceEquals(loop.Chat, thread)) return;
         ReflectSettings.Values settings = ReflectSettings.Load();
         if (!settings.Enabled) return;
 
@@ -833,8 +835,27 @@ public abstract class Agent
 
             if (FlushPrefillFlips(turn) && turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
 
+            // A pipeline with a reviewer wired to this reply runs its loop here, inside the turn, so each fix is seen being made.
+            bool reviewed = false;
+            if (ReviewLoop.Active.Value is { } loop && ReferenceEquals(loop.Chat, thread) && !turn.Ct.IsCancellationRequested)
+            {
+                reviewed = true;
+                const string AriPrefix = "ARI: ";
+                string Visible() { string v = turn.ResponseBuilder.ToString(); return (v.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? v[AriPrefix.Length..] : v).Trim(); }
+                try
+                {
+                    SetPhase(turn, ThreadPhase.Thinking);
+                    await loop.Run(Visible,
+                        async edits => { foreach (ReplyEdit e in edits) turn.PendingEdits.Enqueue(e); await ApplyPendingEdits(turn, thread, waitForAnimation: true); },
+                        marker => turn.ContentBuilder.Append(marker), turn.Ct);
+                    if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString() + Visible());
+                }
+                catch (OperationCanceledException) when (turn.Ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) { Shared.Logger.LogWarning("[{Agent}] ({Thread}) review loop failed: {Err}", Name, thread.Key, ex.Message); }
+            }
+
             // Before the reply is final, a separate agent reads it. If it finds something wrong, the app shows the fix being made.
-            try { await ReflectStage(turn, thread, prompt, userDelta); }
+            if (!reviewed) try { await ReflectStage(turn, thread, prompt, userDelta); }
             catch (OperationCanceledException) when (turn.Ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { Shared.Logger.LogWarning("[{Agent}] ({Thread}) reflect stage failed: {Err}", Name, thread.Key, ex.Message); }
 

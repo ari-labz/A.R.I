@@ -1,3 +1,4 @@
+import ReviewTimeline, { reviewStepsOf } from "./ReviewTimeline"
 import { BrainIcon } from "./ThreadIcons"
 import { Fragment, useEffect, useRef, useState, useCallback } from "react"
 import type { ThreadItem, Attachment } from "../hooks/useThreads"
@@ -957,9 +958,13 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                 // Her reply hasn't begun because memory is still being saved: say so, instead of claiming she is reading.
                 const noOutput = !merged.content && !((last as { blocks?: unknown[] }).blocks?.length)
                 if (isLast && merged.isStreaming && noOutput && (threadStatus === "queued" || isRemembering)) return <ReplyQueued key={u.key} />
-                return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key}
-                                    threadStatus={isLast ? threadStatus : undefined} activeThread={activeThread}
-                                    feedback={feedback[merged.timestamp]} onFeedbackChange={setFeedback} />
+                const review = reviewStepsOf(u.parts)
+                return <Fragment key={u.key}>
+                    <AriResponse item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key}
+                                 threadStatus={isLast ? threadStatus : undefined} activeThread={activeThread}
+                                 feedback={feedback[merged.timestamp]} onFeedbackChange={setFeedback} />
+                    {review && <ReviewTimeline steps={review} />}
+                </Fragment>
             })()}</Fragment>)}
 
             {markers.filter(m => m.at === -1 || m.at >= items.length).map((m, i) => <MemoryMarker key={`mm-end-${i}`} done={m.done} />)}

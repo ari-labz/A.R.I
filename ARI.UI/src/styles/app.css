@@ -1894,3 +1894,16 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
     font: 500 12px/1.45 system-ui, sans-serif; letter-spacing: 0; text-transform: none; opacity: 0; pointer-events: none; transform: translateY(-4px); transition: opacity .15s, transform .15s; }
 #dev-chip:hover .dev-chip-tip, #dev-chip:focus-visible .dev-chip-tip { opacity: 1; transform: none; }
 #main:not(.active) #dev-chip { top: 14px; }
+
+/* Review loop timeline, under a reply that a reviewer checked */
+.review-tl-row { padding-top: 0; }
+.review-tl { font-size: 12.5px; color: var(--text-dim, #6b7c82); }
+.review-tl summary { cursor: pointer; list-style: none; user-select: none; }
+.review-tl summary::-webkit-details-marker { display: none; }
+.review-tl summary:hover { color: var(--text, inherit); }
+.review-tl-grid { display: grid; gap: 4px; margin-top: 6px; padding: 8px 12px; border: 1px solid var(--border, rgba(0,0,0,.12)); border-radius: 10px; max-width: 560px; }
+.review-tl-step { display: grid; grid-template-columns: 90px 1fr auto; gap: 10px; align-items: baseline; }
+.review-tl-step b { font: 600 11px ui-monospace, Menlo, monospace; }
+.review-tl-what.fail { color: #b3402f; font-family: ui-monospace, Menlo, monospace; }
+.review-tl-what.pass, .review-tl-what.settle { color: #26704a; font-family: ui-monospace, Menlo, monospace; }
+.review-tl-s { font: 11px ui-monospace, Menlo, monospace; opacity: .7; }
