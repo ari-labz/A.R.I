@@ -60,6 +60,7 @@ interface Props {
     speechLevels:     { current: number[] }
     speechMic:        { current: number }
     serverReady:      boolean
+    devMode:          boolean
     personas:         PersonaOption[]
     personaId:        string
     onChoosePersona:  (id: string) => void
@@ -77,7 +78,7 @@ export default function Main({
     pipelines, selectedPipeline, onPipelineChange,
     speechMode, onBeginSpeech, speechCaption, speechState,
     speechInCall, speechMuted, speechCallStart, onSpeechMute, onHangUp, speechLevels, speechMic,
-    safetyMode, onToggleSafety, serverReady, personas, personaId, onChoosePersona,
+    safetyMode, onToggleSafety, serverReady, devMode, personas, personaId, onChoosePersona,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
     const [closedWindows,   setClosedWindows]   = useState<Set<string>>(new Set())
@@ -219,6 +220,12 @@ export default function Main({
             </button>
 
             <div id="chat-col">
+                {devMode && (
+                    <span id="dev-chip" style={{ left: sidebarCollapsed ? 56 : 16 }} tabIndex={0} aria-label="Dev mode is on">
+                        <i aria-hidden="true" />DEV MODE
+                        <span className="dev-chip-tip" role="tooltip">Dev mode is on. Conversations in dev mode are not saved and are lost when ARI restarts.</span>
+                    </span>
+                )}
                 {/* animated logo header */}
                 <div id="main-header">
                     <div id="header-logos">

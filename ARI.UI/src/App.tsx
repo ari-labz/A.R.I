@@ -320,6 +320,7 @@ export default function App() {
     const [protocolMismatch, setProtocolMismatch] = useState<number | null>(null)
     // Assume ready until told otherwise, so a slow/failed check never blocks the composer.
     const [serverReady,    setServerReady]    = useState(true)
+    const [devMode,        setDevMode]        = useState(false)
 
     const globalEsRef      = useRef<EventSource | null>(null)
     const abortRef         = useRef<AbortController | null>(null)
@@ -508,8 +509,9 @@ export default function App() {
         async function checkReady() {
             const res = await apiFetch("/api/v1/info/ready").catch(() => null)
             if (!res?.ok) return
-            const { ready } = await res.json()
+            const { ready, devMode: dev } = await res.json()
             setServerReady(!!ready)
+            setDevMode(!!dev)
         }
 
         env.getVersion().then(ver => { if (ver) setClientVersion(ver) })
@@ -1557,6 +1559,7 @@ export default function App() {
                 <Main
                     mode={mode}
                     serverReady={serverReady}
+                    devMode={devMode}
                     codeMode={codeMode}
                     shieldMode={codeMode || selectedPipeline === "code"}
                     items={items}

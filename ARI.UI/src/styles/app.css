@@ -1885,3 +1885,12 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 /* The ARI logo stays where it was while the chat slides left: the header shifts back by half the width the chat gave up. */
 #main.with-windows #main-header { transform: translateX(var(--header-shift, 0px)); overflow: visible; }
 #main.with-windows #chat-col { overflow: visible; }
+
+/* Dev mode chip: top left of the banner while dev mode is on. */
+#dev-chip { position: absolute; top: 14px; left: 16px; z-index: 5; display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px 4px 10px; border-radius: 999px;
+    border: 1px solid #b3262e; background: rgba(224,70,80,.16); color: #b3262e; font: 700 11px var(--font-sans, system-ui), sans-serif; letter-spacing: .08em; cursor: default; }
+#dev-chip i { width: 6px; height: 6px; border-radius: 50%; background: #d8343e; }
+#dev-chip .dev-chip-tip { position: absolute; top: calc(100% + 8px); left: 0; width: 240px; padding: 8px 10px; border-radius: 10px; background: #2a1013; color: #f6d9db; border: 1px solid #b3262e;
+    font: 500 12px/1.45 system-ui, sans-serif; letter-spacing: 0; text-transform: none; opacity: 0; pointer-events: none; transform: translateY(-4px); transition: opacity .15s, transform .15s; }
+#dev-chip:hover .dev-chip-tip, #dev-chip:focus-visible .dev-chip-tip { opacity: 1; transform: none; }
+#main:not(.active) #dev-chip { top: 14px; }
