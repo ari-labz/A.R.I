@@ -1180,6 +1180,19 @@ public class LLMModule : ILLMModule, IDisposable
         });
     }
 
+    /// <summary>Waits until nothing has been generating for a while, so a memory sweep never competes with a reply for the model.
+    /// Gives up after ten minutes so a busy server can't hold a closed thread forever.</summary>
+    private async Task WaitUntilIdle()
+    {
+        DateTime start = DateTime.UtcNow, lastBusy = DateTime.UtcNow;
+        while (DateTime.UtcNow - start < TimeSpan.FromMinutes(10))
+        {
+            if (!IsIdle) lastBusy = DateTime.UtcNow;
+            else if (DateTime.UtcNow - lastBusy >= TimeSpan.FromSeconds(EngramIdleSeconds)) return;
+            await Task.Delay(1000);
+        }
+    }
+
     private void OnThreadDormant(Thread thread)
     {
         bool canSweep = engram is not null && !thread.EngramProcessed && Engram.MaySweep(thread);
@@ -1189,7 +1202,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             _ = Task.Run(async () =>
             {
-                try { await engram!.RunEngram(thread.Key, "dormant"); }
+                try { await WaitUntilIdle(); await engram!.RunEngram(thread.Key, "dormant"); }
                 catch (Exception ex) { _logger.LogWarning("[Dormant] Engram failed for {Key}: {Err}", thread.Key, ex.Message); }
             });
         }
@@ -1216,7 +1229,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
             {
-                try { await engram.RunEngram(threadKey, "closed", force: true); }
+                try { await WaitUntilIdle(); await engram.RunEngram(threadKey, "closed", force: true); }
                 catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
             }
         }
