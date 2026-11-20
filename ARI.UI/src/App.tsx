@@ -150,7 +150,12 @@ export default function App() {
     // Ari is changing part of her reply while it is on screen (the reflect stage): the old words are struck through, deleted, and the new
     // ones typed in their place, like an author going back over a line. The server waits about as long as this takes before sending the
     // reply as it now reads, so the two never fight over the text.
+    const rewritingRef = useRef(false)   // while true, reply text arriving from the stream waits, so it doesn't overwrite the animation
     async function animateRewrite(oldText: string, newText: string) {
+        rewritingRef.current = true
+        try { await animateRewriteSteps(oldText, newText) } finally { rewritingRef.current = false }
+    }
+    async function animateRewriteSteps(oldText: string, newText: string) {
         const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
         const re = /<!--rw-->[\s\S]*?<!--\/rw-->/
         const show = (inner: string) => setItems(prev => {
@@ -1334,6 +1339,7 @@ export default function App() {
                     // Update the last STREAMING ariResponse in place. Not necessarily the last item: an
                     // optimistic interjection may sit after the still-streaming bubble until the split lands.
                     setItems(prev => {
+                        if (rewritingRef.current) return prev
                         for (let i = prev.length - 1; i >= 0; i--) {
                             if (prev[i].type === "ariResponse" && prev[i].isStreaming) {
                                 const next = [...prev]; next[i] = { ...prev[i], content: text, isStreaming: true }; return next

@@ -292,11 +292,17 @@ public abstract class Agent
         ReflectSettings.Values settings = ReflectSettings.Load();
         if (!settings.Enabled) return;
 
-        string reply = turn.ResponseBuilder.ToString();
+        // Paragraphs already sent for review while she wrote: let those reviews finish and make their edits first.
+        try { await turn.ReflectChain; } catch { }
+        await ApplyPendingEdits(turn, thread, waitForAnimation: true);
+
         const string AriPrefix = "ARI: ";
+        bool work = thread.Pipeline == ThreadPipeline.Code;
+        string whole = turn.ResponseBuilder.ToString();
+        // In chat only the part not yet reviewed is read now; a report on work is checked whole, against the evidence.
+        string reply = work ? whole : whole[Math.Clamp(turn.ReflectedChars, 0, whole.Length)..];
         if (reply.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase)) reply = reply[AriPrefix.Length..];
         reply = reply.TrimEnd();
-        bool work = thread.Pipeline == ThreadPipeline.Code;
         List<string> hits = settings.BannedPhrases.Where(b => reply.Contains(b, StringComparison.OrdinalIgnoreCase)).ToList();
         if (reply.Length == 0 || (reply.Length < settings.MinChars && hits.Count == 0)) return;
         if (work && !settings.VerifyWork) return;
@@ -306,23 +312,87 @@ public abstract class Agent
         List<ReplyEdit> edits = await reflector.Review(work ? ReflectMode.Work : ReflectMode.Chat, AssistantName.Name, userPrompt, reply, evidence, hits, turn.Ct);
         if (edits.Count == 0) return;
 
-        foreach (ReplyEdit edit in edits)
+        foreach (ReplyEdit edit in edits) turn.PendingEdits.Enqueue(edit);
+        await ApplyPendingEdits(turn, thread, waitForAnimation: true);
+    }
+
+    /// <summary>Makes the edits the Reflector has asked for. Called only from the stream loop and the end of the turn, so nothing else is
+    /// changing the reply. Each is announced to the app first, so it can strike the old words, delete them and type the new ones.</summary>
+    private async Task ApplyPendingEdits(Turn turn, Thread thread, bool waitForAnimation)
+    {
+        const string AriPrefix = "ARI: ";
+        while (turn.PendingEdits.TryDequeue(out ReplyEdit? edit))
         {
             string current = turn.ResponseBuilder.ToString();
             int at = current.IndexOf(edit.Old, StringComparison.Ordinal);
-            if (at < 0) continue;
-            if (userDelta is not null) await userDelta($"[REWRITE]{edit.Old}\u0001{edit.New}");
-            // The app animates the change; wait about as long as it takes so the next update doesn't land in the middle of it.
-            await Task.Delay(Math.Min(4000, 700 + edit.Old.Length * 12 + edit.New.Length * 25), turn.Ct);
+            if (at < 0 || current.IndexOf(edit.Old, at + 1, StringComparison.Ordinal) >= 0) continue;   // gone or ambiguous by now
+            if (turn.Control is not null) await turn.Control($"[REWRITE]{edit.Old}\u0001{edit.New}");
+            if (waitForAnimation) await Task.Delay(Math.Min(4000, 700 + edit.Old.Length * 12 + edit.New.Length * 25), turn.Ct);
             turn.ResponseBuilder.Remove(at, edit.Old.Length).Insert(at, edit.New);
+            if (at < turn.ReflectedChars) turn.ReflectedChars += edit.New.Length - edit.Old.Length;
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) reply edited by the reflector: \"{Old}\" -> \"{New}\"", Name, thread.Key, edit.Old, edit.New);
-            if (userDelta is not null)
+            if (turn.Control is not null)
             {
                 string visible = turn.ResponseBuilder.ToString();
                 if (visible.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase)) visible = visible[AriPrefix.Length..];
-                await userDelta(turn.ContentBuilder.ToString() + visible);
+                if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString() + visible);
             }
         }
+    }
+
+    /// <summary>While she is still writing, hands each finished paragraph (or a long run of sentences) to the Reflector in the background.
+    /// The edits come back through <see cref="Turn.PendingEdits"/> and are made on the next token, so the app sees her reply being
+    /// corrected as it is written, like a shared document with a second author.</summary>
+    private void StartLiveReflect(Turn turn, Thread thread)
+    {
+        Reflector? reflector = Reflector.Current;
+        if (reflector is null || !UsePersona || thread.Internal || thread.Pipeline != ThreadPipeline.Dialogue || ReferenceEquals(this, reflector)) return;
+        ReflectSettings.Values settings = ReflectSettings.Load();
+        if (!settings.Enabled) return;
+
+        string text = turn.ResponseBuilder.ToString();
+        if (turn.ReflectedChars > text.Length) turn.ReflectedChars = 0;   // the reply was moved on (a tool call); this is a new stretch
+        string unread = text[turn.ReflectedChars..];
+        if (unread.Length < settings.LiveMinChars) return;
+
+        int cut = unread.LastIndexOf("\n\n", StringComparison.Ordinal);
+        if (cut >= 0) cut += 2;
+        else if (unread.Length >= settings.LiveMinChars * 3)
+        {
+            int s = new[] { unread.LastIndexOf(". ", StringComparison.Ordinal), unread.LastIndexOf("! ", StringComparison.Ordinal), unread.LastIndexOf("? ", StringComparison.Ordinal) }.Max();
+            if (s >= 0) cut = s + 2;
+        }
+        if (cut < settings.LiveMinChars) return;
+
+        string chunk = unread[..cut].Trim();
+        if (chunk.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase)) chunk = chunk[5..];
+        turn.ReflectedChars += cut;
+        string userMessage = turn.Messages.Count > 0 ? LastUserText(turn) : "";
+        List<string> hits = settings.BannedPhrases.Where(b => chunk.Contains(b, StringComparison.OrdinalIgnoreCase)).ToList();
+        turn.ReflectChain = turn.ReflectChain.ContinueWith(async _ =>
+        {
+            try
+            {
+                foreach (ReplyEdit edit in await reflector.Review(ReflectMode.Chat, AssistantName.Name, userMessage, chunk, "", hits, turn.Ct))
+                    turn.PendingEdits.Enqueue(edit);
+            }
+            catch (Exception) { /* a review that fails just leaves the paragraph as written */ }
+        }, TaskScheduler.Default).Unwrap();
+    }
+
+    private static string LastUserText(Turn turn)
+    {
+        foreach (object m in Enumerable.Reverse(turn.Messages))
+        {
+            try
+            {
+                JsonElement el = JsonSerializer.SerializeToElement(m);
+                if (el.TryGetProperty("role", out JsonElement r) && r.GetString() == "user" && el.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.String)
+                    return c.GetString() ?? "";
+            }
+            catch { }
+        }
+        return "";
     }
 
     /// <summary>What the tools returned this turn, shortened, for the reflector to check claims against.</summary>
@@ -440,6 +510,12 @@ public abstract class Agent
 
         // ── Output builders ──────────────────────────────────────────────────
         internal readonly StringBuilder ResponseBuilder  = new();
+        // Live reflect: paragraphs are read by the Reflector while she is still writing, and its edits wait here until the stream loop,
+        // the only thing that changes the reply, makes them.
+        internal int  ReflectedChars;                                       // how much of the reply has been handed to the Reflector
+        internal Task ReflectChain = Task.CompletedTask;                    // reviews run one after another
+        internal readonly System.Collections.Concurrent.ConcurrentQueue<ReplyEdit> PendingEdits = new();
+        internal Func<string, Task>? Control;                               // the app's own channel, for [REWRITE] lines
         internal readonly StringBuilder ContentBuilder   = new();
         internal readonly StringBuilder ReasoningBuilder = new();
 
@@ -578,6 +654,7 @@ public abstract class Agent
         };
 
         Turn turn = new(thread, opts, ariResponse, trace, NewTurnState(), onDelta);
+        turn.Control = userDelta;
 
         // ── Token budgets ─────────────────────────────────────────────────────
         // The global reasoning-effort dial scales the thinking cap universally: low ×1 (anchor), medium ×2.5,
@@ -1380,6 +1457,8 @@ public abstract class Agent
         if (string.IsNullOrEmpty(deltaText)) return;
 
         turn.ResponseBuilder.Append(deltaText);
+        await ApplyPendingEdits(turn, thread, waitForAnimation: false);
+        StartLiveReflect(turn, thread);
         if (thread.LiveCall is { } lc) lc.EstimatedOutputTokens = turn.ResponseBuilder.Length / CHARS_PER_TOKEN;
 
         // Reply budget, counted over visible prose only: reasoning, tool markers and diff payloads never draw from it.
