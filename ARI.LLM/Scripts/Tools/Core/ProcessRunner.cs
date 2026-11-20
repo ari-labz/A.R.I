@@ -197,6 +197,10 @@ internal static class ShellJobs
         internal required int Id; internal required string Command; internal required DateTime Started;
         internal required Process Process; internal readonly StringBuilder Output = new();
         internal bool Running => !Process.HasExited;
+        /// <summary>The conversation that started it, woken when the job finishes or prints what it was told to watch for.</summary>
+        internal string? ThreadKey;
+        internal string? NotifyWhen;
+        internal bool Watched, Stopped;
     }
 
     private static readonly ConcurrentDictionary<int, Job> jobs = new();
@@ -204,12 +208,31 @@ internal static class ShellJobs
 
     static ShellJobs() => AppDomain.CurrentDomain.ProcessExit += (_, _) => { foreach (Job j in jobs.Values) try { if (j.Running) j.Process.Kill(entireProcessTree: true); } catch { } };
 
-    internal static Job Start(ProcessStartInfo psi, string command)
+    internal static Job Start(ProcessStartInfo psi, string command, string? threadKey = null, string? notifyWhen = null)
     {
         Process p = Process.Start(psi)!;
-        Job job = new() { Id = Interlocked.Increment(ref next), Command = command, Started = DateTime.Now, Process = p };
-        p.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (job.Output) { job.Output.AppendLine(e.Data); if (job.Output.Length > 200_000) job.Output.Remove(0, 50_000); } };
-        p.ErrorDataReceived  += (_, e) => { if (e.Data is not null) lock (job.Output) { job.Output.AppendLine(e.Data); if (job.Output.Length > 200_000) job.Output.Remove(0, 50_000); } };
+        Job job = new() { Id = Interlocked.Increment(ref next), Command = command, Started = DateTime.Now, Process = p, ThreadKey = threadKey, NotifyWhen = string.IsNullOrWhiteSpace(notifyWhen) ? null : notifyWhen.Trim() };
+        void Line(string? data)
+        {
+            if (data is null) return;
+            lock (job.Output) { job.Output.AppendLine(data); if (job.Output.Length > 200_000) job.Output.Remove(0, 50_000); }
+            // An output watch fires once, on the first line that contains the text.
+            if (job.ThreadKey is not null && job.NotifyWhen is not null && !job.Watched && data.Contains(job.NotifyWhen, StringComparison.OrdinalIgnoreCase))
+            {
+                job.Watched = true;
+                ParentReports.Send(job.ThreadKey, $"shell #{job.Id}", $"[Background job {job.Id} printed what you were watching for: \"{job.NotifyWhen}\"]\n{Tail(job, 1500)}");
+            }
+        }
+        p.OutputDataReceived += (_, e) => Line(e.Data);
+        p.ErrorDataReceived  += (_, e) => Line(e.Data);
+        // A job that ends by itself wakes the conversation that started it; one she stopped on purpose doesn't.
+        p.EnableRaisingEvents = true;
+        p.Exited += (_, _) =>
+        {
+            if (job.ThreadKey is null || job.Stopped) return;
+            System.Threading.Thread.Sleep(300);   // let the last lines of output arrive
+            ParentReports.Send(job.ThreadKey, $"shell #{job.Id}", $"[Background job {job.Id} finished (exit {job.Process.ExitCode}): {(job.Command.Length > 80 ? job.Command[..80] + "…" : job.Command)}]\n{Tail(job, 3000)}");
+        };
         p.BeginOutputReadLine(); p.BeginErrorReadLine();
         try { p.StandardInput.Close(); } catch { }
         jobs[job.Id] = job;

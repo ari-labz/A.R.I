@@ -17,8 +17,11 @@ public class Shell : Tool
     [Param("Give up after this many seconds. Default 60, at most 600.", Optional = true)]
     public int TimeoutSeconds = 60;
 
-    [Param("true to start it in the background and return at once. Use it for servers and long jobs, then check on it with the jobs tool.", Optional = true)]
+    [Param("true to start it in the background and return at once. Use it for servers and long jobs, then check on it with the jobs tool. You are woken when it finishes, so you don't need to poll.", Optional = true)]
     public bool Background;
+
+    [Param("Background only: text to watch for in its output, such as \"Listening on\" or \"error\". You are woken the first time a line contains it, even though the job is still running.", Optional = true)]
+    public string NotifyWhen;
 
     public override async Task<string> Run()
     {
@@ -29,7 +32,7 @@ public class Shell : Tool
         System.Diagnostics.ProcessStartInfo psi = ProcessRunner.ShellInfo(Command, cwd);
         if (Background)
         {
-            ShellJobs.Job job = ShellJobs.Start(psi, Command);
+            ShellJobs.Job job = ShellJobs.Start(psi, Command, CallThread?.Key, NotifyWhen);
             return $"Started job {job.Id} in the background. Check on it or stop it with the jobs tool (id \"shell #{job.Id}\").";
         }
         ProcessRunner.Result r = await ProcessRunner.Run(psi, TimeSpan.FromSeconds(Math.Clamp(TimeoutSeconds, 1, 600)), Cancelled);
@@ -56,6 +59,7 @@ public class ShellJob : Tool
         if (ShellJobs.Get(Id.Value) is not { } job) return Task.FromResult($"[Error: there is no job {Id}.]");
         if (Action == "kill")
         {
+            job.Stopped = true;   // stopped on purpose, so it doesn't wake her
             if (job.Running) try { job.Process.Kill(entireProcessTree: true); } catch { }
             return Task.FromResult($"Stopped job {job.Id}.");
         }
