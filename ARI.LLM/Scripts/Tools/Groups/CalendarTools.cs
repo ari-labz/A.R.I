@@ -52,6 +52,7 @@ internal sealed class CreateEvent : Tool
                     end          = new { type = "string", description = "ISO date/time the event ends. Can be a later day than start for a multi-day event." },
                     is_whole_day = new { type = "boolean", description = "True if this is an all-day event — start/end are still required (use midnight for both) but time-of-day is ignored." },
                     notes        = new { type = "string", description = "Optional free-text detail." },
+                    remind_before_minutes = new { type = "integer", description = "Optional. Have ARI message the owner this many minutes before the event starts (60 = an hour, 1440 = a day). Leave out for no reminder." },
                     repeat          = new { type = "string", @enum = new[] { "none", "daily", "weekly", "monthly", "yearly" }, description = "How this repeats. 'none' (default) never repeats." },
                     repeat_interval = new { type = "integer", description = "Repeat every N units of `repeat` (e.g. 2 with 'weekly' = every 2 weeks). Defaults to 1." },
                     repeat_days     = new { type = "array", items = new { type = "string", @enum = new[] { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" } }, description = "Only for 'weekly': which days it lands on, e.g. every weekday = [Monday..Friday]." },
@@ -75,7 +76,8 @@ internal sealed class CreateEvent : Tool
         bool isWholeDay = root.TryGetProperty("is_whole_day", out JsonElement w) && w.ValueKind == JsonValueKind.True;
         string? notes = root.TryGetProperty("notes", out JsonElement n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
 
-        long id = calendar.CreateEvent(title, start, end, isWholeDay, notes, CalendarRecurrence.FromArgs(root));
+        int? remind = root.TryGetProperty("remind_before_minutes", out JsonElement rm) && rm.ValueKind == JsonValueKind.Number && rm.TryGetInt32(out int rmv) && rmv > 0 ? rmv : null;
+        long id = calendar.CreateEvent(title, start, end, isWholeDay, notes, CalendarRecurrence.FromArgs(root), remind);
         return Task.FromResult<ToolResult>($"Created event '{title}' [{id}] ({start:g} - {end:g}).");
     }
 }

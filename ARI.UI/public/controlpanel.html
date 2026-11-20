@@ -1179,6 +1179,16 @@ body.cp-win32 #cp-win-controls { display: flex; }
             </div>
           </div>
 
+          <!-- Remind me (events) -->
+          <div id="cal-f-remind-fields" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;"><input id="cal-f-remind" type="checkbox" style="width:15px;height:15px;"> Remind me</label>
+            <span id="cal-f-remind-detail" style="display:none;align-items:center;gap:6px;">
+              <input id="cal-f-remind-n" class="vs-input" type="number" min="1" value="15" style="width:70px;">
+              <select id="cal-f-remind-unit" class="vs-input"><option value="1">minutes</option><option value="60">hours</option><option value="1440">days</option></select>
+              before it starts
+            </span>
+          </div>
+
           <!-- Reminder-only fields -->
           <div id="cal-f-reminder-fields">
             <label style="font-size:12px;color:var(--text-dim);">Trigger time
@@ -2709,6 +2719,7 @@ function wireCalendarOnce() {
     document.getElementById('cal-modal-overlay').addEventListener('click', e => { if (e.target.id === 'cal-modal-overlay') closeCalModal(); });
     document.getElementById('cal-f-repeat').addEventListener('change', calUpdateRepeatVisibility);
     document.getElementById('cal-f-wholeday').addEventListener('change', calUpdateWholeDayFields);
+    document.getElementById('cal-f-remind').addEventListener('change', e => { document.getElementById('cal-f-remind-detail').style.display = e.target.checked ? 'inline-flex' : 'none'; });
     dtpInit();
     document.getElementById('cal-f-start').addEventListener('click', () => dtpOpen(document.getElementById('cal-f-start')));
     document.getElementById('cal-f-end').addEventListener('click', () => dtpOpen(document.getElementById('cal-f-end')));
@@ -2926,6 +2937,7 @@ function openCalModal(kind, item, defaultDate, timeRange) {
 
     document.getElementById('cal-modal-title').textContent   = (item ? 'Edit ' : 'New ') + (kind === 'reminder' ? 'Reminder' : 'Event');
     document.getElementById('cal-f-event-fields').style.display    = kind === 'event'    ? '' : 'none';
+    document.getElementById('cal-f-remind-fields').style.display   = kind === 'event'    ? 'flex' : 'none';
     document.getElementById('cal-f-reminder-fields').style.display = kind === 'reminder' ? '' : 'none';
     document.getElementById('cal-f-delete').style.display = item ? '' : 'none';
     document.getElementById('cal-modal-status').textContent = '';
@@ -2937,6 +2949,14 @@ function openCalModal(kind, item, defaultDate, timeRange) {
     base.setHours(9, 0, 0, 0);
     if (kind === 'event') {
         document.getElementById('cal-f-wholeday').checked = item ? !!item.isWholeDay : false;
+        {
+            const m = item && item.remindBeforeMinutes ? item.remindBeforeMinutes : 0;
+            const unit = m && m % 1440 === 0 ? 1440 : m && m % 60 === 0 ? 60 : 1;
+            document.getElementById('cal-f-remind').checked = !!m;
+            document.getElementById('cal-f-remind-n').value = m ? m / unit : 15;
+            document.getElementById('cal-f-remind-unit').value = String(unit);
+            document.getElementById('cal-f-remind-detail').style.display = m ? 'inline-flex' : 'none';
+        }
         const rangeStart = item ? item._start : (timeRange ? timeRange.start : base);
         const rangeEnd   = item ? item._end   : (timeRange ? timeRange.end   : new Date(base.getTime() + 60 * 60 * 1000));
         // Always populate as datetime first — calUpdateWholeDayFields() below switches the fields to
@@ -3343,6 +3363,7 @@ async function saveCalModal() {
             start: wholeDay ? `${start}T00:00:00` : start + ':00',
             end:   wholeDay ? `${end}T00:00:00`   : end + ':00',
             isWholeDay: wholeDay,
+            remindBeforeMinutes: document.getElementById('cal-f-remind').checked ? Math.max(1, parseInt(document.getElementById('cal-f-remind-n').value, 10) || 1) * parseInt(document.getElementById('cal-f-remind-unit').value, 10) : 0,
             recurrence: calBuildRecurrencePayload(),
         };
     } else {

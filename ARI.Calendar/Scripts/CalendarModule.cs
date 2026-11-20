@@ -39,7 +39,7 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await CheckDueReminders(ct); }
+            try { await CheckDueReminders(ct); await CheckEventReminders(ct); }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { logger.LogError(ex, "[Calendar] Reminder loop error."); }
 
@@ -56,9 +56,9 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
 
     // ── ICalendarModule ──────────────────────────────────────────────────────────────
 
-    public long CreateEvent(string title, DateTime start, DateTime end, bool isWholeDay, string? notes, RecurrenceInfo? recurrence)
+    public long CreateEvent(string title, DateTime start, DateTime end, bool isWholeDay, string? notes, RecurrenceInfo? recurrence, int? remindBeforeMinutes = null)
     {
-        Event calendarEvent = new(title, start, end, isWholeDay, notes, RecurrenceRule.FromInfo(recurrence));
+        Event calendarEvent = new(title, start, end, isWholeDay, notes, RecurrenceRule.FromInfo(recurrence), remindBeforeMinutes is > 0 ? remindBeforeMinutes : null);
         long id = Database.InsertEvent(calendarEvent);
         logger.LogInformation("[Calendar] Created event '{Title}' ({Start:u} - {End:u}).", title, start, end);
         return id;
@@ -117,11 +117,11 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
         return reminder is null ? null : ToInfo(reminder);
     }
 
-    public bool UpdateEvent(long id, string title, DateTime start, DateTime end, bool isWholeDay, string? notes, RecurrenceInfo? recurrence)
+    public bool UpdateEvent(long id, string title, DateTime start, DateTime end, bool isWholeDay, string? notes, RecurrenceInfo? recurrence, int? remindBeforeMinutes = null)
     {
         Event? existing = Database.EventById(id);
         if (existing is null) return false;
-        Event updated = new(title, start, end, isWholeDay, notes, RecurrenceRule.FromInfo(recurrence)) { Id = id };
+        Event updated = new(title, start, end, isWholeDay, notes, RecurrenceRule.FromInfo(recurrence), remindBeforeMinutes is > 0 ? remindBeforeMinutes : null) { Id = id };
         Database.UpdateEvent(updated);
         return true;
     }
@@ -157,6 +157,31 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
 
     /// <summary>Checks every reminder for a due occurrence and fires it through a real agent turn.
     /// Called from the reminder loop started by Start(); public so it can also be triggered manually.</summary>
+    /// <summary>Events with "remind me" set: shortly before each start, ARI reaches out once.</summary>
+    private async Task CheckEventReminders(CancellationToken ct)
+    {
+        if (Modules.Llm is null) return;
+        DateTime now = DateTime.Now;
+        foreach (Event e in Database.AllEvents().Where(x => x.RemindBeforeMinutes is > 0))
+        {
+            TimeSpan lead = TimeSpan.FromMinutes(e.RemindBeforeMinutes!.Value);
+            foreach (CalendarEventInfo occ in OccurrencesInRange(e, now, now + lead + TimeSpan.FromMinutes(1)))
+            {
+                if (occ.Start <= now || occ.Start - lead > now) continue;   // already started, or not yet within the lead time
+                string key = occ.Start.ToString("o");
+                if (Database.LastRemindedStart(e.Id) == key) continue;
+                Database.MarkEventReminded(e.Id, key);
+                string when = occ.IsWholeDay ? "today" : $"at {occ.Start:t}";
+                string prompt = $"Give the owner a short heads-up that \"{e.Title}\" starts {when}, about {Describe(occ.Start - now)} from now. Plain and brief; add anything from the event's notes only if it helps.";
+                try { await Modules.Llm.FireReminderAsync(prompt, e.Notes ?? string.Empty, e.Title, ct); }
+                catch (Exception ex) { logger.LogError(ex, "[Calendar] Heads-up for '{Title}' failed.", e.Title); }
+                logger.LogInformation("[Calendar] Heads-up sent for '{Title}' ({Start:u}).", e.Title, occ.Start);
+            }
+        }
+    }
+
+    private static string Describe(TimeSpan t) => t.TotalHours >= 24 ? $"{Math.Round(t.TotalDays)} day(s)" : t.TotalMinutes >= 90 ? $"{Math.Round(t.TotalHours)} hour(s)" : $"{Math.Max(1, (int)Math.Round(t.TotalMinutes))} minute(s)";
+
     public async Task CheckDueReminders(CancellationToken ct)
     {
         List<Reminder> due = Database.AllReminders().Where(r => r.IsDue(DateTime.Now)).ToList();
@@ -220,7 +245,7 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
     private static bool Overlaps(DateTime aStart, DateTime aEnd, DateTime bStart, DateTime bEnd) => aStart < bEnd && aEnd >= bStart;
 
     private static CalendarEventInfo ToInfo(Event calendarEvent, DateTime start, DateTime end) =>
-        new(calendarEvent.Id, calendarEvent.Title, calendarEvent.Notes, start, end, calendarEvent.IsWholeDay, calendarEvent.Recurrence.ToInfo());
+        new(calendarEvent.Id, calendarEvent.Title, calendarEvent.Notes, start, end, calendarEvent.IsWholeDay, calendarEvent.Recurrence.ToInfo(), calendarEvent.RemindBeforeMinutes);
 
     private static ReminderInfo ToInfo(Reminder reminder) =>
         new(reminder.Id, reminder.Title, reminder.Notes, reminder.TriggerTime, reminder.Prompt, reminder.Context, reminder.Recurrence.ToInfo());

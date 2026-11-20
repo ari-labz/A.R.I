@@ -18,7 +18,8 @@ public class CalendarController : ControllerBase
     public sealed record EntryBody(
         string? Kind, string? Title, string? Notes, RecurrenceBody? Recurrence,
         DateTime? Start, DateTime? End, bool? IsWholeDay,
-        DateTime? TriggerTime, string? Prompt, string? Context);
+        DateTime? TriggerTime, string? Prompt, string? Context,
+        int? RemindBeforeMinutes = null);
 
     /// <summary>Either pass `from`/`to` to browse an explicit window (what the control panel's month/week/day views use),
     /// or `days` to look forward/back from today (the default, 42).</summary>
@@ -61,7 +62,7 @@ public class CalendarController : ControllerBase
         {
             case "event":
                 if (body.Start is null || body.End is null) return BadRequest(new { error = "start and end are required." });
-                return Ok(new { id = calendar.CreateEvent(body.Title, body.Start.Value, body.End.Value, body.IsWholeDay ?? false, body.Notes, FromBody(body.Recurrence)) });
+                return Ok(new { id = calendar.CreateEvent(body.Title, body.Start.Value, body.End.Value, body.IsWholeDay ?? false, body.Notes, FromBody(body.Recurrence), body.RemindBeforeMinutes) });
             case "reminder":
                 if (body.TriggerTime is null) return BadRequest(new { error = "triggerTime is required." });
                 if (string.IsNullOrWhiteSpace(body.Prompt)) return BadRequest(new { error = "prompt is required." });
@@ -82,7 +83,8 @@ public class CalendarController : ControllerBase
         if (calendar.GetEvent(id) is { } e)
         {
             bool ok = calendar.UpdateEvent(id, body.Title ?? e.Title, body.Start ?? e.Start, body.End ?? e.End,
-                body.IsWholeDay ?? e.IsWholeDay, body.Notes ?? e.Notes, body.Recurrence is null ? e.Recurrence : FromBody(body.Recurrence));
+                body.IsWholeDay ?? e.IsWholeDay, body.Notes ?? e.Notes, body.Recurrence is null ? e.Recurrence : FromBody(body.Recurrence),
+                body.RemindBeforeMinutes is { } rb ? rb : e.RemindBeforeMinutes);
             return ok ? Ok(new { ok = true }) : NotFound(new { error = "No such calendar entry." });
         }
         if (calendar.GetReminder(id) is { } r)
@@ -133,7 +135,7 @@ public class CalendarController : ControllerBase
     private static object ToJson(CalendarEventInfo e) => new
     {
         id = e.Id, kind = "event", title = e.Title, notes = e.Notes, start = e.Start, end = e.End,
-        isWholeDay = e.IsWholeDay, recurrence = ToJson(e.Recurrence),
+        isWholeDay = e.IsWholeDay, recurrence = ToJson(e.Recurrence), remindBeforeMinutes = e.RemindBeforeMinutes,
     };
 
     private static object ToJson(ReminderInfo r) => new
