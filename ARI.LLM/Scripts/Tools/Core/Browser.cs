@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ARI.Common;
 using Microsoft.Extensions.Logging;
 using PuppeteerSharp;
@@ -252,6 +253,68 @@ internal static class BrowserHost
         catch (Exception e) { errors.Add(e.Message.Split('\n')[0]); }
         finally { try { await page.CloseAsync(); } catch { } }
         return errors.Distinct().Take(6).ToList();
+    }
+
+    // A clock the page can't tell from the real one, which only moves when __ariSeek is called: requestAnimationFrame, timers,
+    // performance.now and Date.now all follow it, and CSS animations and transitions are paused and set to the same moment. So a frame
+    // at 400 ms is exactly what the page shows 400 ms in, however long the screenshot takes.
+    private const string VirtualClock = """
+        () => {
+          let now = 0, ids = 0; const start = Date.now(), rafs = new Map(), timers = [], born = new WeakMap();
+          performance.now = () => now; Date.now = () => start + now;
+          window.requestAnimationFrame = cb => { rafs.set(++ids, cb); return ids; };
+          window.cancelAnimationFrame = id => rafs.delete(id);
+          const add = (cb, ms, every, args) => { const id = ++ids; timers.push({ id, at: now + (+ms || 0), every, cb: () => typeof cb === 'function' && cb(...args) }); return id; };
+          window.setTimeout  = (cb, ms, ...a) => add(cb, ms, 0, a);
+          window.setInterval = (cb, ms, ...a) => add(cb, ms, Math.max(1, +ms || 1), a);
+          window.clearTimeout = window.clearInterval = id => { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); };
+          const settle = () => { for (const a of document.getAnimations()) { if (!born.has(a)) born.set(a, now); try { a.pause(); a.currentTime = Math.max(0, now - born.get(a)); } catch {} } };
+          window.__ariSeek = target => {
+            settle();
+            while (now < target) {
+              now = Math.min(target, now + 16);
+              timers.sort((a, b) => a.at - b.at);
+              while (timers.length && timers[0].at <= now) { const t = timers.shift(); try { t.cb(); } catch {} if (t.every) { t.at += t.every; timers.push(t); } }
+              const due = [...rafs.values()]; rafs.clear(); for (const cb of due) try { cb(now); } catch {}
+              settle();
+            }
+          };
+        }
+        """;
+
+    /// <summary>The page at each moment (ms from load), laid out as one labelled contact sheet, plus any errors the page raised.</summary>
+    internal static async Task<(byte[] Sheet, List<string> Errors)> RenderFrames(string html, IReadOnlyList<int> times, int width, int height)
+    {
+        List<string> errors = new();
+        IPage page;
+        await gate.WaitAsync();
+        try { page = await (await Launch()).NewPageAsync(); } finally { gate.Release(); }
+        try
+        {
+            page.PageError += (_, e) => errors.Add(e.Message.Split('\n')[0]);
+            await page.SetViewportAsync(new ViewPortOptions { Width = width, Height = height });
+            // SetContent writes into the open document rather than loading a new one, so the clock goes in as the page's first script.
+            string clock = $"<script>({VirtualClock})()</script>";
+            Match head = Regex.Match(html, @"<head[^>]*>|<html[^>]*>", RegexOptions.IgnoreCase);
+            html = head.Success ? html.Insert(head.Index + head.Length, clock) : clock + html;
+            await page.SetContentAsync(html, new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.Load }, Timeout = 15_000 });
+            List<string> shots = new();
+            foreach (int t in times)
+            {
+                await page.EvaluateFunctionAsync("t => window.__ariSeek(t)", t);
+                shots.Add(await page.ScreenshotBase64Async(new ScreenshotOptions { Type = ScreenshotType.Png }));
+            }
+
+            int columns = times.Count <= 4 ? times.Count : times.Count <= 9 ? 3 : 4;
+            int cell = Math.Min(width, 1600 / columns);
+            StringBuilder sheet = new($"<body style=\"margin:0;padding:12px;background:#101618;font:12px system-ui;color:#cadde2;display:grid;grid-template-columns:repeat({columns},{cell}px);gap:12px\">");
+            for (int i = 0; i < shots.Count; i++)
+                sheet.Append($"<figure style=\"margin:0\"><img src=\"data:image/png;base64,{shots[i]}\" style=\"width:{cell}px;display:block;border:1px solid #33464d\"><figcaption style=\"padding-top:4px\">#{i + 1} · {times[i]} ms</figcaption></figure>");
+            await page.SetViewportAsync(new ViewPortOptions { Width = columns * (cell + 12) + 12, Height = 200 });
+            await page.SetContentAsync(sheet + "</body>");
+            return (await page.ScreenshotDataAsync(new ScreenshotOptions { Type = ScreenshotType.Png, FullPage = true }), errors.Distinct().Take(6).ToList());
+        }
+        finally { try { await page.CloseAsync(); } catch { } }
     }
 
     internal static async Task Close(string conversation)

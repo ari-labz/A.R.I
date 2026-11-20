@@ -42,6 +42,7 @@ internal static class ToolFactories
         ["write_pdf"]      = t => With<WritePdf>(t),
         ["make_chart"]     = t => With<MakeChart>(t),
         ["show_visual"]    = t => t.Medium == ThreadMedium.Channel ? null : new ShowVisual(t),
+        ["preview_animation"] = t => new PreviewAnimation(t),
         ["archive"]        = t => With<Archive>(t),
         ["ocr"]            = t => With<Ocr>(t),
         ["edit_image"]     = t => With<EditImage>(t),
