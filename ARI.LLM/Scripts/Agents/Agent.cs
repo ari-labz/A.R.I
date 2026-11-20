@@ -65,6 +65,8 @@ public abstract class Agent
     private const double TOKEN_WARNING_RATIO = 0.8;
     private const int    COMPACT_KEEP_RECENT = 3;   // never stub the N most recent tool outputs
     private const int    MAX_DEGRADE_EVENTS  = 5;
+    private const int    MAX_BUDGET_CONTINUES = 3;   // a spent reply budget is continued this many times before the turn ends
+    private const double BUDGET_GRACE        = 1.25; // past this share of the budget it stops even mid-sentence
     private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
     private const int    MAX_IMAGES_SHOWN    = 4;
@@ -310,6 +312,9 @@ public abstract class Agent
         internal int MaxTokens;       // == RespBudget — the reply's own ceiling, never a think+reply sum
         internal int ContentTokens;   // running estimate of reply tokens only (reasoning excluded)
         internal bool ReplyBudgetHit; // reply reached RespBudget — stop the step, keep what was written
+        internal int  VisibleChars;      // prose already committed to the reply this window; tool markers, diffs and reasoning never count
+        internal bool BudgetReached;     // the budget is spent — stop at the next sentence end instead of mid-thought
+        internal int  BudgetContinues;   // how many times a spent budget was answered with "keep going"
 
         // ── System block ─────────────────────────────────────────────────────
         internal string BaseSystem   = "";
@@ -941,6 +946,7 @@ public abstract class Agent
         turn.RunawayCall      = null;
         turn.ContentRunaway   = false;
         turn.ReplyBudgetHit   = false;
+        turn.BudgetReached    = false;
         turn.SteeringRedirect = false;
         turn.ThinkingRedirect = false;
         turn.TextToolLeak     = false;
@@ -1141,6 +1147,7 @@ public abstract class Agent
                 if (!isLeakedToolCall && preText.Length > 0)
                 {
                     turn.ContentBuilder.Append(preText + "\n");
+                    turn.VisibleChars += preText.Length;
                     if (turn.OnTextDelta is not null) turn.TextOnlyBuilder.Append(preText + "\n");
                     if (turn.LiveText is not null) { turn.Trace.Remove(turn.LiveText); turn.LiveText = null; }
                     turn.Trace.Add(new TraceStep { Kind = "text", Text = preText });
@@ -1295,16 +1302,22 @@ public abstract class Agent
         turn.ResponseBuilder.Append(deltaText);
         if (thread.LiveCall is { } lc) lc.EstimatedOutputTokens = turn.ResponseBuilder.Length / CHARS_PER_TOKEN;
 
-        // Reply budget, counted over content only — reasoning never draws from it. Replaces the old
-        // summed max_tokens, which let a long think starve the answer.
+        // Reply budget, counted over visible prose only: reasoning, tool markers and diff payloads never draw from it.
+        // Once spent it stops at the next sentence end (or well past the budget), so a reply is never cut mid-thought.
         if (turn.RespBudget > 0)
         {
-            turn.ContentTokens = (turn.ContentBuilder.Length + turn.ResponseBuilder.Length) / CHARS_PER_TOKEN;
-            if (turn.ContentTokens >= turn.RespBudget)
+            turn.ContentTokens = (turn.VisibleChars + turn.ResponseBuilder.Length) / CHARS_PER_TOKEN;
+            if (turn.ContentTokens >= turn.RespBudget) turn.BudgetReached = true;
+            if (turn.BudgetReached)
             {
-                Shared.Logger.LogWarning("[{Agent}] ({Thread}) reply budget reached ({N}/{B} tokens) — ending generation.",
-                    Name, thread.Key, turn.ContentTokens, turn.RespBudget);
-                turn.ReplyBudgetHit = true;
+                string trimmed = deltaText.TrimEnd();
+                bool sentenceEnd = deltaText.EndsWith('\n') || trimmed.EndsWith('.') || trimmed.EndsWith('!') || trimmed.EndsWith('?');
+                if (sentenceEnd || turn.ContentTokens >= turn.RespBudget * BUDGET_GRACE)
+                {
+                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) reply budget reached ({N}/{B} tokens) — ending generation.",
+                        Name, thread.Key, turn.ContentTokens, turn.RespBudget);
+                    turn.ReplyBudgetHit = true;
+                }
             }
         }
         if (!turn.TextToolLeak && turn.PendingCalls.Count == 0 && turn.TextToolLeakRetries < 3
@@ -1424,6 +1437,24 @@ public abstract class Agent
         // long, so everything written is kept and the turn ends here — no tool round-trip, no retry.
         if (turn.ReplyBudgetHit)
         {
+            if (turn.BudgetContinues < MAX_BUDGET_CONTINUES && turn.ResponseBuilder.Length > 0)
+            {
+                // Backstop: a long answer is not cut off. What was written is kept, and the model is asked to carry on.
+                string written = turn.ResponseBuilder.ToString().TrimEnd();
+                turn.ContentBuilder.Append(written + "\n\n");
+                if (turn.OnTextDelta is not null) turn.TextOnlyBuilder.Append(written + "\n\n");
+                if (turn.LiveText is not null) { turn.Trace.Remove(turn.LiveText); turn.LiveText = null; }
+                turn.Trace.Add(new TraceStep { Kind = "text", Text = written });
+                turn.ResponseBuilder.Clear();
+                turn.VisibleChars   = 0;
+                turn.BudgetReached  = false;
+                turn.BudgetContinues++;
+                turn.Messages.Add(new { role = "assistant", content = written });
+                turn.Messages.Add(new { role = "user", content = "[Continue exactly where you left off. Do not repeat anything or start over.]" });
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) reply budget spent — continuing ({N}/{M}).", Name, thread.Key, turn.BudgetContinues, MAX_BUDGET_CONTINUES);
+                if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
+                return;
+            }
             turn.FinishReason = "length";
             turn.IsStreaming  = false;
             return;
@@ -1473,7 +1504,7 @@ public abstract class Agent
             if (turn.ResponseBuilder.Length > 0)
             {
                 string preText = turn.ResponseBuilder.ToString().TrimEnd();
-                if (preText.Length > 0) turn.ContentBuilder.Append(preText + "\n");
+                if (preText.Length > 0) { turn.ContentBuilder.Append(preText + "\n"); turn.VisibleChars += preText.Length; }
             }
 
             turn.Messages.Add(new { role = "assistant", tool_calls = new[]
