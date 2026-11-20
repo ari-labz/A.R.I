@@ -83,6 +83,7 @@ internal static class ToolFactories
         ["search_brain"]   = _ => new SearchBrain(),
         ["memories_on"]    = _ => new MemoriesOn(),
         ["recall_memory"]  = t => new RecallMemory(t),
+        ["ask_memory"]     = t => new AskMemory(t),
         ["create_memory"]  = _ => Brain.Ready ? new CreateMemory() : null,
         ["edit_memory"]    = _ => Brain.Ready ? new EditMemory() : null,
         ["delete_memory"]  = _ => Brain.Ready ? new DeleteMemory() : null,
@@ -232,7 +233,7 @@ internal static class ToolFactories
     // Tools that reach the Master's own life, so anyone else she talks to never gets them.
     private static readonly HashSet<string> MASTER_ONLY_TOOLS = new(StringComparer.OrdinalIgnoreCase)
     {
-        "search_brain", "recall_memory", "memories_on", "create_memory", "edit_memory", "delete_memory", "neighbours",
+        "search_brain", "recall_memory", "ask_memory", "memories_on", "create_memory", "edit_memory", "delete_memory", "neighbours",
         "create_event", "create_reminder", "list_events", "delete_entry", "propose_persona_edit",
         "list_projects", "create_project", "rename_project", "bind_project", "set_project_path",
         "git", "git_clone",

@@ -291,6 +291,7 @@ public class LLMModule : ILLMModule, IDisposable
             if (mem.HopLimit > 0)
             {
                 memory = mem;
+                Memory.Current = mem;
                 agentMap["Memory"] = memory;
                 _logger.LogInformation("Memory agent is active. Hop limit: {HopLimit}.", memory.HopLimit);
             }

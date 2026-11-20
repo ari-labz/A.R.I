@@ -46,7 +46,7 @@ public static class ToolRegistry
 
     private static readonly Dictionary<string, string> ModuleOf = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["search_brain"] = "Brain", ["recall_memory"] = "Brain", ["memories_on"] = "Brain", ["create_memory"] = "Brain",
+        ["search_brain"] = "Brain", ["recall_memory"] = "Brain", ["ask_memory"] = "Brain", ["memories_on"] = "Brain", ["create_memory"] = "Brain",
         ["edit_memory"] = "Brain", ["delete_memory"] = "Brain", ["neighbours"] = "Brain",
         ["create_event"] = "Calendar", ["create_reminder"] = "Calendar", ["list_events"] = "Calendar", ["delete_entry"] = "Calendar",
         ["generate_image"] = "ImageGen", ["present_image"] = "ImageGen",
@@ -92,7 +92,7 @@ public static class ToolRegistry
     private static readonly HashSet<string> DefaultPinned = new(StringComparer.OrdinalIgnoreCase)
     {
         "read_file", "write_file", "edit_file", "list_directory", "search_files", "find_files", "deliver_file", "jobs",
-        "search_web", "fetch_page", "shell", "run_code", "todo", "show_visual", "search_brain", "recall_memory",
+        "search_web", "fetch_page", "shell", "run_code", "todo", "show_visual", "search_brain", "recall_memory", "ask_memory",
     };
 
     internal static bool IsPinned(string name)
