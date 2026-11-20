@@ -1341,7 +1341,7 @@ export default function App() {
         }
 
         runStream()
-    }, [isStreaming, pendingAttach, items.length, mode, loadThreads, selectedProject, selectedPipeline, injectFileTree, openToolSocket])
+    }, [isStreaming, pendingAttach, items.length, mode, loadThreads, selectedProject, selectedPipeline, injectFileTree, openToolSocket, pendingPersona, defaultPersona])
 
     // The plan-proposed card's "Accept & Build" button calls this global — it sends the deterministic
     // "[approve-plan]" signal, which the coding pipeline reads as approval (→ Development with the payload).
