@@ -476,7 +476,7 @@ button, a, input, select, textarea, label, [role="button"] {
        already shrinks smoothly as the keyboard opens, in step with the real available space,
        so that hack is gone — the composer stays where it is; only opening a thread moves it. */
     height: calc(var(--app-vh, 100dvh) * 0.44); flex-shrink: 0;
-    transition: height 0.65s ease-in-out, padding 0.65s ease-in-out, border-color 0.3s ease-in-out;
+    transition: height 0.65s ease-in-out, padding 0.65s ease-in-out, border-color 0.3s ease-in-out, transform .65s cubic-bezier(.65,0,.35,1);
     border-bottom: 1px solid transparent;
     overflow: hidden;
     background: var(--col-main-header-colour); z-index: 1;
@@ -1881,3 +1881,7 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 
 /* The title banner's line runs the full width of the screen, over the windows' side too. */
 #main.with-windows.active::after { content: ''; position: absolute; top: 67px; left: 0; right: 0; height: 1px; z-index: 2; pointer-events: none; background: var(--col-main-active-main-header-colour); }
+
+/* The ARI logo stays where it was while the chat slides left: the header shifts back by half the width the chat gave up. */
+#main.with-windows #main-header { transform: translateX(var(--header-shift, 0px)); overflow: visible; }
+#main.with-windows #chat-col { overflow: visible; }

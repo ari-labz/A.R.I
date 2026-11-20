@@ -99,6 +99,21 @@ export default function Main({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [liveEdits])
     const editsOpen = shownEdits.length > 0 && !leaving
+    // The chat column narrows to its content width as windows open; the header logo is shifted by half the difference so it stays put.
+    const mainRef = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+        const el = mainRef.current
+        if (!el) return
+        const measure = () => {
+            const colMax = parseFloat(getComputedStyle(el).getPropertyValue("--col-max")) || 760
+            const target = Math.min(el.clientWidth * 0.6, colMax + 48)
+            el.style.setProperty("--header-shift", `${(el.clientWidth - target) / 2}px`)
+        }
+        measure()
+        const ro = new ResizeObserver(measure)
+        ro.observe(el)
+        return () => ro.disconnect()
+    }, [])
     const sidebarFoldedForEdits = useRef(false)
     useEffect(() => {
         if (editsOpen && !sidebarCollapsed) { sidebarFoldedForEdits.current = true; onSetSidebarCollapsed(true) }
@@ -190,7 +205,7 @@ export default function Main({
     ].filter(Boolean).join(" ")
 
     return (
-        <div id="main" className={mainClasses}>
+        <div id="main" ref={mainRef} className={mainClasses}>
             {/* floating toggle when sidebar collapsed */}
             <button
                 id="topbar-toggle"
