@@ -144,7 +144,7 @@ internal static class ShellGate
     {
         if (thread is null || !thread.IsAdminChat) return "Only the owner, chatting in the app, can run commands.";
         if (AutoApprove) return null;
-        const string denied = "The owner didn't approve this, so it was not run. Ask them what they'd like instead.";
+        const string denied = "The owner didn't approve this, so it was not run. Treat that as a stop sign: ask them what they'd like instead. Do not try the same thing through another tool, a different command or smaller pieces.";
         if (!allowListed)
         {
             if (codeKey is not null)
