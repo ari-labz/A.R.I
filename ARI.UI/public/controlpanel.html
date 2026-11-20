@@ -3545,7 +3545,7 @@ document.getElementById('brain-refresh-btn').addEventListener('click', () => { b
 async function loadBrainProposals() {
     const box = document.getElementById('brain-prop-list'); let items = [];
     try { const r = await cpFetch('/api/v1/admin/brain/proposals'); if (r.ok) items = await r.json(); } catch {}
-    const say = p => p.kind === 'merge' ? `Merge <b>${escHtml(p.a)}</b> into <b>${escHtml(p.b)}</b>` : p.kind === 'type' ? `Mark <b>${escHtml(p.a)}</b> as a ${escHtml(p.value)}` : `Link <b>${escHtml(p.b)}</b> to <b>${escHtml(p.a)}</b>`;
+    const say = p => p.kind === 'merge' ? `Merge <b>${escHtml(p.a)}</b> into <b>${escHtml(p.b)}</b>` : p.kind === 'type' ? `Mark <b>${escHtml(p.a)}</b> as a ${escHtml(p.value)}` : p.kind === 'stale' ? `In <b>${escHtml(p.a)}</b>, change <s>${escHtml(p.b)}</s> to <b>${escHtml(p.value)}</b>` : `Link <b>${escHtml(p.b)}</b> to <b>${escHtml(p.a)}</b>`;
     box.innerHTML = items.length ? items.map(p => `<div style="display:flex;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
         <span style="flex:1;min-width:0;">${say(p)}<span style="display:block;color:var(--text-dim);font-size:12px;">${escHtml(p.why || '')}</span></span>
         <button class="vs-btn-primary" type="button" data-bp="${p.id}" data-yes="1" style="font-size:12px;padding:4px 12px;">Approve</button>

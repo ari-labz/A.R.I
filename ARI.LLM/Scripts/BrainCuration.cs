@@ -11,7 +11,8 @@ public sealed class BrainProposal
 {
     public string   Id      { get; set; } = Guid.NewGuid().ToString("N")[..8];
     public DateTime Created { get; set; } = DateTime.UtcNow;
-    /// <summary>merge (fold note A into note B), type (give note A a type), link (link note B to note A, which nothing points at yet).</summary>
+    /// <summary>merge (fold note A into note B), type (give note A a type), link (link note B to note A, which nothing points at yet),
+    /// stale (note A says Ari can't do something her tools now cover: sentence B becomes Value).</summary>
     public string   Kind    { get; set; } = "";
     public string   A       { get; set; } = "";
     public string   B       { get; set; } = "";
@@ -94,6 +95,26 @@ internal static class BrainCuration
             fresh.Add(new BrainProposal { Kind = "link", A = t, B = from, Why = m.Groups["why"].Value.Trim() });
         }
 
+        // What she once couldn't do and now can: a note that says so keeps telling her she can't.
+        Regex cant = new(@"[^.\n]*\b(can't|cannot|can not|unable to|isn't able to|doesn't have (a|the) (way|ability)|no way to)\b[^.\n]*[.\n]?", RegexOptions.IgnoreCase);
+        string tools = string.Join(", ", ToolFactories.AllNames().OrderBy(n => n));
+        foreach (Note n in Brain.Search(["can't", "cannot", "unable", "ability"], 30).Select(r => r.Note).DistinctBy(n => n.Title))
+        {
+            if (fresh.Count >= max) break;
+            foreach (Match sm in cant.Matches(n.Content).Cast<Match>().Take(3))
+            {
+                string sentence = sm.Value.Trim();
+                if (sentence.Length < 12 || Seen(all, "stale", n.Title, sentence)) continue;
+                string answer = await Ask(model, $"A note in Ari's memory (Ari is an AI assistant) says:\n\"{sentence}\"\n\nFrom the note \"{n.Title}\":\n{Clip(n.Content)}\n\n" +
+                    $"Ari's tools today are: {tools}.\n\nIs this sentence about something ARI herself can't do, which one of those tools now lets her do? " +
+                    "If yes, answer exactly: STALE | <the sentence rewritten to be true now, same voice, no tool names> | <one-sentence reason naming the tool>. Otherwise answer exactly: FINE", ct);
+                Match m = Regex.Match(answer, @"STALE\s*\|\s*(?<fix>[^|]+)\|\s*(?<why>.+)", RegexOptions.IgnoreCase);
+                if (!m.Success) { all.Add(new BrainProposal { Kind = "stale", A = n.Title, B = sentence, Status = "dismissed", Why = "still true" }); continue; }
+                fresh.Add(new BrainProposal { Kind = "stale", A = n.Title, B = sentence, Value = m.Groups["fix"].Value.Trim(), Why = m.Groups["why"].Value.Trim() });
+                if (fresh.Count >= max) break;
+            }
+        }
+
         all.AddRange(fresh);
         Save(all);
         return fresh.Count;
@@ -128,6 +149,12 @@ internal static class BrainCuration
                         : body + $"\n\n## Related\n- [[{bare}]]\n";
                     Brain.EditNote(p.B, body, target.Aliases);
                     p.Result = $"\"{p.B}\" now links to \"{p.A}\".";
+                    break;
+                case "stale":
+                    Note old = Brain.GetNote(p.A) ?? throw new InvalidOperationException("the note is gone");
+                    if (!old.Content.Contains(p.B)) throw new InvalidOperationException("the note no longer says that");
+                    Brain.EditNote(p.A, old.Content.Replace(p.B, p.Value), old.Aliases);
+                    p.Result = $"\"{p.A}\" now says: {p.Value}";
                     break;
                 default: throw new InvalidOperationException("unknown kind");
             }
