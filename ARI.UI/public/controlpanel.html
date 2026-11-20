@@ -1456,6 +1456,17 @@ body.cp-win32 #cp-win-controls { display: flex; }
 
     <div id="tab-brain" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
+        <div class="vs-section-title">Browse the brain</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">The notes by folder, to read. Links open the note they point to. Nothing here changes the brain.</p>
+        <div style="display:flex;gap:16px;align-items:stretch;min-height:320px;max-height:560px;">
+          <div style="flex:0 0 260px;display:flex;flex-direction:column;gap:8px;min-width:0;">
+            <input id="bb-filter" type="search" placeholder="Filter notes…" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;">
+            <div id="bb-tree" style="flex:1;overflow:auto;font-size:13px;border:1px solid var(--border);border-radius:8px;padding:6px;"></div>
+          </div>
+          <div id="bb-note" style="flex:1;min-width:0;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-size:14px;line-height:1.55;color:var(--text);"><span style="color:var(--text-dim);">Pick a note.</span></div>
+        </div>
+      </div>
+      <div class="vs-section">
         <div class="vs-section-title">Engram sweep interval</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
           How many message exchanges an active conversation accumulates before Engram sweeps it into
@@ -1805,7 +1816,7 @@ function switchTab(name) {
     if (name === 'persona') { loadPersona(); loadReflectSettings(); }
     if (name === 'feedback') loadFeedback();
     if (name === 'models') loadModels();
-    if (name === 'brain') { loadBrain(); loadBrainProposals(); }
+    if (name === 'brain') { loadBrain(); loadBrainProposals(); loadBrainBrowser(); }
     if (name === 'servers') loadServers();
     if (name === 'pipelines' && !pipDirty) pipMode = 'list';   // the tab always opens on the list; Edit opens the editor
     if (name === 'agents' || name === 'pipelines') loadAgents();
@@ -3542,6 +3553,46 @@ document.getElementById('brain-backup-btn').addEventListener('click', async () =
 document.getElementById('brain-refresh-btn').addEventListener('click', () => { brainStatus().textContent = ''; loadBrain(); });
 
 // ── brain tidiness check ──────────────────────────────────
+// ── Brain browser (read-only) ─────────────────────────────────────────
+let bbNotes = [];
+async function loadBrainBrowser() {
+    const tree = document.getElementById('bb-tree');
+    try { const r = await cpFetch('/api/v1/admin/brain/notes'); bbNotes = r.ok ? await r.json() : []; } catch { bbNotes = []; }
+    if (!bbNotes.length) { tree.innerHTML = '<span style="color:var(--text-dim);">The brain is empty or not running.</span>'; return; }
+    renderBrainTree();
+    const f = document.getElementById('bb-filter');
+    if (!f.dataset.wired) { f.dataset.wired = '1'; f.addEventListener('input', renderBrainTree); }
+}
+function renderBrainTree() {
+    const q = document.getElementById('bb-filter').value.trim().toLowerCase();
+    const groups = {};
+    for (const n of bbNotes) {
+        if (q && !n.toLowerCase().includes(q)) continue;
+        const i = n.lastIndexOf('/'); const folder = i < 0 ? '' : n.slice(0, i);
+        (groups[folder] ||= []).push(n);
+    }
+    const folders = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+    document.getElementById('bb-tree').innerHTML = folders.map(f => `<details ${q || folders.length < 6 ? 'open' : ''}><summary style="cursor:pointer;font-weight:600;padding:2px 0;color:var(--text);">${escHtml(f || 'Top level')} <span style="color:var(--text-dim);font-weight:400;">${groups[f].length}</span></summary>` +
+        groups[f].map(n => `<div data-bb="${escHtml(n)}" style="cursor:pointer;padding:2px 0 2px 14px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(n.slice(n.lastIndexOf('/') + 1))}</div>`).join('') + '</details>').join('');
+    document.querySelectorAll('[data-bb]').forEach(el => el.addEventListener('click', () => openBrainNote(el.dataset.bb)));
+}
+async function openBrainNote(name) {
+    const box = document.getElementById('bb-note');
+    const r = await cpFetch('/api/v1/admin/brain/note?path=' + encodeURIComponent(name));
+    if (!r.ok) { box.innerHTML = '<span style="color:var(--text-dim);">That note isn\'t there.</span>'; return; }
+    const n = await r.json();
+    const linked = n.content.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => `<a href="#" data-bblink="${escHtml(target)}">${escHtml(label || target)}</a>`);
+    const meta = [n.type, n.sensitive ? 'private' : null, (n.keywords || []).filter(k => k.startsWith('#')).join(' ') || null].filter(Boolean).join(' · ');
+    box.innerHTML = `<div style="font-size:18px;font-weight:700;margin-bottom:2px;">${escHtml(n.title)}</div><div style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">${escHtml(n.name)}${meta ? ' · ' + escHtml(meta) : ''}</div>` + marked.parse(linked);
+    box.querySelectorAll('[data-bblink]').forEach(a => a.addEventListener('click', e => {
+        e.preventDefault();
+        const t = a.dataset.bblink.toLowerCase();
+        const hit = bbNotes.find(x => x.toLowerCase() === t) || bbNotes.find(x => x.toLowerCase().endsWith('/' + t));
+        if (hit) openBrainNote(hit);
+    }));
+    box.scrollTop = 0;
+}
+
 async function loadBrainProposals() {
     const box = document.getElementById('brain-prop-list'); let items = [];
     try { const r = await cpFetch('/api/v1/admin/brain/proposals'); if (r.ok) items = await r.json(); } catch {}

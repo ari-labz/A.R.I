@@ -32,6 +32,24 @@ public class BrainController : ControllerBase
         });
     }
 
+    /// <summary>Every note's name (folder/title), for browsing the brain by folder. Read-only.</summary>
+    [HttpGet("notes")]
+    public IActionResult Notes()
+    {
+        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
+        Brain.IndexIfChanged();
+        return Ok(Brain.GetPaths().Select(p => p.EndsWith(".md") ? p[..^3] : p).OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>One note to read: its title, type, whether it's private, and its text. Read-only.</summary>
+    [HttpGet("note")]
+    public IActionResult Note([FromQuery] string path)
+    {
+        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
+        if (Brain.GetNote(path ?? "") is not { } n) return NotFound(new { error = "No such note." });
+        return Ok(new { name = n.Name, title = n.Title, type = n.Type, sensitive = n.IsSensitive, aliases = n.Aliases, keywords = n.Keywords, content = n.Content });
+    }
+
     /// <summary>The curator's pending suggestions for the brain (merge, type, link).</summary>
     [HttpGet("proposals")]
     public IActionResult Proposals() => Ok(BrainCuration.List().Where(p => p.Status == "pending").OrderByDescending(p => p.Created));
