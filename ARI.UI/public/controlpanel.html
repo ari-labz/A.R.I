@@ -649,8 +649,15 @@ body.cp-win32 #cp-win-controls { display: flex; }
     <div id="tab-servers" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
         <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">LLM Servers</div>
-        <button class="vs-btn-primary" id="srv-add-btn" type="button" style="font-size:12px;padding:6px 16px;">+ New server</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="vs-btn-primary" id="srv-startall-btn" type="button" style="font-size:12px;padding:6px 14px;background:transparent;border:1px solid var(--border);color:var(--text);">Start all</button>
+          <button class="vs-btn-primary" id="srv-stopall-btn" type="button" style="font-size:12px;padding:6px 14px;background:transparent;border:1px solid var(--border);color:var(--text);">Stop all</button>
+          <button class="vs-btn-primary" id="srv-import-btn" type="button" style="font-size:12px;padding:6px 14px;background:transparent;border:1px solid var(--border);color:var(--text);">Import server…</button>
+          <input type="file" id="srv-import-file" accept=".json" style="display:none;">
+          <button class="vs-btn-primary" id="srv-add-btn" type="button" style="font-size:12px;padding:6px 16px;">+ New server</button>
+        </div>
       </div>
+      <div id="srv-machine" style="margin-bottom:16px;"></div>
       <div id="srv-cards" style="display:flex;flex-direction:column;gap:12px;"></div>
     </div>
 
@@ -5617,6 +5624,8 @@ async function loadServers() {
         data = await r.json();
     } catch(e) { console.error('[loadServers] fetch/parse error:', e); renderServerCards([]); return; }
     srvAllModels = data.models ?? [];
+    await srvLoadExtras();
+    renderMachinePanel(data.servers ?? []);
     renderServerCards(data.servers ?? []);
     clearTimeout(srvPollTimer);
     const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping' || s.download);
@@ -5722,9 +5731,17 @@ function buildServerCard(server) {
     }
 
     const sec = agSection(isNew ? 'New server' : server.name, { right: headerRight });
+    sec.head.style.flexWrap = 'wrap';
     sec.card.style.marginTop = '0';
     if (expanded) { sec.body.style.display = ''; sec.head.querySelector('span').textContent = '▼'; }
     if (!isNew) { const dlStrip = srvDownloadStrip(server); if (dlStrip) sec.card.firstElementChild.after(dlStrip); }
+    if (!isNew) {
+        const extra = agEl('div', 'display:flex;gap:6px;');
+        const mkBtn = (label, fn) => { const b = agEl('button', 'font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;', label); b.type = 'button'; b.addEventListener('click', e => { e.stopPropagation(); fn(); }); return b; };
+        extra.append(mkBtn('Logs', () => srvShowLogs(server)), mkBtn('Export', () => srvExport(server)));
+        headerRight.append(extra);
+        sec.card.firstElementChild.after(buildLaneView(server));
+    }
     if (!isNew) sec.card._srvRefs = { badge: headerRight.children[0], startBtn: headerRight.children[1], stopBtn: headerRight.children[2], restartBtn: headerRight.children[3] };
 
     if (expanded) renderServerCardBody(sec.body, draft, server, isNew);
@@ -5771,7 +5788,10 @@ function renderServerCardBody(body, draft, server, isNew) {
     // ── Sampler defaults ──
     const samplerSec = agSection('Sampler defaults', { note: '— the catch-all every agent falls back to' });
     samplerSec.card.classList.add('srv-subsection');
-    renderSamplerFields(samplerSec.body, draft, null);
+    const samplerFields = agEl('div', '');
+    samplerSec.body.append(samplerFields);
+    renderSamplerFields(samplerFields, draft, null);
+    buildSamplerProfileBar(samplerSec.body, draft, samplerFields);
 
     body.style.display = 'flex'; body.style.flexDirection = 'column'; body.style.gap = '10px';
     body.append(settingsSec.card, slotsSec.card, samplerSec.card);
@@ -5992,9 +6012,11 @@ function buildSlotsFields(body, draft, onChange) {
     body.append(list, addBtn, warn, hint);
 }
 
-function renderRamEstimate(box, draft) {
+// Weights and KV cache for one server's settings, in MB (null when the model's size or layout isn't known). Shared by the per-server
+// estimate and the machine-wide memory bar.
+function srvRamParts(draft) {
     const ctx     = draft.contextSize;
-    const slots   = Math.max(1, draft.slots.length);
+    const slots   = Math.max(1, (draft.slots ?? []).length);
     const kBits   = draft.kvCacheQuantK;
     const vBits   = draft.kvCacheQuantV;
     const kvSlots = draft.unifiedCache ? 1 : slots;
@@ -6014,6 +6036,11 @@ function renderRamEstimate(box, draft) {
         const quantScale = (kBits + vBits) / 32;
         kvMb = (ctx / 1024) * kvSlots * kvPerKtokPerSlotF16 * quantScale;
     }
+    return { weightsMb, kvMb };
+}
+
+function renderRamEstimate(box, draft) {
+    const { weightsMb, kvMb } = srvRamParts(draft);
 
     const wTxt  = weightsMb > 0 ? fmtRamMb(weightsMb) : '—';
     const kvTxt = kvMb !== null ? '~' + fmtRamMb(kvMb) : '—';
@@ -6029,6 +6056,132 @@ function renderRamEstimate(box, draft) {
             <div>Total<br><span style="font-size:13px;font-weight:700;color:var(--col-control-panel-line-4498-text);">${totTxt}</span></div>
         </div>`;
 }
+
+// ── Machine memory bar, lanes, logs, import/export, sampler profiles ──
+let srvUsableMb = null, srvHwTried = false, srvAgentList = null;
+async function srvLoadExtras() {
+    if (!srvHwTried) {
+        srvHwTried = true;
+        try { const r = await cpFetch('/api/v1/admin/system/hardware'); if (r.ok) srvUsableMb = Math.round((await r.json()).usableBytes / 1048576); } catch {}
+    }
+    if (srvAgentList === null) {
+        try { const r = await cpFetch('/api/v1/admin/agents'); if (r.ok) srvAgentList = (await r.json()).agents ?? []; } catch { srvAgentList = []; }
+    }
+}
+const srvIsLocal = s => /^(https?:\/\/)?(127\.0\.0\.1|localhost)/i.test(s.endpoint || 'http://127.0.0.1');
+
+// The bar: what the configured servers would take on this machine, as one estimate, with a warning if it won't fit.
+function renderMachinePanel(servers) {
+    const box = document.getElementById('srv-machine');
+    const local = servers.filter(srvIsLocal);
+    if (!local.length) { box.innerHTML = ''; return; }
+    const parts = [];
+    local.forEach((s, i) => {
+        const { weightsMb, kvMb } = srvRamParts(s);
+        buildServerHues(local.map(x => x.name));
+        if (weightsMb > 0) parts.push({ label: s.name + ' weights', mb: weightsMb, color: hslForServer(s.name, false) });
+        if (kvMb) parts.push({ label: s.name + ' KV cache', mb: kvMb, color: hslForServer(s.name, true) });
+        if (s.cacheRamMib > 0) parts.push({ label: s.name + ' prompt cache', mb: s.cacheRamMib, color: 'var(--border)' });
+    });
+    const used = parts.reduce((a, p) => a + p.mb, 0);
+    const limit = srvUsableMb ?? 0;
+    const scale = Math.max(limit, used) || 1;
+    const over = limit > 0 && used > limit * 0.9;
+    const unknown = local.filter(s => !srvRamParts(s).weightsMb).map(s => s.name);
+    box.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;"><b>Memory this machine can use for models</b><span style="color:var(--text-dim);">${limit ? fmtRamMb(limit) : 'unknown'}</span></div>
+        <div style="display:flex;height:24px;border-radius:6px;overflow:hidden;border:1px solid var(--border);">${parts.map(p => `<i title="${escHtml(p.label)} ${fmtRamMb(p.mb)}" style="display:block;height:100%;width:${(p.mb / scale * 100).toFixed(2)}%;background:${p.color};"></i>`).join('')}</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--text-dim);">${parts.map(p => `<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;background:${p.color};"></span>${escHtml(p.label)} ${fmtRamMb(p.mb)}</span>`).join('')}<span>${limit ? 'free ' + fmtRamMb(Math.max(0, limit - used)) : ''}</span></div>
+        <div style="font-size:12px;color:${over ? 'var(--col-control-panel-line-4234-colour)' : 'var(--text-dim)'};">${over ? `<b>This probably won't fit.</b> The servers add up to about ${fmtRamMb(used)}, over 90% of the ${fmtRamMb(limit)} available. Lower a context size, use a smaller KV precision or a smaller model, or stop a server. ` : ''}An estimate from model file size and context, not a measurement.${unknown.length ? ' No size known for: ' + escHtml(unknown.join(', ')) + '.' : ''}</div></div>`;
+}
+
+// Each slot as a lane, with the agents that use it.
+function buildLaneView(server) {
+    const wrap = agEl('div', 'display:flex;gap:8px;flex-wrap:wrap;padding:0 14px 10px;');
+    (server.slots ?? []).forEach(slot => {
+        const agents = (srvAgentList ?? []).filter(a => (a.serverName ?? a.ServerName) === server.name && (a.slotName ?? a.SlotName) === slot.name).map(a => a.name ?? a.Name);
+        const lane = agEl('div', 'border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;display:flex;flex-direction:column;gap:4px;min-width:130px;');
+        lane.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px;"><b>${escHtml(slot.name)}</b><span style="color:var(--text-dim);">${ctxTokensToText(slot.contextLimit)}${slot.pool ? ' · pool ' + escHtml(slot.pool) : ''}</span></div>`
+            + `<div style="display:flex;gap:4px;flex-wrap:wrap;">${agents.length ? agents.map(a => `<span style="background:var(--col-control-panel-line-4251-background);border-radius:5px;padding:1px 6px;">${escHtml(a)}</span>`).join('') : '<span style="color:var(--text-dim);">no agents</span>'}</div>`;
+        wrap.append(lane);
+    });
+    return wrap;
+}
+
+async function srvShowLogs(server) {
+    const overlay = agEl('div', 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;display:flex;align-items:center;justify-content:center;padding:20px;');
+    const box = agEl('div', 'background:var(--main-bg,#fff);color:var(--text);border:1px solid var(--border);border-radius:12px;width:min(900px,100%);max-height:85vh;display:flex;flex-direction:column;');
+    const head = agEl('div', 'display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);');
+    head.innerHTML = `<b>${escHtml(server.name)} · llama-server log</b>`;
+    const btns = agEl('div', 'display:flex;gap:8px;');
+    const refresh = agEl('button', 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;', 'Refresh');
+    const close = agEl('button', 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;', 'Close');
+    btns.append(refresh, close); head.append(btns);
+    const pre = agEl('pre', 'margin:0;padding:12px 16px;overflow:auto;font-size:11.5px;line-height:1.45;white-space:pre-wrap;flex:1;');
+    box.append(head, pre); overlay.append(box); document.body.append(overlay);
+    const load = async () => {
+        pre.textContent = 'Loading…';
+        try { const r = await cpFetch(`/api/v1/admin/servers/${server.id}/logs?lines=400`); const d = await r.json(); pre.textContent = d.text || d.note || '(empty)'; pre.scrollTop = pre.scrollHeight; }
+        catch { pre.textContent = 'Could not read the log.'; }
+    };
+    refresh.onclick = load; close.onclick = () => overlay.remove(); overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    load();
+}
+
+// One server's setup as a file, to keep or to give to someone else. No id, so importing always makes a new server.
+function srvExport(server) {
+    const copy = { ...server }; ['id', 'status', 'pid', 'download', 'activeModel'].forEach(k => delete copy[k]);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(copy, null, 2)], { type: 'application/json' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: `ARI-server-${server.name.replace(/[^a-z0-9]+/gi, '-')}.json` });
+    a.click(); URL.revokeObjectURL(url);
+}
+
+const SAMPLER_KEYS = ['temperature','topP','topK','minP','topNSigma','typicalP','xtcProbability','xtcThreshold','dynatempRange','dynatempExp','repeatLastN','repeatPenalty','presencePenalty','frequencyPenalty','dryMultiplier','dryBase','dryAllowedLength','dryPenaltyLastN','drySequenceBreakers','mirostat','mirostatLr','mirostatEnt','seed'];
+async function buildSamplerProfileBar(body, draft, samplerBody) {
+    const bar = agEl('div', 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;font-size:12px;');
+    let profiles = {};
+    try { const r = await cpFetch('/api/v1/admin/sampler-profiles'); if (r.ok) profiles = await r.json(); } catch {}
+    const sel = agEl('select', 'font-size:12px;'); sel.className = 'vs-input';
+    const fill = () => { sel.innerHTML = '<option value="">Saved profiles…</option>' + Object.keys(profiles).map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join(''); };
+    fill();
+    const btn = (label, fn) => { const b = agEl('button', 'font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;', label); b.type = 'button'; b.onclick = fn; return b; };
+    bar.append(sel,
+        btn('Apply', () => { const p = profiles[sel.value]; if (!p) return; Object.assign(draft, p); samplerBody.innerHTML = ''; renderSamplerFields(samplerBody, draft, null); }),
+        btn('Save current as…', async () => {
+            const name = prompt('Name for this sampler profile?'); if (!name) return;
+            const values = {}; SAMPLER_KEYS.forEach(k => { if (draft[k] !== undefined) values[k] = draft[k]; });
+            await cpFetch('/api/v1/admin/sampler-profiles/' + encodeURIComponent(name), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+            profiles[name] = values; fill(); sel.value = name;
+        }),
+        btn('Delete', async () => { if (!sel.value || !confirm('Delete profile "' + sel.value + '"?')) return; await cpFetch('/api/v1/admin/sampler-profiles/' + encodeURIComponent(sel.value), { method: 'DELETE' }); delete profiles[sel.value]; fill(); }));
+    body.prepend(bar);
+}
+
+document.getElementById('srv-startall-btn').addEventListener('click', async () => {
+    for (const s of lastServerList.filter(x => srvShownStatus(x) === 'Offline')) await srvAction(s.id, 'start');
+    loadServers();
+});
+document.getElementById('srv-stopall-btn').addEventListener('click', async () => {
+    if (!confirm('Stop every running server? ARI cannot answer until they are started again.')) return;
+    for (const s of lastServerList.filter(x => x.status === 'Online')) await srvAction(s.id, 'stop');
+    loadServers();
+});
+document.getElementById('srv-import-btn').addEventListener('click', () => document.getElementById('srv-import-file').click());
+document.getElementById('srv-import-file').addEventListener('change', async e => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    try {
+        const cfg = JSON.parse(await file.text());
+        const names = new Set(lastServerList.map(s => s.name));
+        let name = cfg.name || 'Imported server', n = 2; const base = name;
+        while (names.has(name)) name = `${base} (${n++})`;
+        const ports = new Set(lastServerList.map(s => s.port));
+        let port = cfg.port || nextServerPort(); while (ports.has(port)) port++;
+        const r = await cpFetch('/api/v1/admin/servers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cfg, id: '00000000-0000-0000-0000-000000000000', name, port, endpoint: 'http://127.0.0.1' }) });
+        if (!r.ok) { alert('Could not import: ' + await cpErrorText(r)); return; }
+        loadServers();
+    } catch { alert('That file is not a server setup.'); }
+});
 
 document.getElementById('srv-add-btn').addEventListener('click', () => {
     srvNewDraftActive = true;
