@@ -666,6 +666,13 @@ body.cp-win32 #cp-win-controls { display: flex; }
         <div id="lazy-table" style="display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(90px,.8fr) minmax(150px,1fr) auto;gap:8px 14px;align-items:center;font-size:13px;"></div>
         <span id="lazy-status" style="font-size:12px;color:var(--text-dim);"></span>
       </div>
+
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">Updates</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;"><input type="checkbox" id="au-enabled"> Update automatically</label>
+        <p style="color:var(--text-dim);font-size:13px;margin:6px 0 0;">When a new version is out, ARI waits until nothing has been happening for ten minutes, installs it and starts again on her own.</p>
+        <div id="au-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;"></div>
+      </div>
     </div>
 
     <!-- Models tab -->
@@ -5844,6 +5851,7 @@ async function loadServers() {
     renderMachinePanel(data.servers ?? []);
     renderServerCards(data.servers ?? []);
     if (!document.activeElement?.dataset?.lazy) loadLazyServices();
+    if (!document.getElementById('au-enabled').dataset.wired) loadAutoUpdate();
     clearTimeout(srvPollTimer);
     const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping' || s.download);
     srvPollTimer = setTimeout(loadServers, hasTransient ? 1500 : 6000);
@@ -5871,6 +5879,26 @@ async function loadLazyServices() {
         st.textContent = r.ok ? 'Saved. Applies when ARI next starts.' : ((await r.json().catch(() => ({}))).error || 'Save failed.');
         setTimeout(() => st.textContent = '', 5000);
     }));
+}
+
+// ── Automatic updates ─────────────────────────────────────────────────
+async function loadAutoUpdate() {
+    const box = document.getElementById('au-enabled'), st = document.getElementById('au-status');
+    let d = null;
+    try { const r = await cpFetch('/api/v1/admin/autoUpdate'); if (r.ok) d = await r.json(); } catch {}
+    if (!d) { st.textContent = ''; return; }
+    box.checked = d.enabled;
+    const lines = [`On ${escHtml(d.current)}${d.latest ? (d.outdated ? ` · ${escHtml(d.latest)} is out` : ' · up to date') : ''}.`];
+    if (d.blocked) lines.push(escHtml(d.blocked));
+    if (d.lastResult) lines.push(`Last: ${escHtml(d.lastResult)}${d.lastAt ? ` (${new Date(d.lastAt).toLocaleString()})` : ''}.`);
+    st.innerHTML = lines.join('<br>');
+    if (!box.dataset.wired) {
+        box.dataset.wired = '1';
+        box.addEventListener('change', async () => {
+            await cpFetch('/api/v1/admin/autoUpdate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: box.checked }) });
+            loadAutoUpdate();
+        });
+    }
 }
 
 async function srvAction(id, action) {

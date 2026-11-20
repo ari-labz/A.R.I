@@ -48,9 +48,12 @@ public class ARI : BackgroundService, IModuleLifecycle
     private string modelsPath = "";
     private string ariPersistentDir = "";
 
-    public ARI(ILoggerFactory loggerFactory)
+    private readonly IHostApplicationLifetime lifetime;
+
+    public ARI(ILoggerFactory loggerFactory, IHostApplicationLifetime lifetime)
     {
         this.loggerFactory = loggerFactory;
+        this.lifetime      = lifetime;
         _logger = loggerFactory.CreateLogger("ARI.Core");
         Shared.InitialiseLogger(loggerFactory, "ARI.Core");
     }
@@ -183,6 +186,8 @@ public class ARI : BackgroundService, IModuleLifecycle
         // schedule themselves the same way inside CalendarModule. Neither needs a shared scheduler.
         if (config.modules.Calendar.Enabled)
             StartCalendar();
+
+        AutoUpdate.Start(() => llmModule, lifetime, _logger, stoppingToken);
 
         _logger.LogInformation("ARI is ready.");
 
