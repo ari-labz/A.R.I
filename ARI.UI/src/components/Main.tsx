@@ -219,13 +219,13 @@ export default function Main({
                 </svg>
             </button>
 
+            {devMode && (
+                <span id="dev-chip" tabIndex={0} aria-label="Dev mode is on">
+                    <i aria-hidden="true" />DEV MODE
+                    <span className="dev-chip-tip" role="tooltip">Dev mode is on. Conversations in dev mode are not saved and are lost when ARI restarts.</span>
+                </span>
+            )}
             <div id="chat-col">
-                {devMode && (
-                    <span id="dev-chip" tabIndex={0} aria-label="Dev mode is on">
-                        <i aria-hidden="true" />DEV MODE
-                        <span className="dev-chip-tip" role="tooltip">Dev mode is on. Conversations in dev mode are not saved and are lost when ARI restarts.</span>
-                    </span>
-                )}
                 {/* animated logo header */}
                 <div id="main-header">
                     <div id="header-logos">

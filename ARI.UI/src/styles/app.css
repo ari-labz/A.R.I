@@ -1887,7 +1887,7 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 #main.with-windows #chat-col { overflow: visible; }
 
 /* Dev mode chip: top left of the banner while dev mode is on. */
-#dev-chip { position: absolute; top: 14px; right: 16px; z-index: 5; display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px 4px 10px; border-radius: 999px;
+#dev-chip { position: absolute; top: 14px; right: 16px; z-index: 6; display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px 4px 10px; border-radius: 999px;
     border: 1px solid #b3262e; background: rgba(224,70,80,.16); color: #b3262e; font: 700 11px var(--font-sans, system-ui), sans-serif; letter-spacing: .08em; cursor: default; }
 #dev-chip i { width: 6px; height: 6px; border-radius: 50%; background: #d8343e; }
 #dev-chip .dev-chip-tip { position: absolute; top: calc(100% + 8px); right: 0; width: 240px; padding: 8px 10px; border-radius: 10px; background: #2a1013; color: #f6d9db; border: 1px solid #b3262e;
