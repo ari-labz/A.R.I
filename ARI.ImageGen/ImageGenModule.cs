@@ -22,6 +22,9 @@ public class ImageGenModule : IImageGenModule
     // A remote ComfyUI needs nothing installed here, so it is ready as soon as it is configured.
     public bool IsReady => config.IsRemote || Dependency.Status == "";
 
+    /// <summary>Whether ComfyUI is loaded right now. It starts on the first image and is stopped after the idle time.</summary>
+    public bool IsRunning { get { lock (_lock) return _process is { HasExited: false }; } }
+
     public ImageGenConfig Config => config;
 
     /// <summary>Where ComfyUI answers: the configured remote URL, or the copy ARI runs on this machine.</summary>

@@ -32,6 +32,9 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     // Before the engine has started and reported itself (it loads on first use), its module folder names it.
     public string EngineName => engineName ?? Path.GetFileName(modulePath.TrimEnd(Path.DirectorySeparatorChar));
     public bool LoadsOnDemand => idleStop > TimeSpan.Zero;
+
+    /// <summary>Whether the engine process is loaded right now.</summary>
+    public bool IsRunning => server is { HasExited: false };
     public float Speed { get; private set; } = 1.0f;
     public float PauseScale { get; private set; } = 1.0f;
 

@@ -659,6 +659,13 @@ body.cp-win32 #cp-win-controls { display: flex; }
       </div>
       <div id="srv-machine" style="margin-bottom:16px;"></div>
       <div id="srv-cards" style="display:flex;flex-direction:column;gap:12px;"></div>
+
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">Loads when needed</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">These start the first time they are used and are unloaded after sitting idle, which frees their memory. Voice picks up a new time when ARI next starts.</p>
+        <div id="lazy-table" style="display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(90px,.8fr) minmax(150px,1fr) auto;gap:8px 14px;align-items:center;font-size:13px;"></div>
+        <span id="lazy-status" style="font-size:12px;color:var(--text-dim);"></span>
+      </div>
     </div>
 
     <!-- Models tab -->
@@ -5700,9 +5707,34 @@ async function loadServers() {
     await srvLoadExtras();
     renderMachinePanel(data.servers ?? []);
     renderServerCards(data.servers ?? []);
+    if (!document.activeElement?.dataset?.lazy) loadLazyServices();
     clearTimeout(srvPollTimer);
     const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping' || s.download);
     srvPollTimer = setTimeout(loadServers, hasTransient ? 1500 : 6000);
+}
+
+// ── Services that load on demand (voice, image generation) ──────────────
+async function loadLazyServices() {
+    const box = document.getElementById('lazy-table');
+    let rows = [];
+    try { const r = await cpFetch('/api/v1/admin/lazyServices'); if (r.ok) rows = await r.json(); } catch {}
+    if (!rows.length) { box.innerHTML = '<span style="color:var(--text-dim);">Nothing here on this install.</span>'; return; }
+    const head = t => `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">${t}</div>`;
+    box.innerHTML = head('Service') + head('Now') + head('Unload after idle for') + '<div></div>' + rows.map(r => {
+        const state = !r.enabled ? 'Off' : r.running ? 'Loaded' : 'Unloaded';
+        const col = r.running ? 'var(--accent)' : 'var(--text-dim)';
+        return `<div>${escHtml(r.name)}</div>
+          <div style="color:${col};font-weight:600;">${state}</div>
+          <div><input type="number" min="1" max="1440" value="${r.idleMinutes}" data-lazy="${r.id}" style="width:80px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"> minutes</div>
+          <button class="vs-btn-primary" type="button" data-lazy-save="${r.id}" style="font-size:12px;padding:4px 12px;">Save</button>`;
+    }).join('');
+    box.querySelectorAll('[data-lazy-save]').forEach(b => b.addEventListener('click', async () => {
+        const id = b.dataset.lazySave, v = parseInt(box.querySelector(`[data-lazy="${id}"]`).value, 10);
+        const st = document.getElementById('lazy-status');
+        const r = await cpFetch('/api/v1/admin/lazyServices', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, idleMinutes: v }) });
+        st.textContent = r.ok ? 'Saved. Applies when ARI next starts.' : ((await r.json().catch(() => ({}))).error || 'Save failed.');
+        setTimeout(() => st.textContent = '', 5000);
+    }));
 }
 
 async function srvAction(id, action) {
