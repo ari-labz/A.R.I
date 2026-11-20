@@ -10,6 +10,7 @@ export interface ThreadEntry {
     pipeline:     string  // "dialogue" | "code" | "speech"
     state:        string
     status?:      ThreadStatus
+    personaId?:   string
     lastMessageAt: string
     projectName?: string | null
     projectId?:   string | null

@@ -1605,6 +1605,14 @@ public class LLMModule : ILLMModule, IDisposable
     // work (Dream) runs only while this holds, and yields the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
+    /// <summary>Sets the persona a conversation speaks in. False if there is no such conversation.</summary>
+    public bool SetThreadPersona(string threadKey, string personaId)
+    {
+        if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
+        thread.PersonaId = personaId;
+        return true;
+    }
+
     // Ari is "active" whenever any visible (non-Internal) thread is in a state the user can see in the
     // sidebar and is not yet fully settled — Unread (proactive awaiting first reply), Active, Streaming,
     // or Inactive (response window open). Only Dormant and Deleted are settled enough to dream through.

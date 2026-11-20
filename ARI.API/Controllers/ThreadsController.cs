@@ -182,7 +182,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                     ProjectName: projectName, ProjectId: projectId,
                     Pipeline: kvp.Value.Pipeline.ToString().ToLowerInvariant(),
                     Title: kvp.Value.CustomTitle ?? kvp.Value.Title, OwnerName: OwnerNameFor(kvp.Value.OwnerId),
-                    Status: ThreadStatusFor(kvp.Key));
+                    Status: ThreadStatusFor(kvp.Key), PersonaId: kvp.Value.PersonaId ?? PersonaStore.DefaultId);
             })
             .ToList();
 
@@ -1203,6 +1203,15 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return folded ? Ok() : Conflict("Thread is not streaming.");
     }
 
+    /// <summary>The persona a conversation speaks in. It changes from the next reply; earlier replies stay as they were.</summary>
+    [HttpPut("{id}/persona")]
+    public IActionResult ChoosePersona([FromRoute(Name = "id")] string threadKey, [FromBody] PersonaChoice body)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (!PersonaStore.Exists(body?.PersonaId)) return NotFound(new { error = "No such persona." });
+        return Llm.SetThreadPersona(threadKey, body!.PersonaId!) ? Ok() : NotFound();
+    }
+
     /// <summary>Close a thread: runs Engram to save it to memory, then deletes it. Fires a threadDeleted event.</summary>
     [HttpDelete("{id}")]
     public async Task<IActionResult> CloseThread([FromRoute(Name = "id")] string threadKey)
@@ -1511,10 +1520,11 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 
 public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
 public record InterjectRequest(string? Text, string? ClientId = null);
+public record PersonaChoice(string? PersonaId);
 public record ApprovalAnswer(bool Allow, string? Decision = null);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null, string? Context = null);
 public record ApiContextRequest(string? Context);
 public record InjectContextRequest(string Name, string Content);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null, string Status = "idle");
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null, string Status = "idle", string? PersonaId = null);

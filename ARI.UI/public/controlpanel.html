@@ -1045,6 +1045,14 @@ body.cp-win32 #cp-win-controls { display: flex; }
           Ari's identity and voice, prepended to every user-facing agent (dialogue and coding). This shapes
           how she speaks, not what she concludes. Keep it lean — backstory and lore belong in her brain, not here.
         </p>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <select id="persona-select" class="vs-input" style="min-width:180px;font-size:13px;"></select>
+          <input id="persona-name" class="vs-input" type="text" placeholder="Name" style="width:140px;font-size:13px;display:none;">
+          <input id="persona-desc" class="vs-input" type="text" placeholder="One line about it" style="flex:1;min-width:160px;font-size:13px;display:none;">
+          <button class="vs-btn-primary" id="persona-new-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">New persona</button>
+          <button class="vs-btn-primary" id="persona-default-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">Make default</button>
+          <button class="vs-btn-primary" id="persona-del-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);display:none;">Delete</button>
+        </div>
         <textarea id="persona-text" class="vs-input" style="width:100%;min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;resize:vertical;" placeholder="You are Ari, an AI assistant. …"></textarea>
         <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
           <button class="vs-btn-primary" id="persona-save-btn" type="button">Save persona</button>
@@ -4023,25 +4031,63 @@ document.getElementById('um-reset-cancel').addEventListener('click', () => {
 });
 
 // ── Persona ───────────────────────────────────────────────
-let personaLoaded = false;
+// Several personas can exist; each conversation speaks in one of them. "ari" is the main one and can't be deleted.
+let personaList = [], personaDefault = 'ari', personaCurrent = 'ari';
 async function loadPersona() {
-    if (personaLoaded) return;
+    const status = document.getElementById('persona-status');
     try {
-        const d = await cpGetSettings();
-        document.getElementById('persona-text').value = d.persona || '';
-        personaLoaded = true;
-    } catch { document.getElementById('persona-status').textContent = 'Failed to load.'; }
+        const r = await cpFetch('/api/v1/personas'); const d = await r.json();
+        personaList = d.personas; personaDefault = d.defaultId;
+        if (!personaList.some(p => p.id === personaCurrent)) personaCurrent = 'ari';
+        renderPersonaSelect();
+        await showPersona(personaCurrent);
+    } catch { status.textContent = 'Failed to load.'; }
 }
+function renderPersonaSelect() {
+    const sel = document.getElementById('persona-select');
+    sel.innerHTML = personaList.map(p => `<option value="${escHtml(p.id)}" ${p.id === personaCurrent ? 'selected' : ''}>${escHtml(p.name)}${p.id === personaDefault ? ' (default)' : ''}</option>`).join('');
+}
+async function showPersona(id) {
+    personaCurrent = id;
+    const info = personaList.find(p => p.id === id);
+    const r = await cpFetch('/api/v1/admin/personas/' + encodeURIComponent(id)); const d = await r.json();
+    document.getElementById('persona-text').value = d.text || '';
+    const named = id !== 'ari';
+    document.getElementById('persona-name').style.display = named ? '' : 'none';
+    document.getElementById('persona-desc').style.display = named ? '' : 'none';
+    document.getElementById('persona-del-btn').style.display = named ? '' : 'none';
+    document.getElementById('persona-name').value = info?.name || '';
+    document.getElementById('persona-desc').value = info?.description || '';
+    document.getElementById('persona-default-btn').disabled = id === personaDefault;
+}
+document.getElementById('persona-select').addEventListener('change', e => { renderPersonaSelect(); showPersona(e.target.value); });
 document.getElementById('persona-save-btn').addEventListener('click', async () => {
     const status = document.getElementById('persona-status');
-    const text   = document.getElementById('persona-text').value;
     status.textContent = 'Saving…';
     try {
-        const r = await cpPatchSettings({ persona: text });
+        const body = { text: document.getElementById('persona-text').value };
+        if (personaCurrent !== 'ari') { body.name = document.getElementById('persona-name').value; body.description = document.getElementById('persona-desc').value; }
+        const r = await cpFetch('/api/v1/admin/personas/' + encodeURIComponent(personaCurrent), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         if (!r.ok) throw new Error();
-        status.textContent = 'Saved — applies to new threads.';
+        status.textContent = 'Saved. Applies from the next reply in each conversation.';
+        await loadPersona();
         setTimeout(() => { status.textContent = ''; }, 4000);
     } catch { status.textContent = 'Save failed.'; }
+});
+document.getElementById('persona-new-btn').addEventListener('click', async () => {
+    const name = prompt('Name for the new persona?'); if (!name) return;
+    const r = await cpFetch('/api/v1/admin/personas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description: '', text: 'Describe how this persona speaks here.' }) });
+    if (!r.ok) { document.getElementById('persona-status').textContent = 'Could not create it.'; return; }
+    personaCurrent = (await r.json()).id; await loadPersona();
+});
+document.getElementById('persona-default-btn').addEventListener('click', async () => {
+    await cpFetch('/api/v1/admin/personas-default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personaId: personaCurrent }) });
+    await loadPersona();
+});
+document.getElementById('persona-del-btn').addEventListener('click', async () => {
+    if (!confirm('Delete this persona? Conversations using it fall back to the default.')) return;
+    await cpFetch('/api/v1/admin/personas/' + encodeURIComponent(personaCurrent), { method: 'DELETE' });
+    personaCurrent = 'ari'; await loadPersona();
 });
 
 // ── Response Feedback ─────────────────────────────────────

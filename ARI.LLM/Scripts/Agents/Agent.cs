@@ -2074,7 +2074,7 @@ public abstract class Agent
 
         if (UsePersona)
         {
-            string persona = PersonaStore.Get();
+            string persona = PersonaStore.Get(thread.PersonaId);
             if (persona.Length > 0)
                 sections.Add($"--- **Persona** ---\n\n{persona}\n\n{BlockRule}");
         }

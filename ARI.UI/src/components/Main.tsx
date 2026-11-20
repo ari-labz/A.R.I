@@ -1,3 +1,4 @@
+import type { PersonaOption } from "./PersonaPicker"
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import type { PipelineOption } from "../hooks/usePipelines"
 import Messages from "./Messages"
@@ -57,6 +58,9 @@ interface Props {
     speechLevels:     { current: number[] }
     speechMic:        { current: number }
     serverReady:      boolean
+    personas:         PersonaOption[]
+    personaId:        string
+    onChoosePersona:  (id: string) => void
 }
 
 export default function Main({
@@ -71,7 +75,7 @@ export default function Main({
     pipelines, selectedPipeline, onPipelineChange,
     speechMode, onBeginSpeech, speechCaption, speechState,
     speechInCall, speechMuted, speechCallStart, onSpeechMute, onHangUp, speechLevels, speechMic,
-    safetyMode, onToggleSafety, serverReady,
+    safetyMode, onToggleSafety, serverReady, personas, personaId, onChoosePersona,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
     const [closedWindows,   setClosedWindows]   = useState<Set<string>>(new Set())
@@ -274,6 +278,9 @@ export default function Main({
                         codeMode={shieldMode}
                         safetyMode={safetyMode}
                         onToggleSafety={onToggleSafety}
+                        personas={personas}
+                        personaId={personaId}
+                        onChoosePersona={onChoosePersona}
                     />
                 )}
             </div>

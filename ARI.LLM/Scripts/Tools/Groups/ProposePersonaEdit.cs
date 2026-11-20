@@ -68,7 +68,11 @@ internal sealed class ProposePersonaEdit : Tool
         if (oldText.Length == 0 && newText.Trim().Length == 0)
             return Task.FromResult<ToolResult>("[Error: nothing to change — give old_text, new_text, or both.]");
 
-        string persona = PersonaStore.Get();
+        // Proposals edit the main persona only. A conversation speaking as another persona doesn't rewrite Ari's.
+        if ((thread.PersonaId ?? PersonaStore.DefaultId) != PersonaStore.MainId)
+            return Task.FromResult<ToolResult>("[Error: this conversation is speaking as a different persona, and persona edits only apply to the main one.]");
+
+        string persona = PersonaStore.Get(PersonaStore.MainId);
 
         if (oldText.Length > 0 && !persona.Contains(oldText, StringComparison.Ordinal))
             return Task.FromResult<ToolResult>(

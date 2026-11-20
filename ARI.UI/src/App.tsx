@@ -140,6 +140,20 @@ function dedupeRecentUserMessages(items: ThreadItem[]): ThreadItem[] {
 export default function App() {
     const { threads, load: loadThreads } = useThreads()
 
+    useEffect(() => {
+        apiFetch("/api/v1/personas").then(r => r.ok ? r.json() : null).then(d => {
+            if (!d) return
+            setPersonas(d.personas ?? []); setDefaultPersona(d.defaultId ?? "ari")
+        }).catch(() => {})
+    }, [])
+
+    // The persona applies from the next reply. With no conversation yet, it is kept until one is made.
+    function choosePersona(id: string) {
+        if (!activeThread) { setPendingPersona(id); return }
+        apiFetch(`/api/v1/threads/${activeThread}/persona`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personaId: id }) })
+            .then(() => loadThreads()).catch(() => {})
+    }
+
     const [activeThread,     setActiveThread]     = useState<string | null>(null)
     const [isInternal,       setIsInternal]        = useState(false)
     const [agentName,        setAgentName]         = useState<string | null>(null)
@@ -150,6 +164,9 @@ export default function App() {
     const [isRemembering,    setIsRemembering]      = useState(false)
     const [threadStatus,     setThreadStatus]       = useState<ThreadStatus>("idle")
     const [unreadThreads,    setUnreadThreads]      = useState<Set<string>>(new Set())
+    const [personas,         setPersonas]           = useState<{ id: string; name: string; description: string }[]>([])
+    const [defaultPersona,   setDefaultPersona]     = useState("ari")
+    const [pendingPersona,   setPendingPersona]     = useState<string | null>(null)   // chosen before the conversation exists
     const watchStreamRef = useRef<EventSource | null>(null)
     const [sidebarCollapsed, setSidebarCollapsed]  = useState(isNarrowPortrait)
     const [pendingAttach,    setPendingAttach]      = useState<PendingAttachment[]>([])
@@ -1097,6 +1114,8 @@ export default function App() {
         if (needsNew) {
             const made = await createThreadWithMode(selectedProject, selectedPipeline)
             key = made.key; newIsCode = made.isCodeMode
+            if (pendingPersona && pendingPersona !== defaultPersona)
+                void apiFetch(`/api/v1/threads/${key}/persona`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personaId: pendingPersona }) })
             setActiveThread(key)
             attachWatch(key)   // a thread created by sending is watched too, not only one opened from the list
             activeProjectRef.current = selectedProject
@@ -1502,6 +1521,9 @@ export default function App() {
                     onHeartbeatStop={heartbeat.stop}
                     safetyMode={safetyMode}
                     onToggleSafety={() => setSafetyMode(m => !m)}
+                    personas={personas}
+                    personaId={activeThread ? (threads.find(t => t.key === activeThread)?.personaId ?? defaultPersona) : (pendingPersona ?? defaultPersona)}
+                    onChoosePersona={choosePersona}
                     commands={COMMANDS}
                     projects={projects}
                     selectedProject={selectedProject}
