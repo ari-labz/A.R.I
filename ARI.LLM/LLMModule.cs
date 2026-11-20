@@ -560,11 +560,11 @@ public class LLMModule : ILLMModule, IDisposable
         // re-read the prompt, so it's there from the start.
         if (type is ThreadPipeline.Speech)
             ToolFactories.LoadGroup("subagent_tools", thread);
-        // hand_to_coder is the net under the deterministic Code routing: if a coding request lands on a Dialogue
+        // switch_pipeline is the net under the deterministic Code routing: if a coding request lands on a Dialogue
         // thread (the gate never fired), she can pass it to the Coder instead of improvising. Hot, like
         // propose_persona_edit — discovering it via list_tools is not something to rely on mid-request.
         if (!isChannel && type is ThreadPipeline.Dialogue)
-            new HandToCoder(thread).Register(thread);
+            new SwitchPipeline(thread).Register(thread);
         // The pinned tools are in hand from the first message. This is the conversation's first sync; the chat API repeats it on
         // each message, once it knows whether the Master or a guest is talking.
         ToolFactories.SyncPinned(thread);
@@ -1349,7 +1349,7 @@ public class LLMModule : ILLMModule, IDisposable
         }
     }
 
-    /// <summary>Second half of a dialogue→coder handoff (<see cref="HandToCoder"/>): the dialogue turn has finished
+    /// <summary>Second half of a dialogue→coder handoff (<see cref="SwitchPipeline"/>): the dialogue turn has finished
     /// (she told the user she's passing it along), so move the thread onto the Code pipeline — history and bound
     /// project carried by <see cref="Recategorise"/> — and run the request there as an internal prompt. Returns null
     /// when there is no Code pipeline, so the caller keeps the dialogue reply.</summary>

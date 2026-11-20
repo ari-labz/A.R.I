@@ -42,7 +42,7 @@ public static class ToolRegistry
 
     // Tools that only exist while a module is on. Shown in the control panel so it's clear why one is missing.
     // Registered on every conversation outside the tool factories (the meta tools and the two always-on reflexes).
-    internal static readonly string[] SystemTools = ["list_tools", "request_tools", "tool_search", "remember", "hand_to_coder"];
+    internal static readonly string[] SystemTools = ["list_tools", "request_tools", "tool_search", "remember", "switch_pipeline"];
 
     private static readonly Dictionary<string, string> ModuleOf = new(StringComparer.OrdinalIgnoreCase)
     {

@@ -408,7 +408,7 @@ public class Thread
     /// (<see cref="LLMModule.BindProjectContext"/>, the chat API's per-message bind).</summary>
     internal string? ProjectName { get; set; }
 
-    /// <summary>Set by the <c>hand_to_coder</c> tool on a Dialogue thread: the dialogue turn finishes, then the
+    /// <summary>Set by the <c>switch_pipeline</c> tool on a Dialogue thread: the dialogue turn finishes, then the
     /// router moves the thread onto the Code pipeline and runs the request there. Holds the tool's brief.</summary>
     internal string? PendingCoderHandoff { get; set; }
     public   string  Key             => threadKey;
