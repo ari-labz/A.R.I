@@ -297,23 +297,60 @@ public abstract class Agent
         await ApplyPendingEdits(turn, thread, waitForAnimation: true);
 
         const string AriPrefix = "ARI: ";
-        bool work = thread.Pipeline == ThreadPipeline.Code;
+        string toolFacts = ToolFacts(turn, out bool changedFiles);
+        // A code thread, or any chat in which she used tools, is a report on work: it is checked against what the tools showed.
+        bool work = thread.Pipeline == ThreadPipeline.Code || toolFacts.Length > 0;
         string whole = turn.ResponseBuilder.ToString();
         // In chat only the part not yet reviewed is read now; a report on work is checked whole, against the evidence.
         string reply = work ? whole : whole[Math.Clamp(turn.ReflectedChars, 0, whole.Length)..];
         if (reply.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase)) reply = reply[AriPrefix.Length..];
         reply = reply.TrimEnd();
         List<string> hits = settings.BannedPhrases.Where(b => reply.Contains(b, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (reply.Length == 0 || (reply.Length < settings.MinChars && hits.Count == 0)) return;
+        // Changing files and then saying it works is the claim that most needs checking, so even a short report on that is read.
+        int minChars = work && changedFiles ? 40 : settings.MinChars;
+        if (reply.Length == 0 || (reply.Length < minChars && hits.Count == 0)) return;
         if (work && !settings.VerifyWork) return;
 
         SetPhase(turn, ThreadPhase.Thinking);
-        string evidence = work ? ToolEvidence(turn) : "";
+        string evidence = work ? (toolFacts.Length > 0 ? toolFacts + "\n" : "") + ToolEvidence(turn) : "";
         List<ReplyEdit> edits = await reflector.Review(work ? ReflectMode.Work : ReflectMode.Chat, AssistantName.Name, userPrompt, reply, evidence, hits, turn.Ct);
         if (edits.Count == 0) return;
 
+        Reflector.Record(thread.Key, work ? ReflectMode.Work : ReflectMode.Chat, edits);
         foreach (ReplyEdit edit in edits) turn.PendingEdits.Enqueue(edit);
         await ApplyPendingEdits(turn, thread, waitForAnimation: true);
+    }
+
+    private static readonly HashSet<string> ChangeTools = new(StringComparer.OrdinalIgnoreCase) { "edit_file", "write_file", "edit_xlsx", "edit_docx", "write_xlsx", "write_docx", "write_pptx", "write_pdf", "delete_file", "move_file" };
+    private static readonly HashSet<string> RunTools    = new(StringComparer.OrdinalIgnoreCase) { "shell", "shell_session", "run_command", "build_project", "run_code" };
+
+    /// <summary>Hard facts about this turn that need no judgement, worked out from the order the tools ran in: whether files were changed,
+    /// and whether anything was built, tested or run after the last change. Empty when no tool ran at all.</summary>
+    private static string ToolFacts(Turn turn, out bool changedFiles)
+    {
+        int lastChange = -1, lastRun = -1, changes = 0, tools = 0, i = 0;
+        foreach (object m in turn.Messages)
+        {
+            i++;
+            try
+            {
+                JsonElement el = JsonSerializer.SerializeToElement(m);
+                if (!el.TryGetProperty("role", out JsonElement role) || role.GetString() != "tool") continue;
+                string name = el.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "" : "";
+                string content = el.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
+                tools++;
+                bool ok = !content.StartsWith("Error", StringComparison.OrdinalIgnoreCase) && !content.StartsWith("[Blocked", StringComparison.OrdinalIgnoreCase) && !content.StartsWith("[Error", StringComparison.OrdinalIgnoreCase);
+                if (ChangeTools.Contains(name) && ok) { lastChange = i; changes++; }
+                if (RunTools.Contains(name)) lastRun = i;
+            }
+            catch { }
+        }
+        changedFiles = changes > 0;
+        if (tools == 0) return "";
+        if (changes == 0) return "FACT: no file was changed this turn.";
+        return lastRun > lastChange
+            ? $"FACT: {changes} file change(s) were made, and a command (build, test or run) was run after the last one."
+            : $"FACT: {changes} file change(s) were made, and NO build, test or command was run after them. Nothing shows the changes compile, pass tests or work.";
     }
 
     /// <summary>Makes the edits the Reflector has asked for. Called only from the stream loop and the end of the turn, so nothing else is

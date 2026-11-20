@@ -84,6 +84,7 @@ internal class Reflector : Agent
         else
         {
             prompt.AppendLine($"You check {aiName}'s finished report on her work for claims that are not verifiable.");
+            prompt.AppendLine("Lines starting FACT are certain: treat them as true. If a FACT says nothing was built, tested or run after the changes, then any claim that the change compiles, passes, works or is tested is a problem.");
             prompt.AppendLine("EVIDENCE below is the tool output from this turn. A claim is fine if the evidence, the user's message, or plain reasoning supports it, or if it is only a plan or an opinion.");
             prompt.AppendLine("A claim is a problem if it says something was done, built, tested, fixed, found or pushed and the evidence does not show it.");
             prompt.AppendLine("For each problem, edit the reply: reword that sentence so it says it is not verified (for example \"i haven't run the tests yet\"), or delete it.");
@@ -123,6 +124,17 @@ internal class Reflector : Agent
             if (edits.Count == MaxEdits) break;
         }
         return edits;
+    }
+
+    /// <summary>Notes each correction in Reflections.jsonl (when, which thread, chat or work, what was changed), so patterns in what she gets wrong can be found later.</summary>
+    internal static void Record(string thread, ReflectMode mode, IEnumerable<ReplyEdit> edits)
+    {
+        try
+        {
+            string line = JsonSerializer.Serialize(new { ts = DateTime.UtcNow, thread, mode = mode.ToString(), edits = edits.Select(e => new { e.Old, e.New }) });
+            File.AppendAllText(Path.Combine(Paths.PersistentData, "Reflections.jsonl"), line + "\n");
+        }
+        catch { }
     }
 
     private static string Clip(string s, int max) => s.Length <= max ? s : s[^max..];
