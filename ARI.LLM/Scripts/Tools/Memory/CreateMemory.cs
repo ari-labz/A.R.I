@@ -26,7 +26,8 @@ internal sealed class CreateMemory : Tool
                     type           = new { type = "string", description = "Node type, e.g. 'hub', 'person', 'project'. Omit for a plain leaf note." },
                     keywords       = new { type = "array", items = new { type = "string" }, description = "Search keywords beyond the title/aliases. Keywords starting with # are mood anchors: the mood or context the note belongs to, e.g. #intimate, #work, #late-night. In a conversation where a mood is active, notes sharing it come up first." },
                     is_sensitive   = new { type = "boolean", description = "True if the note is entirely about a user's private life. For a note that's mostly ordinary with just one sensitive line or section, leave this false and mark that span with a `> [!sensitive]` callout in content instead." },
-                    commit_message = new { type = "string", description = "One-line summary of what this note captures and why it's being added now." }
+                    commit_message = new { type = "string", description = "One-line summary of what this note captures and why it's being added now." },
+                    different_event = new { type = "boolean", description = "Only for an event: true when an existing event it was matched with really is a different moment. Events are never duplicated; new detail goes on the existing event." }
                 },
                 required = new[] { "name", "content", "commit_message" }
             }
@@ -44,8 +45,38 @@ internal sealed class CreateMemory : Tool
             if (doc.RootElement.TryGetProperty("name", out JsonElement n) && n.GetString() is { Length: > 0 } name
                 && Brain.GetNote(name) is not null)
                 return $"[Blocked] A note named '{name}' already exists. Use edit_memory to change it instead of create_memory.";
+            if (LooksLikeExistingEvent(doc.RootElement) is { } existing)
+                return $"[Blocked] This looks like an event the brain already has: '{existing}'. An event is one slice in time and is never duplicated: read it with recall_memory and add the new detail with edit_memory. " +
+                       "If it truly is a different moment, call create_memory again with different_event: true.";
         }
         catch { }
+        return null;
+    }
+
+    private static readonly HashSet<string> Filler = new(StringComparer.OrdinalIgnoreCase) { "the", "a", "an", "and", "of", "to", "in", "on", "at", "for", "with", "from", "his", "her", "their", "up" };
+
+    /// <summary>For a new event note: the name of an existing event whose title shares most of its words, or null.</summary>
+    private static string? LooksLikeExistingEvent(JsonElement root)
+    {
+        string name = root.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "" : "";
+        string type = root.TryGetProperty("type", out JsonElement t) && t.ValueKind == JsonValueKind.String ? t.GetString() ?? "" : "";
+        bool isEvent = type.Equals("event", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Events/", StringComparison.OrdinalIgnoreCase);
+        if (!isEvent || (root.TryGetProperty("different_event", out JsonElement d) && d.ValueKind == JsonValueKind.True)) return null;
+
+        static HashSet<string> Words(string title) => System.Text.RegularExpressions.Regex.Split(title.ToLowerInvariant(), @"[^a-z0-9']+")
+            .Select(w => w.TrimEnd('s')).Where(w => w.Length > 1 && !Filler.Contains(w)).ToHashSet();
+        string title = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
+        HashSet<string> mine = Words(title);
+        if (mine.Count < 2) return null;
+        foreach (SearchResult hit in Brain.Search(mine.ToList(), 15))
+        {
+            Note other = hit.Note;
+            bool otherIsEvent = other.Name.StartsWith("Events/", StringComparison.OrdinalIgnoreCase) || string.Equals(other.Type, "event", StringComparison.OrdinalIgnoreCase);
+            if (!otherIsEvent) continue;
+            HashSet<string> theirs = Words(other.Title);
+            int shared = mine.Count(theirs.Contains);
+            if (shared >= 2 && shared >= 0.6 * Math.Min(mine.Count, theirs.Count)) return other.Name;
+        }
         return null;
     }
 
