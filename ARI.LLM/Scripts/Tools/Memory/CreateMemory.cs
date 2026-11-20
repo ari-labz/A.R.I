@@ -24,7 +24,7 @@ internal sealed class CreateMemory : Tool
                     content        = new { type = "string", description = "The note BODY ONLY — dense linked prose, starting directly with the text. Do NOT include a YAML frontmatter block (a '---' fenced section) and do NOT include a '# Title' heading — the title comes from `name` and frontmatter is generated automatically from the type/keywords/is_sensitive/aliases parameters below. Writing them again here corrupts the file." },
                     aliases        = new { type = "array", items = new { type = "string" }, description = "Alternate names this note should also be found under." },
                     type           = new { type = "string", description = "Node type, e.g. 'hub', 'person', 'project'. Omit for a plain leaf note." },
-                    keywords       = new { type = "array", items = new { type = "string" }, description = "Search keywords beyond the title/aliases." },
+                    keywords       = new { type = "array", items = new { type = "string" }, description = "Search keywords beyond the title/aliases. Keywords starting with # are mood anchors: the mood or context the note belongs to, e.g. #intimate, #work, #late-night. In a conversation where a mood is active, notes sharing it come up first." },
                     is_sensitive   = new { type = "boolean", description = "True if the note is entirely about a user's private life. For a note that's mostly ordinary with just one sensitive line or section, leave this false and mark that span with a `> [!sensitive]` callout in content instead." },
                     commit_message = new { type = "string", description = "One-line summary of what this note captures and why it's being added now." }
                 },

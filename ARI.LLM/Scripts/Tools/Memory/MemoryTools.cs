@@ -73,7 +73,7 @@ internal sealed class Neighbours : Tool
 // literal text (search_files), this resolves by note title, alias, AND content — so an entity referred to
 // by an alias (e.g. "[Nickname]" → the "Person A" note) is still found. Reindexes first so results reflect edits
 // the agent just made. Ranked: exact title, then alias, then content.
-internal sealed class SearchBrain : Tool
+internal sealed class SearchBrain(Thread? thread = null) : Tool
 {
     private const int DEFAULT_LIMIT = 15;
 
@@ -114,6 +114,7 @@ internal sealed class SearchBrain : Tool
             .ToList();
         List<SearchResult> hits = Brain.Search(terms, limit);
         if (hits.Count == 0) return Task.FromResult<ToolResult>($"No notes found for '{query}'. It likely has no note yet.");
+        if (thread is not null) hits = MoodAnchors.Rank(thread.Key, hits);
 
         return Task.FromResult<ToolResult>(string.Join('\n', hits.Select(h => $"{h.Note.Title} — {h.Note.Name}")));
     }
@@ -201,6 +202,7 @@ internal sealed class RecallMemory(Thread? thread = null) : Tool
 
         string content = note.Content;
         if (content.Trim().Length == 0) return Task.FromResult<ToolResult>($"'{note.Title}' exists but has no content yet.");
+        if (thread is not null) MoodAnchors.Light(thread.Key, note);
         if (thread?.HasInView(content) == true) return Task.FromResult<ToolResult>($"{note.Title} is already open above, unchanged.");
         return Task.FromResult<ToolResult>($"# {note.Title}\n\n{note.SensitivityNotice}{content}");
     }

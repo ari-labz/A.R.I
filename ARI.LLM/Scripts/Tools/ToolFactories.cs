@@ -82,7 +82,7 @@ internal static class ToolFactories
         ["propose_persona_edit"] = t => new ProposePersonaEdit(t),
 
         // Brain tools — always available; use the global brain index and vault, no project binding needed.
-        ["search_brain"]   = _ => new SearchBrain(),
+        ["search_brain"]   = t => new SearchBrain(t),
         ["memories_on"]    = _ => new MemoriesOn(),
         ["recall_memory"]  = t => new RecallMemory(t),
         ["ask_memory"]     = t => new AskMemory(t),
