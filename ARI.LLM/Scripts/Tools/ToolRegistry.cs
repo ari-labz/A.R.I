@@ -92,7 +92,7 @@ public static class ToolRegistry
     private static readonly HashSet<string> DefaultPinned = new(StringComparer.OrdinalIgnoreCase)
     {
         "read_file", "write_file", "edit_file", "list_directory", "search_files", "find_files", "deliver_file", "jobs",
-        "search_web", "fetch_page", "shell", "run_code", "todo", "show_visual",
+        "search_web", "fetch_page", "shell", "run_code", "todo", "show_visual", "search_brain", "recall_memory",
     };
 
     internal static bool IsPinned(string name)
