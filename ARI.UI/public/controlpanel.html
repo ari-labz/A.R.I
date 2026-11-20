@@ -1489,6 +1489,16 @@ body.cp-win32 #cp-win-controls { display: flex; }
         </div>
         <div id="brain-health-result" style="display:flex;flex-direction:column;gap:8px;"></div>
 
+        <div class="vs-section-title" style="margin-top:28px;">Suggestions for the brain</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          While Ari is idle, she looks over the graph and suggests tidy-ups: notes that are one thing under two names, notes with no type, and notes nothing links to. Nothing changes until you approve it; a dismissed suggestion never comes back.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <button class="vs-btn-primary" id="brain-prop-scan" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">Look for suggestions now</button>
+          <span id="brain-prop-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+        <div id="brain-prop-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+
         <div class="vs-section-title" style="margin-top:28px;">Settings backup</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
           Everything except the Brain: settings, agents, servers, persona, feedback, plugins, custom tools, accounts and conversations.
@@ -1788,7 +1798,7 @@ function switchTab(name) {
     if (name === 'persona') { loadPersona(); loadReflectSettings(); }
     if (name === 'feedback') loadFeedback();
     if (name === 'models') loadModels();
-    if (name === 'brain') loadBrain();
+    if (name === 'brain') { loadBrain(); loadBrainProposals(); }
     if (name === 'servers') loadServers();
     if (name === 'pipelines' && !pipDirty) pipMode = 'list';   // the tab always opens on the list; Edit opens the editor
     if (name === 'agents' || name === 'pipelines') loadAgents();
@@ -3525,6 +3535,29 @@ document.getElementById('brain-backup-btn').addEventListener('click', async () =
 document.getElementById('brain-refresh-btn').addEventListener('click', () => { brainStatus().textContent = ''; loadBrain(); });
 
 // ── brain tidiness check ──────────────────────────────────
+async function loadBrainProposals() {
+    const box = document.getElementById('brain-prop-list'); let items = [];
+    try { const r = await cpFetch('/api/v1/admin/brain/proposals'); if (r.ok) items = await r.json(); } catch {}
+    const say = p => p.kind === 'merge' ? `Merge <b>${escHtml(p.a)}</b> into <b>${escHtml(p.b)}</b>` : p.kind === 'type' ? `Mark <b>${escHtml(p.a)}</b> as a ${escHtml(p.value)}` : `Link <b>${escHtml(p.b)}</b> to <b>${escHtml(p.a)}</b>`;
+    box.innerHTML = items.length ? items.map(p => `<div style="display:flex;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <span style="flex:1;min-width:0;">${say(p)}<span style="display:block;color:var(--text-dim);font-size:12px;">${escHtml(p.why || '')}</span></span>
+        <button class="vs-btn-primary" type="button" data-bp="${p.id}" data-yes="1" style="font-size:12px;padding:4px 12px;">Approve</button>
+        <button class="vs-btn-primary" type="button" data-bp="${p.id}" style="font-size:12px;padding:4px 12px;background:transparent;border:1px solid var(--border);color:var(--text);">Dismiss</button></div>`).join('')
+        : '<div style="color:var(--text-dim);font-size:13px;">No suggestions right now.</div>';
+    box.querySelectorAll('[data-bp]').forEach(b => b.addEventListener('click', async () => {
+        const st = document.getElementById('brain-prop-status');
+        const r = await cpFetch('/api/v1/admin/brain/proposals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: b.dataset.bp, approve: !!b.dataset.yes }) });
+        const j = await r.json().catch(() => ({})); st.textContent = j.result || (r.ok ? 'Done.' : 'That didn\'t work.'); setTimeout(() => st.textContent = '', 6000);
+        loadBrainProposals();
+    }));
+}
+document.getElementById('brain-prop-scan').addEventListener('click', async () => {
+    const st = document.getElementById('brain-prop-status'); st.textContent = 'Looking…';
+    const r = await cpFetch('/api/v1/admin/brain/proposals/scan', { method: 'POST' }); const j = await r.json().catch(() => ({}));
+    st.textContent = r.ok ? (j.added ? j.added + ' new suggestion(s).' : 'Nothing new to suggest.') : (j.error || 'That didn\'t work.');
+    loadBrainProposals();
+});
+
 document.getElementById('brain-health-btn').addEventListener('click', async () => {
     const status = document.getElementById('brain-health-status'), out = document.getElementById('brain-health-result');
     status.textContent = 'Checking…'; out.innerHTML = '';

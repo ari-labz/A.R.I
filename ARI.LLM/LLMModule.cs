@@ -1149,6 +1149,9 @@ public class LLMModule : ILLMModule, IDisposable
                 await Task.Delay(TimeSpan.FromMinutes(10));
                 if (!IsIdle) { lastBusy = DateTime.UtcNow; continue; }
                 if (DateTime.UtcNow - lastBusy < TimeSpan.FromMinutes(2) || Reflector.Current is not { } reflector) continue;
+                // The brain's own tidy-up suggestions, a few at a time.
+                try { int n = await BrainCuration.Suggest(reflector, 3, CancellationToken.None); if (n > 0) _logger.LogInformation("[BrainCuration] left {N} suggestion(s) for the brain.", n); }
+                catch (Exception ex) { _logger.LogWarning("[BrainCuration] suggestion pass failed: {Err}", ex.Message); }
                 List<string> lines = ReflectionProposals.Unanalysed(8, out int total);
                 if (lines.Count == 0) continue;
                 List<ReflectionProposal> found = await reflector.Propose(lines, CancellationToken.None);

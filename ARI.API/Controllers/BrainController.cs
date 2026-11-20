@@ -32,6 +32,30 @@ public class BrainController : ControllerBase
         });
     }
 
+    /// <summary>The curator's pending suggestions for the brain (merge, type, link).</summary>
+    [HttpGet("proposals")]
+    public IActionResult Proposals() => Ok(BrainCuration.List().Where(p => p.Status == "pending").OrderByDescending(p => p.Created));
+
+    public sealed record ProposalDecision(string Id, bool Approve);
+
+    /// <summary>Approve (make the change) or dismiss one suggestion.</summary>
+    [HttpPost("proposals")]
+    public IActionResult Decide([FromBody] ProposalDecision d)
+    {
+        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
+        BrainProposal? p = BrainCuration.Decide(d.Id, d.Approve);
+        return p is null ? NotFound() : Ok(new { status = p.Status, result = p.Result });
+    }
+
+    /// <summary>Asks the curator for suggestions now, instead of waiting for an idle moment.</summary>
+    [HttpPost("proposals/scan")]
+    public async Task<IActionResult> ScanNow()
+    {
+        if (Llm is null || !Llm.BrainAvailable || Reflector.Current is null) return BadRequest(new { error = "Brain or reflector is not available." });
+        int n = await BrainCuration.Suggest(Reflector.Current, 3, HttpContext.RequestAborted);
+        return Ok(new { added = n });
+    }
+
     /// <summary>Lists available backups, newest first.</summary>
     [HttpGet("backups")]
     public IActionResult Backups()
