@@ -328,3 +328,71 @@ internal static class CodeReview
         }
     }
 }
+
+/// <summary>code_rule: turns a correction into a rule the code reviewer holds every future change to. A hard rule is a pattern that must never
+/// appear in an added line (CodeRules.json) and fails the review outright; a soft one is a preference added to the coding conventions, which
+/// the reviewer weighs. This is how the rules are refined over time from what the owner likes and doesn't.</summary>
+internal sealed class CodeRuleTool : Tool
+{
+    private const string LearnedHeading = "## Learned from corrections";
+
+    internal override string Name => "code_rule";
+
+    internal override object Schema => new
+    {
+        type = "function",
+        function = new
+        {
+            name        = "code_rule",
+            description = "Save a coding rule the person just taught you, so the code reviewer checks every future change against it. Use it when they correct how you wrote code " +
+                          "(\"never use var\", \"I prefer early returns\"). kind hard: a regular expression that must never appear in an added line, for mechanical rules only; it fails a review " +
+                          "with no judgement. kind soft: a preference in plain words that the reviewer weighs. Say which rule you saved. With list, shows the current rules.",
+            parameters = new
+            {
+                type       = "object",
+                properties = new
+                {
+                    kind    = new { type = "string", @enum = new[] { "hard", "soft", "list" }, description = "hard, soft or list." },
+                    rule    = new { type = "string", description = "For hard: the regular expression. For soft: the preference, one sentence." },
+                    why     = new { type = "string", description = "For hard: what breaking it means, in a few words, e.g. \"var is never used\"." },
+                },
+                required = new[] { "kind" }
+            }
+        }
+    };
+
+    internal override Task<ToolResult> Execute(string argsJson)
+    {
+        using JsonDocument doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
+        string Str(string k) => doc.RootElement.TryGetProperty(k, out JsonElement v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "").Trim() : "";
+        string kind = Str("kind").ToLowerInvariant(), rule = Str("rule"), why = Str("why");
+        string conventions = LLMModule.ConventionsProvider?.Invoke() ?? "";
+
+        if (kind == "list")
+        {
+            string hard = string.Join("\n", CodeReview.Rules().Select(r => $"- /{r.Pattern}/ — {r.Why}"));
+            int at = conventions.IndexOf(LearnedHeading, StringComparison.Ordinal);
+            return Task.FromResult<ToolResult>($"Hard rules:\n{hard}\n\nSoft preferences learned from corrections:\n{(at >= 0 ? conventions[(at + LearnedHeading.Length)..].Trim() : "(none yet)")}");
+        }
+        if (rule.Length == 0) return Task.FromResult<ToolResult>("[Error: give the rule.]");
+
+        if (kind == "hard")
+        {
+            try { _ = new Regex(rule); } catch (ArgumentException e) { return Task.FromResult<ToolResult>($"[Error: that isn't a valid regular expression: {e.Message}]"); }
+            List<CodeReview.Rule> rules = CodeReview.Rules();
+            if (rules.Any(r => r.Pattern == rule)) return Task.FromResult<ToolResult>("That hard rule is already there.");
+            rules.Add(new CodeReview.Rule(rule, why.Length > 0 ? why : rule));
+            File.WriteAllText(Path.Combine(Paths.PersistentData, "CodeRules.json"), JsonSerializer.Serialize(rules, new JsonSerializerOptions { WriteIndented = true }));
+            return Task.FromResult<ToolResult>($"Saved hard rule /{rule}/ ({why}). Every review from now on fails an added line that matches it.");
+        }
+        if (kind == "soft")
+        {
+            if (LLMModule.ConventionsSaver is not { } save) return Task.FromResult<ToolResult>("[Error: the coding conventions can't be saved on this server.]");
+            if (conventions.Contains(rule, StringComparison.OrdinalIgnoreCase)) return Task.FromResult<ToolResult>("That preference is already in the conventions.");
+            string updated = conventions.Contains(LearnedHeading) ? conventions.TrimEnd() + $"\n- {rule}\n" : conventions.TrimEnd() + $"\n\n{LearnedHeading}\n- {rule}\n";
+            save(updated.TrimStart());
+            return Task.FromResult<ToolResult>($"Saved to the coding conventions: {rule} The reviewer weighs it from the next change on.");
+        }
+        return Task.FromResult<ToolResult>("[Error: kind is hard, soft or list.]");
+    }
+}

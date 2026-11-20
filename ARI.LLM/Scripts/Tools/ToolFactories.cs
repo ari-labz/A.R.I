@@ -56,6 +56,7 @@ internal static class ToolFactories
         ["write_file"]     = t => Fs(t) is { } fs ? new WriteFile(fs)     : null,
 
         ["build_project"] = t => t is { FilesystemRoot: { } r, IsRemoteProject: false } ? new BuildProjectTool(t, r) : null,
+        ["code_rule"]     = t => t.Pipeline == ThreadPipeline.Code ? new CodeRuleTool() : null,
 
         // No index, no database, nothing shared with ARI.Brain — see SearchVault.cs.
         ["search_vault"] = t => Fs(t) is { } fs ? new SearchVault(fs) : null,
@@ -239,6 +240,7 @@ internal static class ToolFactories
         "list_projects", "create_project", "rename_project", "bind_project", "set_project_path",
         "git", "git_clone",
         "build_project",   // runs the project's own build scripts on this machine
+        "code_rule",       // changes the rules every future code review holds the Coder to
         // Run code, read other people's conversations, or change what Ari can do: the owner only.
         "shell", "shell_job", "run_code", "http_request", "download_file", "ssh", "list_chats", "read_chat", "search_chats",
         "browser", "list_skills", "read_skill", "write_skill", "delete_skill",

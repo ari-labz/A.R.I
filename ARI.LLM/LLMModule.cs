@@ -1980,6 +1980,9 @@ public class LLMModule : ILLMModule, IDisposable
     /// pipeline applies it to every code thread each turn — see <see cref="Coder.RefreshConventions"/>.</summary>
     public static Func<string?>? ConventionsProvider { get; set; }
 
+    /// <summary>Saves the coding-conventions text (set by the API module alongside <see cref="ConventionsProvider"/>).</summary>
+    public static Action<string>? ConventionsSaver { get; set; }
+
     public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
         => codeArchitect?.SetThreadContext(threadKey, projectMap, conventions, rules);
 
