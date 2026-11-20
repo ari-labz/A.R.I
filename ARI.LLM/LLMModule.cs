@@ -1732,8 +1732,8 @@ public class LLMModule : ILLMModule, IDisposable
         });
         thread.StartUnread();   // proactive opener: await the user's reply, else unread → dormant → deleted
 
-        // Best-effort — a missing/failed push must not lose the thread, which is already created either way.
-        _ = SendProactivePush(assistantText, threadKey, thread.OwnerId);
+        // Like any reply, it rings the phone only if it is still unread two minutes from now (a failed push must not lose the thread).
+        PushIfUnwatched(thread, threadKey);
 
         return threadKey;
     }
