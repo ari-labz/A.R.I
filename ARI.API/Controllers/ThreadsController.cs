@@ -704,7 +704,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         // shell command carries the one being asked about, so the app can offer "Allow … every time" for an allowable one.
         object? approval = ARI.LLM.ToolApprovals.Get(threadKey) is { } pending
             ? new { id = pending.Id, title = pending.Title, command = pending.Command,
-                    segment = pending.Segment is { } seg ? new { text = seg.Text, key = seg.Key, tier = seg.Tier.ToString().ToLowerInvariant(), reason = seg.Reason } : null }
+                    segment = pending.Segment is { } seg ? new { text = seg.Text, key = seg.Key, tier = seg.Tier.ToString().ToLowerInvariant(), reason = seg.Reason, threadScoped = seg.ThreadScoped } : null }
             : null;
         string payload  = JsonSerializer.Serialize(new { status, remembering, isCodeMode, approval });
         await Response.WriteAsync($"data: {payload}\n\n", ct);

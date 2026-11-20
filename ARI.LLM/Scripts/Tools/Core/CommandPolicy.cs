@@ -65,23 +65,72 @@ public static class CommandPolicy
 
     // ── Parsing ───────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The commands in a command line, or null when it has command substitution ($(…), backticks, &lt;(…)) or
-    /// unbalanced quotes, which can hide arbitrary commands. A | inside quotes isn't a pipe, and the &amp; in 2&gt;&amp;1 isn't
-    /// a separator.</summary>
-    public static List<string>? Segments(string command)
+    /// <summary>The commands a line runs, split at pipes, &amp;&amp;, ||, ;, newlines, a bare &amp; and subshell brackets, respecting
+    /// quotes (a | inside quotes isn't a pipe, nor is the &amp; in 2&gt;&amp;1). A heredoc body is text, not commands. Whatever is
+    /// inside $(…), backticks or &lt;(…) is returned in <paramref name="inner"/> to be checked as commands of their own.
+    /// Null when the quotes or brackets don't balance, which can hide commands.</summary>
+    public static List<string>? Segments(string command, out List<string> inner)
     {
+        inner = new();
         string cmd = command.Trim();
-        if (cmd.Length == 0 || cmd.Contains("$(") || cmd.Contains('`') || cmd.Contains("<(")) return null;
+        if (cmd.Length == 0) return null;
         List<string> segments = new();
         StringBuilder cur = new();
         char? quote = null;
+        (string Word, bool Dash, bool Quoted)? heredoc = null;
         for (int i = 0; i < cmd.Length; i++)
         {
             char c = cmd[i];
             char next = i + 1 < cmd.Length ? cmd[i + 1] : '\0', prev = i > 0 ? cmd[i - 1] : '\0';
+            if (quote != '\'' && c == '\\' && i + 1 < cmd.Length) { cur.Append(c).Append(next); i++; continue; }
+            if (quote != '\'')
+            {
+                // Substitutions run their contents, even inside double quotes.
+                int end = -1;
+                if (c == '$' && next == '(' || (quote is null && c is '<' or '>' && next == '('))
+                {
+                    end = MatchingParen(cmd, i + 1);
+                    if (end < 0) return null;
+                    if (!(c == '$' && i + 2 < cmd.Length && cmd[i + 2] == '(')) inner.Add(cmd[(i + 2)..end]);   // $((1+2)) is arithmetic, not a command
+                }
+                else if (c == '`')
+                {
+                    end = cmd.IndexOf('`', i + 1);
+                    if (end < 0) return null;
+                    inner.Add(cmd[(i + 1)..end]);
+                }
+                if (end >= 0) { cur.Append(cmd, i, end - i + 1); i = end; continue; }
+            }
             if (quote is not null) { cur.Append(c); if (c == quote) quote = null; continue; }
             if (c is '\'' or '"') { quote = c; cur.Append(c); continue; }
-            if (c is ';' or '\n') { segments.Add(cur.ToString()); cur.Clear(); continue; }
+            if (c == '<' && next == '<' && i + 2 < cmd.Length && cmd[i + 2] != '<' && prev != '<')
+            {
+                // <<WORD, <<-WORD, <<'WORD': the lines up to WORD are input to the command, not commands.
+                int j = i + 2; bool dash = j < cmd.Length && cmd[j] == '-'; if (dash) j++;
+                while (j < cmd.Length && cmd[j] == ' ') j++;
+                int start = j; bool quoted = false;
+                while (j < cmd.Length && !char.IsWhiteSpace(cmd[j]) && cmd[j] is not (';' or '|' or '&' or ')' or '>' or '<'))
+                { if (cmd[j] is '\'' or '"' or '\\') quoted = true; j++; }
+                string word = cmd[start..j].Trim('\'', '"', '\\');
+                if (word.Length > 0) heredoc = (word, dash, quoted);
+                cur.Append(cmd, i, j - i); i = j - 1; continue;
+            }
+            if (c == '\n' && heredoc is { } h)
+            {
+                int pos = i + 1; StringBuilder body = new(); bool closed = false;
+                while (pos <= cmd.Length)
+                {
+                    int eol = cmd.IndexOf('\n', pos); if (eol < 0) eol = cmd.Length;
+                    string line = cmd[pos..eol];
+                    if ((h.Dash ? line.Trim('\t') : line).TrimEnd('\r') == h.Word) { pos = eol; closed = true; break; }
+                    body.AppendLine(line); pos = eol + 1;
+                }
+                if (!closed) return null;
+                // An unquoted delimiter lets the body run $(…) and backticks.
+                if (!h.Quoted) foreach (string sub in SubstitutionsIn(body.ToString())) inner.Add(sub);
+                heredoc = null; segments.Add(cur.ToString()); cur.Clear(); i = pos; continue;
+            }
+            if (c is ';' or '\n' or '(' or ')') { segments.Add(cur.ToString()); cur.Clear(); continue; }
             if (c == '|') { if (next == '|') i++; segments.Add(cur.ToString()); cur.Clear(); continue; }
             if (c == '&')
             {
@@ -91,9 +140,53 @@ public static class CommandPolicy
             }
             cur.Append(c);
         }
-        if (quote is not null) return null;
+        if (quote is not null || heredoc is not null) return null;
         segments.Add(cur.ToString());
-        return segments.Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+        return segments.Select(StripKeywords).Where(x => x.Length > 0).ToList();
+    }
+
+    private static int MatchingParen(string s, int open)
+    {
+        int depth = 0; char? q = null;
+        for (int i = open; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (q is not null) { if (c == q) q = null; continue; }
+            if (c is '\'' or '"') { q = c; continue; }
+            if (c == '(') depth++;
+            else if (c == ')' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
+    private static IEnumerable<string> SubstitutionsIn(string text)
+    {
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '$' && i + 1 < text.Length && text[i + 1] == '(') { int e = MatchingParen(text, i + 1); if (e > 0) { yield return text[(i + 2)..e]; i = e; } }
+            else if (text[i] == '`') { int e = text.IndexOf('`', i + 1); if (e > 0) { yield return text[(i + 1)..e]; i = e; } }
+        }
+    }
+
+    // Shell keywords aren't commands: `do X`, `then X`, `if X`, `while X` run X; `for`/`case` lines, `done`, `fi` and braces
+    // run nothing. Stripped so a loop is judged by what is in it, and `do rm -rf /` can't pass as the keyword `do`.
+    private static readonly HashSet<string> LeadingKeywords = new(StringComparer.Ordinal) { "do", "then", "else", "if", "elif", "while", "until", "{", "}", "!" };
+    private static readonly HashSet<string> NoCommandKeywords = new(StringComparer.Ordinal) { "for", "select", "case", "done", "fi", "esac", "in", ";;" };
+    internal static readonly HashSet<string> ReservedWords = new(StringComparer.Ordinal)
+        { "do", "then", "else", "if", "elif", "while", "until", "{", "}", "!", "for", "select", "case", "done", "fi", "esac", "in", "function" };
+
+    private static string StripKeywords(string seg)
+    {
+        string t = seg.Trim();
+        while (t.Length > 0)
+        {
+            int sp = t.IndexOfAny(new[] { ' ', '\t' });
+            string word = sp < 0 ? t : t[..sp];
+            if (NoCommandKeywords.Contains(word)) return "";
+            if (!LeadingKeywords.Contains(word)) break;
+            t = sp < 0 ? "" : t[sp..].TrimStart();
+        }
+        return t;
     }
 
     // Whitespace tokens with quoted runs kept whole and leading VAR=val assignments dropped.
@@ -206,11 +299,53 @@ public static class CommandPolicy
 
     // ── Analysis ─────────────────────────────────────────────────────────────────────────
 
-    private static CommandSegment AnalyzeSegment(string seg)
+    // Programs that run another command given in their arguments: the command that runs is what gets judged.
+    private static readonly HashSet<string> Wrappers = new(StringComparer.Ordinal) { "timeout", "env", "nohup", "time", "nice", "command", "stdbuf", "xargs" };
+
+    // Options of each wrapper that take a value in the next token.
+    private static readonly Dictionary<string, HashSet<string>> WrapperValueOptions = new(StringComparer.Ordinal)
     {
-        List<string> tokens = Tokenize(seg);
+        ["timeout"] = new(StringComparer.Ordinal) { "-s", "--signal", "-k", "--kill-after" },
+        ["env"] = new(StringComparer.Ordinal) { "-u", "--unset", "-C", "--chdir", "-S" },
+        ["nice"] = new(StringComparer.Ordinal) { "-n", "--adjustment" },
+        ["xargs"] = new(StringComparer.Ordinal) { "-I", "-n", "-P", "-d", "-s", "-L", "-E", "-a" },
+        ["stdbuf"] = new(StringComparer.Ordinal),
+    };
+
+    // The command a wrapper runs, or null when the tokens aren't a wrapper (or it wraps nothing).
+    private static List<string>? Unwrap(string prog, List<string> tokens)
+    {
+        if (!Wrappers.Contains(prog)) return null;
+        int i = 1;
+        WrapperValueOptions.TryGetValue(prog, out HashSet<string>? valueOpts);
+        while (i < tokens.Count)
+        {
+            string t = tokens[i];
+            if (prog == "env" && Regex.IsMatch(t, "^[A-Za-z_][A-Za-z0-9_]*=")) { i++; continue; }
+            if (t == "--") { i++; break; }
+            if (!t.StartsWith('-') || t == "-") break;
+            i += valueOpts is not null && valueOpts.Contains(t) ? 2 : 1;
+        }
+        if (prog == "timeout" && i < tokens.Count && Regex.IsMatch(tokens[i], @"^\d")) i++;   // the duration
+        if (i >= tokens.Count) return prog == "xargs" ? new List<string> { "echo" } : null;   // xargs with no command runs echo
+        return tokens.Skip(i).ToList();
+    }
+
+    private static CommandSegment AnalyzeSegment(string seg) => AnalyzeTokens(Tokenize(seg), seg, 0);
+
+    private static CommandSegment AnalyzeTokens(List<string> tokens, string seg, int depth)
+    {
         if (tokens.Count == 0) return new(seg, null, CommandTier.Opaque, "empty command");
         string prog = ProgramName(tokens[0]);
+        // A command held in a variable, or produced by a substitution, can be anything.
+        if (prog.Contains('$') || prog.Contains('`')) return new(seg, null, CommandTier.Opaque, "the command to run is built from a variable or substitution");
+        if (Unwrap(prog, tokens) is { } innerTokens)
+        {
+            if (depth >= 4) return new(seg, null, CommandTier.Opaque, "commands wrapped too deeply to check");
+            CommandSegment inner = AnalyzeTokens(innerTokens, seg, depth + 1);
+            // A redirect to a file on the wrapper's own line still writes.
+            return inner.Tier == CommandTier.ReadOnly && RedirectsToFile(seg) ? inner with { Tier = CommandTier.Allowable } : inner;
+        }
         List<string> args = tokens.Skip(1).ToList();
 
         if (prog == "git")
@@ -236,13 +371,19 @@ public static class CommandPolicy
         return new(seg, prog, readOnly ? CommandTier.ReadOnly : CommandTier.Allowable);
     }
 
-    /// <summary>Every command in the line, analysed. Command substitution or unbalanced quotes → one opaque segment.</summary>
-    public static List<CommandSegment> Analyze(string command)
+    /// <summary>Every command the line runs, analysed, including the ones inside $(…), backticks and loops. Quotes or
+    /// brackets that don't balance → one opaque segment.</summary>
+    public static List<CommandSegment> Analyze(string command) => Analyze(command, 0);
+
+    private static List<CommandSegment> Analyze(string command, int depth)
     {
-        List<string>? segs = Segments(command);
-        if (segs is null || segs.Count == 0)
-            return new() { new(command.Trim(), null, CommandTier.Opaque, "it contains command substitution or can't be parsed safely") };
-        return segs.Select(AnalyzeSegment).ToList();
+        List<string> inner = new();
+        List<string>? segs = depth > 4 ? null : Segments(command, out inner);
+        if (segs is null)
+            return new() { new(command.Trim(), null, CommandTier.Opaque, "it can't be parsed safely (unbalanced quotes or brackets)") };
+        List<CommandSegment> result = segs.Select(AnalyzeSegment).ToList();
+        foreach (string sub in inner) result.AddRange(Analyze(sub, depth + 1));
+        return result;
     }
 
     /// <summary>True if this command runs without a prompt: read-only, or allowable with its key on the allowlist.</summary>
@@ -260,5 +401,6 @@ public static class CommandPolicy
     /// <summary>A key that may be stored on the allowlist: not blank, not a bare multiplexer ("git" would approve every
     /// subcommand, destructive ones included), not a program that's always dangerous.</summary>
     public static bool StorableKey(string key) =>
-        key.Length > 0 && !Multiplexers.Contains(key) && !DangerousPrograms.ContainsKey(key) && !key.StartsWith("mkfs", StringComparison.Ordinal);
+        key.Length > 0 && !Multiplexers.Contains(key) && !DangerousPrograms.ContainsKey(key) && !key.StartsWith("mkfs", StringComparison.Ordinal)
+        && !ReservedWords.Contains(key) && !Wrappers.Contains(key);
 }

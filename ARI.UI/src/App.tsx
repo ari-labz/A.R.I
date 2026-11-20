@@ -1541,9 +1541,9 @@ export default function App() {
                         <div style={cmdSubStyle}>
                             {pendingCommand.title
                                 ?? (pendingCommand.segment?.tier === "dangerous"
-                                    ? `${pendingCommand.segment.reason ?? "This can't be undone."} This is never remembered — it asks every time.`
+                                    ? `${pendingCommand.segment.reason ?? "This can't be undone."} ${pendingCommand.segment.threadScoped ? "It can be allowed for this chat only." : "This is never remembered — it asks every time."}`
                                     : pendingCommand.segment?.tier === "opaque"
-                                        ? `ARI wants to run a command that can't be checked safely (${pendingCommand.segment.reason ?? "unrecognised form"}). It asks every time.`
+                                        ? `ARI wants to run a command that can't be checked safely (${pendingCommand.segment.reason ?? "unrecognised form"}). ${pendingCommand.segment.threadScoped ? "It can be allowed for this chat only." : "It asks every time."}`
                                         : pendingCommand.segment?.key
                                             ? `ARI wants to run "${pendingCommand.segment.key}", which you haven't decided on yet.`
                                             : "ARI wants to run a command that isn't on the allow list.")}
@@ -1558,6 +1558,12 @@ export default function App() {
                                     onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>
                                 {pendingCommand.segment ? "Allow just this time" : "Allow once"}
                             </button>
+                            {pendingCommand.segment?.threadScoped && pendingCommand.segment.tier !== "allowable" && (
+                                <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1413-background)", color: "var(--col-app-line-1413-text)" }}
+                                        onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>
+                                    Allow this command in this chat
+                                </button>
+                            )}
                             {pendingCommand.segment?.tier === "allowable" && pendingCommand.segment.key && (
                                 <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1413-background)", color: "var(--col-app-line-1413-text)" }}
                                         onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>

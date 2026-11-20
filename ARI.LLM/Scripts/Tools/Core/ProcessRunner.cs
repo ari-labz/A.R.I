@@ -162,11 +162,19 @@ internal static class ShellGate
 
         // Every command in the line that isn't read-only or already allowed is asked about on its own; one denial stops
         // the whole line. "Every time" stores the command's key, never for a dangerous or opaque one.
-        foreach (CommandSegment segment in CommandPolicy.NeedingDecision(command, AllowList))
+        // A dangerous or unanalysable command is never stored for good, but the owner may allow that exact command for the rest of
+        // this thread, so a job that needs it repeatedly doesn't ask every time.
+        foreach (CommandSegment found in CommandPolicy.NeedingDecision(command, AllowList))
         {
+            bool threadOnly = found.Tier is CommandTier.Dangerous or CommandTier.Opaque;
+            string threadKey = "! " + found.Text;
+            if (threadOnly && ARI.Common.ThreadCommandAllowlist.Contains(thread.Key, threadKey)) continue;
+            CommandSegment segment = threadOnly ? found with { ThreadScoped = true } : found;
             ApprovalDecision decision = await ToolApprovals.DecideAsync(thread, title, command, segment);
             if (decision == ApprovalDecision.Deny) return denied;
-            if (decision == ApprovalDecision.Always && segment is { Tier: CommandTier.Allowable, Key: { } key } && CommandPolicy.StorableKey(key))
+            if (decision != ApprovalDecision.Always) continue;
+            if (threadOnly) ARI.Common.ThreadCommandAllowlist.Add(thread.Key, threadKey);
+            else if (segment is { Tier: CommandTier.Allowable, Key: { } key } && CommandPolicy.StorableKey(key))
                 CommandAllowlistStore.Add(key);
         }
         return null;
