@@ -27,4 +27,12 @@ public class ReflectController : ControllerBase
         ReflectSettings.Save(v);
         return Ok();
     }
+
+    [HttpGet("api/v1/admin/reflect/proposals")]
+    public IActionResult Proposals() => Ok(ReflectionProposals.List().Where(p => p.Status == "pending").OrderByDescending(p => p.Created));
+
+    public sealed record Decision(string Id, bool Approve);
+
+    [HttpPost("api/v1/admin/reflect/proposals")]
+    public IActionResult Decide([FromBody] Decision d) => ReflectionProposals.Decide(d.Id, d.Approve) ? Ok(new { ok = true }) : NotFound();
 }

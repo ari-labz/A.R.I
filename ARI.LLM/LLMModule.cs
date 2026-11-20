@@ -282,6 +282,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             Reflector.Current = Deserialize<Reflector>(reflectorEl);
             _logger.LogInformation("Reflector is active.");
+            _ = Task.Run(ReflectionProposalLoop);
         }
 
         if (Brain.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
@@ -1121,6 +1122,28 @@ public class LLMModule : ILLMModule, IDisposable
     // Interval and compaction sweeps never compete with a reply for the model: they wait in a queue and run only once nothing has
     // been generating for a while. A thread is queued once however many exchanges pass, and nothing is lost if it closes first:
     // the sweep at close (or dormancy) reads everything since the last one, which is what a queued run would have read.
+
+    // While nothing else is happening, the Reflector reads its own recent corrections and leaves suggestions for the owner to approve.
+    private async Task ReflectionProposalLoop()
+    {
+        DateTime lastBusy = DateTime.UtcNow;
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(10));
+                if (!IsIdle) { lastBusy = DateTime.UtcNow; continue; }
+                if (DateTime.UtcNow - lastBusy < TimeSpan.FromMinutes(2) || Reflector.Current is not { } reflector) continue;
+                List<string> lines = ReflectionProposals.Unanalysed(8, out int total);
+                if (lines.Count == 0) continue;
+                List<ReflectionProposal> found = await reflector.Propose(lines, CancellationToken.None);
+                ReflectionProposals.Add(found);
+                ReflectionProposals.MarkAnalysed(total);
+                if (found.Count > 0) _logger.LogInformation("[Reflector] left {N} suggestion(s) for review.", found.Count);
+            }
+            catch (Exception ex) { _logger.LogWarning("[Reflector] suggestion pass failed: {Err}", ex.Message); }
+        }
+    }
 
     private const int EngramIdleSeconds = 10;
     private readonly ConcurrentDictionary<string, string> engramQueue = new(StringComparer.OrdinalIgnoreCase);

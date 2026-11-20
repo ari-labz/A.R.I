@@ -126,6 +126,36 @@ internal class Reflector : Agent
         return edits;
     }
 
+    /// <summary>Reads the corrections logged lately and suggests, at most three times over, what to change so she stops needing them: a phrase
+    /// to never use, or a note for the owner. Returns nothing if the reflector can't be reached.</summary>
+    internal async Task<List<ReflectionProposal>> Propose(IEnumerable<string> logLines, CancellationToken ct)
+    {
+        StringBuilder prompt = new();
+        prompt.AppendLine("Below are corrections made to Ari's own replies before they were sent (each line: which kind of reply, and the exact text that was replaced and what replaced it).");
+        prompt.AppendLine("Look for repeated patterns, and suggest at most 3 changes that would stop her needing the corrections. Use exactly this form for each:");
+        prompt.AppendLine("PROPOSAL\nkind: banned_phrase  (a short phrase, under 8 words, she keeps using and should never use) OR note  (one plain sentence about a pattern, for her owner to read)\ntext: <the phrase, or the sentence>\nwhy: <one short reason from the corrections>\nEND");
+        prompt.AppendLine("Only suggest what several corrections support. If nothing repeats, answer only: NONE");
+        prompt.AppendLine();
+        foreach (string l in logLines) prompt.AppendLine(Clip(l, 600));
+        try
+        {
+            Thread ephemeral = new(ThreadPipeline.Dialogue, $"__reflect_{Guid.NewGuid():N}") { Internal = true };
+            string answer = await Prompt(ephemeral, prompt.ToString(), new PromptOptions { MaxTokensOverride = 600, Ct = ct });
+            List<ReflectionProposal> found = new();
+            foreach (Match m in Regex.Matches(answer, @"PROPOSAL\s*\r?\nkind:\s*(?<k>\w+)\s*\r?\ntext:\s*(?<t>.*?)\r?\nwhy:\s*(?<w>.*?)\r?\nEND", RegexOptions.Singleline))
+            {
+                string kind = m.Groups["k"].Value.ToLowerInvariant() == "banned_phrase" ? "banned_phrase" : "note";
+                string text = m.Groups["t"].Value.Trim().Trim('"');
+                if (text.Length == 0) continue;
+                found.Add(new ReflectionProposal { Kind = kind, Text = text, Why = m.Groups["w"].Value.Trim() });
+                if (found.Count == 3) break;
+            }
+            return found;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { Shared.Logger.LogWarning("[Reflector] couldn't draw proposals: {Err}", ex.Message); return new(); }
+    }
+
     /// <summary>Notes each correction in Reflections.jsonl (when, which thread, chat or work, what was changed), so patterns in what she gets wrong can be found later.</summary>
     internal static void Record(string thread, ReflectMode mode, IEnumerable<ReplyEdit> edits)
     {
@@ -139,3 +169,75 @@ internal class Reflector : Agent
 
     private static string Clip(string s, int max) => s.Length <= max ? s : s[^max..];
 }
+
+/// <summary>A suggestion the Reflector has drawn from her own corrections, waiting for the owner to approve or dismiss it.
+/// Nothing in here changes anything until it is approved, and only the "banned_phrase" kind can be applied by itself.</summary>
+internal sealed class ReflectionProposal
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
+    public DateTime Created { get; set; } = DateTime.UtcNow;
+    /// <summary>"banned_phrase" (a phrase to add to the never-say list) or "note" (an observation for the owner to read).</summary>
+    public string Kind { get; set; } = "note";
+    public string Text { get; set; } = "";
+    public string Why { get; set; } = "";
+    /// <summary>pending, approved or dismissed.</summary>
+    public string Status { get; set; } = "pending";
+}
+
+internal static class ReflectionProposals
+{
+    private static readonly object Gate = new();
+    private static string ProposalsPath => Path.Combine(Paths.PersistentData, "ReflectionProposals.json");
+    private static string LogPath       => Path.Combine(Paths.PersistentData, "Reflections.jsonl");
+    private static string MarkPath      => Path.Combine(Paths.PersistentData, "ReflectionsAnalysed.txt");
+
+    internal static List<ReflectionProposal> List()
+    {
+        lock (Gate)
+        {
+            try { if (File.Exists(ProposalsPath)) return JsonSerializer.Deserialize<List<ReflectionProposal>>(File.ReadAllText(ProposalsPath)) ?? new(); } catch { }
+            return new();
+        }
+    }
+
+    private static void Save(List<ReflectionProposal> all) { lock (Gate) File.WriteAllText(ProposalsPath, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true })); }
+
+    /// <summary>Approves or dismisses a proposal. Approving a banned phrase adds it to the reflector's never-say list.</summary>
+    internal static bool Decide(string id, bool approve)
+    {
+        List<ReflectionProposal> all = List();
+        ReflectionProposal? p = all.FirstOrDefault(x => x.Id == id && x.Status == "pending");
+        if (p is null) return false;
+        p.Status = approve ? "approved" : "dismissed";
+        if (approve && p.Kind == "banned_phrase" && p.Text.Trim().Length is > 2 and < 80)
+        {
+            ReflectSettings.Values v = ReflectSettings.Load();
+            if (!v.BannedPhrases.Contains(p.Text.Trim(), StringComparer.OrdinalIgnoreCase)) v.BannedPhrases.Add(p.Text.Trim());
+            ReflectSettings.Save(v);
+        }
+        Save(all);
+        return true;
+    }
+
+    /// <summary>The corrections logged since the last analysis, or none if there are fewer than <paramref name="min"/> of them.</summary>
+    internal static List<string> Unanalysed(int min, out int total)
+    {
+        total = 0;
+        if (!File.Exists(LogPath)) return new();
+        string[] lines = File.ReadAllLines(LogPath);
+        total = lines.Length;
+        int done = int.TryParse(File.Exists(MarkPath) ? File.ReadAllText(MarkPath).Trim() : "0", out int d) ? d : 0;
+        return lines.Length - done >= min ? lines.Skip(done).TakeLast(60).ToList() : new();
+    }
+
+    internal static void MarkAnalysed(int total) => File.WriteAllText(MarkPath, total.ToString());
+
+    internal static void Add(IEnumerable<ReflectionProposal> fresh)
+    {
+        List<ReflectionProposal> all = List();
+        foreach (ReflectionProposal p in fresh)
+            if (!all.Any(x => x.Kind == p.Kind && string.Equals(x.Text, p.Text, StringComparison.OrdinalIgnoreCase))) all.Add(p);
+        Save(all);
+    }
+}
+

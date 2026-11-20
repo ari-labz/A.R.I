@@ -1084,6 +1084,9 @@ body.cp-win32 #cp-win-controls { display: flex; }
           .rw-opt { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border:1px solid var(--border); border-radius:8px; cursor:pointer; }
           .rw-opt small { display:block; color:var(--text-dim); }
         </style>
+        <div class="vs-section-title">Suggestions from Ari</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">While idle, she reads her own corrections and notices what keeps coming up. Nothing changes until you approve it.</p>
+        <div id="rw-inbox" style="display:flex;flex-direction:column;gap:8px;margin-bottom:22px;"></div>
         <div class="vs-section-title">Live editing</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
           While Ari writes, a second pass reads each paragraph and fixes what is wrong in it: echoing you, invented details, padding. You see the fix being made. Pick how it looks; the preview shows it on a sample reply.
@@ -4193,7 +4196,20 @@ function rwRenderOptions() {
 }
 async function loadReflectSettings() {
     try { const d = await (await cpFetch('/api/v1/admin/reflect')).json(); rwStyle = d.editStyle || 'cursor'; document.getElementById('rw-enabled').checked = !!d.enabled; } catch {}
-    rwRenderOptions(); rwPlay();
+    rwRenderOptions(); rwPlay(); loadReflectInbox();
+}
+async function loadReflectInbox() {
+    const box = document.getElementById('rw-inbox'); let items = [];
+    try { const r = await cpFetch('/api/v1/admin/reflect/proposals'); if (r.ok) items = await r.json(); } catch {}
+    box.innerHTML = items.length ? items.map(p => `<div class="rw-opt" style="cursor:default;align-items:center;">
+        <span style="flex:1;min-width:0;">${p.kind === 'banned_phrase' ? 'Never say: <b>' + escHtml(p.text) + '</b>' : escHtml(p.text)}<small>${escHtml(p.why || '')}</small></span>
+        <button class="vs-btn-primary" type="button" data-rwp="${p.id}" data-yes="1" style="font-size:12px;padding:4px 12px;">${p.kind === 'banned_phrase' ? 'Add' : 'Noted'}</button>
+        <button class="vs-btn-primary" type="button" data-rwp="${p.id}" style="font-size:12px;padding:4px 12px;background:transparent;border:1px solid var(--border);color:var(--text);">Dismiss</button></div>`).join('')
+        : '<div style="color:var(--text-dim);font-size:13px;">No suggestions right now.</div>';
+    box.querySelectorAll('[data-rwp]').forEach(b => b.addEventListener('click', async () => {
+        await cpFetch('/api/v1/admin/reflect/proposals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: b.dataset.rwp, approve: !!b.dataset.yes }) });
+        loadReflectInbox();
+    }));
 }
 document.getElementById('rw-replay').addEventListener('click', rwPlay);
 document.getElementById('rw-save').addEventListener('click', async () => {
