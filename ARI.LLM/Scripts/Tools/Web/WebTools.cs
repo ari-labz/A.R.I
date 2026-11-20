@@ -83,12 +83,13 @@ internal sealed class SearchWeb : Tool
             : 5;
 
         string? searXngStatus = Dependency.SearXngStatus;
-        if (searXngStatus is null)
+        string? external = WebSearchEndpoint.Url;
+        if (external is null && searXngStatus is null)
             return "Web search is not available yet — SearXNG is still starting. Try again in a moment.";
-        if (searXngStatus.Length > 0)
+        if (external is null && searXngStatus!.Length > 0)
             return $"Web search is not available: {searXngStatus}";
 
-        string searchUrl = $"http://localhost:{Dependency.SEARXNG_PORT}/search" +
+        string searchUrl = (external ?? $"http://localhost:{Dependency.SEARXNG_PORT}") + "/search" +
                            $"?q={Uri.EscapeDataString(query)}&format=json&pageno=1";
 
         string json;
@@ -377,4 +378,10 @@ internal sealed class FetchPage : Tool
         return url;
     }
 
+}
+
+/// <summary>Where web search goes. Null is the SearXNG that ARI runs itself; the SearXNG plugin points it at an instance the owner runs elsewhere.</summary>
+public static class WebSearchEndpoint
+{
+    public static string? Url { get; set; }
 }

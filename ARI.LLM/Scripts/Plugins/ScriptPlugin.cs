@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ARI.Common;
+using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
@@ -101,6 +102,24 @@ public abstract class ScriptPlugin : IPlugin, IToolProvider
         State = PluginState.Stopped;
     }
 
+    // ── Hooks: ARI tells a running plugin what is happening, so it can do something alongside ─────────────────
+    // A plugin overrides only the ones it needs. They run in the background and never hold anything up; a hook that throws is logged and ignored.
+
+    /// <summary>Someone sent a message in a chat. <see cref="HookMessage.IsOwner"/> says whether it was the owner.</summary>
+    public virtual Task OnUserMessage(HookMessage message) => Task.CompletedTask;
+
+    /// <summary>Ari finished a reply in a chat.</summary>
+    public virtual Task OnReplyFinished(HookReply reply) => Task.CompletedTask;
+
+    /// <summary>A memory sweep of a conversation has just finished.</summary>
+    public virtual Task OnMemorySweep(HookSweep sweep) => Task.CompletedTask;
+
+    /// <summary>Asks ARI's model a question (on the reflector's server) and returns its answer. For plugins that need judgement.</summary>
+    public static Task<string> AskModel(string text, CancellationToken ct = default) => PluginHooks.Ask?.Invoke(text, ct) ?? Task.FromResult("");
+
+    /// <summary>This plugin's own folder, for files it keeps (never sent anywhere).</summary>
+    protected string PluginFolder => folder;
+
     public Task<string> RunActionAsync(string key) => Actions.Any(a => a.Key == key) ? OnAction(key) : Task.FromResult($"{Name} has no action called {key}.");
 
     // ── Settings ─────────────────────────────────────────────────────────────
@@ -172,6 +191,29 @@ public abstract class ScriptPlugin : IPlugin, IToolProvider
             File.WriteAllText(SettingsFile, JsonSerializer.Serialize(values, new JsonSerializerOptions { WriteIndented = true }));
             if (!OperatingSystem.IsWindows()) { try { File.SetUnixFileMode(SettingsFile, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { } }
             return null;
+        }
+    }
+}
+
+public sealed record HookMessage(string ThreadKey, string Text, bool IsOwner, DateTime Sent);
+public sealed record HookReply(string ThreadKey, string Text);
+public sealed record HookSweep(string ThreadKey, string Trigger);
+
+/// <summary>Calls the hooks of every running script plugin. Fire and forget: a slow or failing plugin never delays Ari.</summary>
+internal static class PluginHooks
+{
+    internal static Func<string, CancellationToken, Task<string>>? Ask { get; set; }
+
+    internal static void Fire(Func<ScriptPlugin, Task> hook)
+    {
+        foreach (ScriptPlugin p in PluginRegistry.All.OfType<ScriptPlugin>().Where(p => p.State == PluginState.Running))
+        {
+            ScriptPlugin plugin = p;
+            _ = Task.Run(async () =>
+            {
+                try { await hook(plugin); }
+                catch (Exception ex) { Shared.Logger.LogWarning("[Plugin {Id}] hook failed: {Err}", plugin.Id, ex.Message); }
+            });
         }
     }
 }

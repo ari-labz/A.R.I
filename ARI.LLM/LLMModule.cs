@@ -283,6 +283,11 @@ public class LLMModule : ILLMModule, IDisposable
             Reflector.Current = Deserialize<Reflector>(reflectorEl);
             _logger.LogInformation("Reflector is active.");
             _ = Task.Run(ReflectionProposalLoop);
+            PluginHooks.Ask = async (text, ct) =>
+            {
+                Thread scratch = new(ThreadPipeline.Dialogue, $"plugin-ask:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
+                return await Reflector.Current!.Prompt(scratch, text, new PromptOptions { MaxTokensOverride = 2000, Ct = ct });
+            };
         }
 
         if (Brain.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
@@ -597,6 +602,8 @@ public class LLMModule : ILLMModule, IDisposable
         {
             Broadcast(new AppEvent("streamingFinished", threadKey));
             PushIfUnwatched(thread, threadKey);
+            if (!thread.Internal && thread.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText is { Length: > 0 } replyText)
+                PluginHooks.Fire(p => p.OnReplyFinished(new HookReply(threadKey, replyText)));
         };
         thread.ScratchpadFileReady += url => Broadcast(new AppEvent("imageReady", threadKey, url));
         // Persist a plain-text transcript to ChatHistory after every completed exchange.
@@ -1185,7 +1192,7 @@ public class LLMModule : ILLMModule, IDisposable
                     string? key = engramQueue.Keys.FirstOrDefault(k => engramQueue.TryGetValue(k, out string? t) && t == "compaction") ?? engramQueue.Keys.FirstOrDefault();
                     if (key is null || !engramQueue.TryRemove(key, out string? trigger)) continue;
                     if (engram is null || !threads.ContainsKey(key)) continue;
-                    try { await engram.RunEngram(key, trigger); }
+                    try { await engram.RunEngram(key, trigger); PluginHooks.Fire(p => p.OnMemorySweep(new HookSweep(key, trigger))); }
                     catch (Exception ex) { _logger.LogWarning("[Idle] Engram failed for {Key}: {Err}", key, ex.Message); }
                 }
             }
@@ -1313,6 +1320,11 @@ public class LLMModule : ILLMModule, IDisposable
     // still wakes the thread instead of waiting for the next message.
     private async Task<string> RouteThenWake(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
     {
+        if (threads.TryGetValue(threadKey, out Thread? hooked) && !hooked.Internal)
+        {
+            bool owner = hooked.OwnerId is not null && hooked.OwnerId == Shared.MasterUserId;
+            PluginHooks.Fire(p => p.OnUserMessage(new HookMessage(threadKey, prompt, owner, DateTime.Now)));
+        }
         try { return await Route(threadKey, prompt, username, platformContext, onDelta, externalCt, messageAttachments, localPath, priority, steering, onTextDelta); }
         finally { WakeIfPending(threadKey); }
     }
