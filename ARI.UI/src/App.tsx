@@ -147,6 +147,33 @@ export default function App() {
         }).catch(() => {})
     }, [])
 
+    // Ari is changing part of her reply while it is on screen (the reflect stage): the old words are struck through, deleted, and the new
+    // ones typed in their place, like an author going back over a line. The server waits about as long as this takes before sending the
+    // reply as it now reads, so the two never fight over the text.
+    async function animateRewrite(oldText: string, newText: string) {
+        const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+        const re = /<!--rw-->[\s\S]*?<!--\/rw-->/
+        const show = (inner: string) => setItems(prev => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].type !== "ariResponse" || !prev[i].isStreaming) continue
+                const content = prev[i].content ?? ""
+                const marked = `<!--rw-->${inner}<!--/rw-->`
+                const next = re.test(content) ? content.replace(re, () => marked) : content.includes(oldText) ? content.replace(oldText, () => marked) : content
+                if (next === content) return prev
+                const copy = [...prev]; copy[i] = { ...prev[i], content: next }; return copy
+            }
+            return prev
+        })
+        show(`~~${oldText}~~`)
+        await sleep(600)
+        const delStep = Math.max(1, Math.ceil(oldText.length / 30))
+        for (let k = oldText.length - delStep; k > 0; k -= delStep) { show(`~~${oldText.slice(0, k)}~~`); await sleep(24) }
+        show("")
+        const typeStep = Math.max(1, Math.ceil(newText.length / 60))
+        for (let j = typeStep; j < newText.length; j += typeStep) { show(newText.slice(0, j)); await sleep(30) }
+        show(newText)
+    }
+
     // The persona applies from the next reply. With no conversation yet, it is kept until one is made.
     function choosePersona(id: string) {
         if (!activeThread) { setPendingPersona(id); return }
@@ -1258,6 +1285,11 @@ export default function App() {
                             return [...prev, { type: "ariResponse", content: data.replace("[ERROR] ", ""), timestamp: new Date().toISOString() }]
                         })
                         abortRef.current = null; setIsStreaming(false)
+                        return
+                    }
+                    if (data.startsWith("[REWRITE]")) {
+                        const [oldText, newText = ""] = data.slice(9).split("\u0001")
+                        void animateRewrite(oldText, newText)
                         return
                     }
                     if (data.startsWith("[SPLIT]")) {

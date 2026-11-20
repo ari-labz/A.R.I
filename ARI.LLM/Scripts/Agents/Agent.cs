@@ -281,6 +281,69 @@ public abstract class Agent
     /// prefills (Researching when it's reading web results), Thinking on reasoning or while writing a tool call,
     /// Typing only once real reply text reaches the user, and Researching / Generating / Waiting / Working while a
     /// tool runs. It moves in any direction; only an actual change is sent.</summary>
+    /// <summary>The reflect stage: a person-facing reply of any length that trips a banned phrase, or a long one, is read by the Reflector
+    /// (as a chat reply, or in a code thread as a report to check against the tool output). Each edit it returns is sent to the app first
+    /// as a [REWRITE] line, so the old text is seen being struck and the new typed, then made in the reply.</summary>
+    private async Task ReflectStage(Turn turn, Thread thread, string userPrompt, Func<string, Task>? userDelta)
+    {
+        Reflector? reflector = Reflector.Current;
+        if (reflector is null || !UsePersona || thread.Internal || turn.Ct.IsCancellationRequested) return;
+        if (thread.Pipeline is not (ThreadPipeline.Dialogue or ThreadPipeline.Code) || ReferenceEquals(this, reflector)) return;
+        ReflectSettings.Values settings = ReflectSettings.Load();
+        if (!settings.Enabled) return;
+
+        string reply = turn.ResponseBuilder.ToString();
+        const string AriPrefix = "ARI: ";
+        if (reply.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase)) reply = reply[AriPrefix.Length..];
+        reply = reply.TrimEnd();
+        bool work = thread.Pipeline == ThreadPipeline.Code;
+        List<string> hits = settings.BannedPhrases.Where(b => reply.Contains(b, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (reply.Length == 0 || (reply.Length < settings.MinChars && hits.Count == 0)) return;
+        if (work && !settings.VerifyWork) return;
+
+        SetPhase(turn, ThreadPhase.Thinking);
+        string evidence = work ? ToolEvidence(turn) : "";
+        List<ReplyEdit> edits = await reflector.Review(work ? ReflectMode.Work : ReflectMode.Chat, AssistantName.Name, userPrompt, reply, evidence, hits, turn.Ct);
+        if (edits.Count == 0) return;
+
+        foreach (ReplyEdit edit in edits)
+        {
+            string current = turn.ResponseBuilder.ToString();
+            int at = current.IndexOf(edit.Old, StringComparison.Ordinal);
+            if (at < 0) continue;
+            if (userDelta is not null) await userDelta($"[REWRITE]{edit.Old}\u0001{edit.New}");
+            // The app animates the change; wait about as long as it takes so the next update doesn't land in the middle of it.
+            await Task.Delay(Math.Min(4000, 700 + edit.Old.Length * 12 + edit.New.Length * 25), turn.Ct);
+            turn.ResponseBuilder.Remove(at, edit.Old.Length).Insert(at, edit.New);
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) reply edited by the reflector: \"{Old}\" -> \"{New}\"", Name, thread.Key, edit.Old, edit.New);
+            if (userDelta is not null)
+            {
+                string visible = turn.ResponseBuilder.ToString();
+                if (visible.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase)) visible = visible[AriPrefix.Length..];
+                await userDelta(turn.ContentBuilder.ToString() + visible);
+            }
+        }
+    }
+
+    /// <summary>What the tools returned this turn, shortened, for the reflector to check claims against.</summary>
+    private static string ToolEvidence(Turn turn)
+    {
+        StringBuilder sb = new();
+        foreach (object m in turn.Messages.TakeLast(40))
+        {
+            try
+            {
+                JsonElement el = JsonSerializer.SerializeToElement(m);
+                if (!el.TryGetProperty("role", out JsonElement role) || role.GetString() != "tool") continue;
+                string name = el.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "tool" : "tool";
+                string content = el.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
+                sb.AppendLine($"[{name}] {(content.Length > 500 ? content[..250] + " … " + content[^250..] : content)}");
+            }
+            catch { }
+        }
+        return sb.ToString().TrimEnd();
+    }
+
     private void SetPhase(Turn turn, ThreadPhase phase)
     {
         if (phase == turn.LastPhase) return;
@@ -655,6 +718,11 @@ public abstract class Agent
             }
 
             if (FlushPrefillFlips(turn) && turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
+
+            // Before the reply is final, a separate agent reads it. If it finds something wrong, the app shows the fix being made.
+            try { await ReflectStage(turn, thread, prompt, userDelta); }
+            catch (OperationCanceledException) when (turn.Ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[{Agent}] ({Thread}) reflect stage failed: {Err}", Name, thread.Key, ex.Message); }
 
             turn.Stopwatch.Stop();
             responseText = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);

@@ -10,6 +10,10 @@
   },
   "Agents": [
     {
+      "Name": "Reflector",
+      "BudgetResponse": 600
+    },
+    {
       "Name": "Awareness",
       "AgentPrompt": "You are deciding whether {AI} should respond to the latest message in a group chat.\n\nYou will be given recent chat history followed by the latest message. Use the full history to resolve pronouns and understand who is talking to whom before making your decision.\n\nRules:\n- If the latest message directly names or addresses {AI}, she is ADDRESSED.\n- If a pronoun (she, her, it) in the latest message refers to {AI} based on context, she is ADDRESSED.\n- If the latest message is a natural follow-up to something {AI} just said or did, she is ADDRESSED.\n- If someone is talking about {AI} in the third person while she is present in the conversation, she is ADDRESSED — she has standing to respond.\n- If the message is clearly directed at a specific other person by name and has nothing to do with {AI}, it is OVERHEARD.\n- If the conversation is entirely between other people and does not involve or reference {AI}, it is OVERHEARD.\n- When in doubt, lean toward ADDRESSED — missing a message is worse than responding unnecessarily.\n\nReply with ONLY one word — ADDRESSED or OVERHEARD — and nothing else.",
       "Enabled": true,

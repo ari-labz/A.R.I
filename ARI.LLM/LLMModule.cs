@@ -276,6 +276,14 @@ public class LLMModule : ILLMModule, IDisposable
             _logger.LogWarning("No Awareness entry in Agents.json — using default server/slot with no system prompt. Add an Awareness entry to configure it.");
         }
 
+        // The reflector reads a finished reply and says what should change in it (see Reflector). No Reflector entry means no
+        // reflect stage: replies go out as written.
+        if (rawAgents.TryGetValue("Reflector", out JsonElement reflectorEl) && !disabledAgents.Contains("Reflector"))
+        {
+            Reflector.Current = Deserialize<Reflector>(reflectorEl);
+            _logger.LogInformation("Reflector is active.");
+        }
+
         if (Brain.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
             Memory mem = Deserialize<Memory>(memoryEl);

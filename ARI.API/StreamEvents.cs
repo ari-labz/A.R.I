@@ -31,6 +31,14 @@ public sealed class StreamEvents(JsonSerializerOptions json)
     /// <summary>The events for one update of the reply-so-far (what the older format sends as a whole).</summary>
     public IEnumerable<string> FromAccumulated(string accumulated)
     {
+        if (accumulated.StartsWith("[REWRITE]", StringComparison.Ordinal))
+        {
+            // The reflector is changing part of the reply: this text out, that text in. Nothing in the reply so far moves until it lands.
+            string[] parts = accumulated["[REWRITE]".Length..].Split('\u0001');
+            yield return Format("message.rewrite", new { oldText = parts.ElementAtOrDefault(0), newText = parts.ElementAtOrDefault(1) });
+            yield break;
+        }
+
         if (accumulated.StartsWith("[SPLIT]", StringComparison.Ordinal))
         {
             string[] parts = accumulated["[SPLIT]".Length..].Split('\u0001');
