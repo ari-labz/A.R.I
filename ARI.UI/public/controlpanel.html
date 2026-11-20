@@ -1412,6 +1412,19 @@ body.cp-win32 #cp-win-controls { display: flex; }
           <span id="brain-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
         <div id="brain-backup-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+
+        <div class="vs-section-title" style="margin-top:28px;">Settings backup</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          Everything except the Brain: settings, agents, servers, persona, feedback, plugins, custom tools, accounts and conversations.
+          Restoring it on a fresh install brings ARI back as she was. Your current settings are saved first, and ARI has to be restarted afterwards.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <button class="vs-btn-primary" id="cfg-export-btn" type="button">Download settings backup</button>
+          <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cfg-export-keys"> Include keys and tokens</label>
+          <button class="vs-btn-primary" id="cfg-restore-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">Restore from file…</button>
+          <input type="file" id="cfg-restore-file" accept=".zip" style="display:none;">
+          <span id="cfg-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
       </div>
     </div>
 
@@ -3423,6 +3436,33 @@ document.getElementById('brain-backup-btn').addEventListener('click', async () =
     } catch { s.textContent = 'Backup failed.'; }
 });
 document.getElementById('brain-refresh-btn').addEventListener('click', () => { brainStatus().textContent = ''; loadBrain(); });
+
+// ── settings backup ───────────────────────────────────────
+document.getElementById('cfg-export-btn').addEventListener('click', async () => {
+    const status = document.getElementById('cfg-status'); status.textContent = 'Preparing…';
+    try {
+        const keys = document.getElementById('cfg-export-keys').checked;
+        const r = await cpFetch('/api/v1/admin/config/export?keys=' + keys);
+        if (!r.ok) { status.textContent = 'Failed: ' + await cpErrorText(r); return; }
+        const url = URL.createObjectURL(await r.blob());
+        const a = Object.assign(document.createElement('a'), { href: url, download: 'ARI-Config-' + new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-') + '.zip' });
+        a.click(); URL.revokeObjectURL(url);
+        status.textContent = 'Downloaded.';
+    } catch { status.textContent = 'Failed.'; }
+});
+document.getElementById('cfg-restore-btn').addEventListener('click', () => document.getElementById('cfg-restore-file').click());
+document.getElementById('cfg-restore-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    if (!confirm('Restore settings from ' + file.name + '? Your current settings are saved first. ARI must be restarted afterwards.')) return;
+    const status = document.getElementById('cfg-status'); status.textContent = 'Restoring…';
+    const form = new FormData(); form.append('file', file);
+    try {
+        const r = await cpFetch('/api/v1/admin/config/restore', { method: 'POST', body: form });
+        const body = await r.json().catch(() => ({}));
+        status.textContent = r.ok ? 'Restored ' + body.restored + ' files (previous settings saved as ' + body.savedBefore + '). Restart ARI to apply.' : 'Failed: ' + (body.error || r.statusText);
+    } catch { status.textContent = 'Failed.'; }
+});
 
 // ── plugins ───────────────────────────────────────────────
 // A plugin describes its own settings, actions and source; this page only draws them. IDs stay strings end to end: Discord snowflakes exceed 2^53.
