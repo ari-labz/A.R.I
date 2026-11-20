@@ -535,6 +535,8 @@ public class LLMModule : ILLMModule, IDisposable
         }
         Thread thread = new Thread(type, threadKey, platformContext);
         Channels.StampPlace(thread);
+        // A persona picked in the app before the conversation existed.
+        if (pendingPersonas.TryRemove(threadKey, out string? chosenPersona)) thread.PersonaId = chosenPersona;
         threads[threadKey] = thread;
         // list_tools/request_tools are always warm (issue #126) and universal — no agent-identity gate.
         // What a group actually resolves to depends on ToolFactories reading this thread's bound context
@@ -1608,10 +1610,17 @@ public class LLMModule : ILLMModule, IDisposable
     /// <summary>Sets the persona a conversation speaks in. False if there is no such conversation.</summary>
     public bool SetThreadPersona(string threadKey, string personaId)
     {
-        if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
+        if (!threads.TryGetValue(threadKey, out Thread? thread))
+        {
+            // The app makes a conversation's key before its first message; the choice waits for the conversation to exist.
+            pendingPersonas[threadKey] = personaId;
+            return true;
+        }
         thread.PersonaId = personaId;
         return true;
     }
+
+    private readonly ConcurrentDictionary<string, string> pendingPersonas = new();
 
     // Ari is "active" whenever any visible (non-Internal) thread is in a state the user can see in the
     // sidebar and is not yet fully settled — Unread (proactive awaiting first reply), Active, Streaming,

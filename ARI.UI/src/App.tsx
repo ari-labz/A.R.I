@@ -1116,6 +1116,7 @@ export default function App() {
             key = made.key; newIsCode = made.isCodeMode
             if (pendingPersona && pendingPersona !== defaultPersona)
                 void apiFetch(`/api/v1/threads/${key}/persona`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personaId: pendingPersona }) })
+            setPendingPersona(null)
             setActiveThread(key)
             attachWatch(key)   // a thread created by sending is watched too, not only one opened from the list
             activeProjectRef.current = selectedProject

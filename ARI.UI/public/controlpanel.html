@@ -1421,6 +1421,16 @@ body.cp-win32 #cp-win-controls { display: flex; }
         </div>
         <div id="brain-backup-list" style="display:flex;flex-direction:column;gap:8px;"></div>
 
+        <div class="vs-section-title" style="margin-top:28px;">Tidiness check</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          A read-only look at how easy the graph is to follow: notes that lead nowhere, notes nothing leads to, probable duplicates, notes with no type and notes nobody has touched for four months. It changes nothing. Fixes are yours to approve.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <button class="vs-btn-primary" id="brain-health-btn" type="button">Check the brain</button>
+          <span id="brain-health-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+        <div id="brain-health-result" style="display:flex;flex-direction:column;gap:8px;"></div>
+
         <div class="vs-section-title" style="margin-top:28px;">Settings backup</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
           Everything except the Brain: settings, agents, servers, persona, feedback, plugins, custom tools, accounts and conversations.
@@ -3444,6 +3454,21 @@ document.getElementById('brain-backup-btn').addEventListener('click', async () =
     } catch { s.textContent = 'Backup failed.'; }
 });
 document.getElementById('brain-refresh-btn').addEventListener('click', () => { brainStatus().textContent = ''; loadBrain(); });
+
+// ── brain tidiness check ──────────────────────────────────
+document.getElementById('brain-health-btn').addEventListener('click', async () => {
+    const status = document.getElementById('brain-health-status'), out = document.getElementById('brain-health-result');
+    status.textContent = 'Checking…'; out.innerHTML = '';
+    try {
+        const r = await cpFetch('/api/v1/admin/brain/health');
+        if (!r.ok) { status.textContent = 'Failed: ' + await cpErrorText(r); return; }
+        const d = await r.json();
+        status.textContent = d.notes + ' notes' + (d.unresolvedLinks >= 0 ? ', ' + d.unresolvedLinks + ' links that point at nothing' : '') + '.';
+        const group = (title, list) => `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;"><summary style="cursor:pointer;">${escHtml(title)} (${list.length}${list.length >= 60 ? '+' : ''})</summary><div style="font-size:12px;color:var(--text-dim);margin-top:6px;">${list.map(escHtml).join('<br>') || 'None.'}</div></details>`;
+        out.innerHTML = group('Lead nowhere (no links out)', d.deadEnds) + group('Nothing leads to them', d.orphans)
+            + group('Probable duplicates', d.duplicates.map(x => x.a + '  ↔  ' + x.b)) + group('No type', d.untyped) + group('Untouched for four months', d.stale);
+    } catch { status.textContent = 'Failed.'; }
+});
 
 // ── settings backup ───────────────────────────────────────
 document.getElementById('cfg-export-btn').addEventListener('click', async () => {

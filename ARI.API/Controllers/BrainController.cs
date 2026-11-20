@@ -17,6 +17,21 @@ public class BrainController : ControllerBase
 {
     private LLMModule? Llm => (LLMModule?)Modules.Llm;
 
+    /// <summary>A read-only look at how tidy the graph is: dead ends, orphans, probable duplicates, untyped and stale notes.
+    /// Titles and counts only. Nothing is changed; the owner decides what to fix.</summary>
+    [HttpGet("health")]
+    public IActionResult Health()
+    {
+        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
+        BrainHealthReport r = BrainHealth.Scan();
+        return Ok(new
+        {
+            notes = r.Notes, unresolvedLinks = r.UnresolvedLinks,
+            deadEnds = r.DeadEnds, orphans = r.Orphans, untyped = r.Untyped, stale = r.Stale,
+            duplicates = r.DuplicateCandidates.Select(d => new { a = d.A, b = d.B }),
+        });
+    }
+
     /// <summary>Lists available backups, newest first.</summary>
     [HttpGet("backups")]
     public IActionResult Backups()
