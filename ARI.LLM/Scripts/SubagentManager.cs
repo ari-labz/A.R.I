@@ -22,6 +22,10 @@ internal static class SubagentManager
     /// <summary>The agent that runs subagent tasks. Null when not configured, which hides the tools.</summary>
     internal static Subagent? Agent { get; set; }
 
+    /// <summary>Builds a subagent bound to a named server and optional slot ("Utility Server" or "Main Server/Subagents"), so a task can be
+    /// sent to a model that is free. Returns null and the places that exist when the name doesn't match.</summary>
+    internal static Func<string, (Subagent? Agent, string Places)>? AgentOn { get; set; }
+
     // Tools a subagent may never get, whatever the parent has: control flow that belongs to the parent's own
     // turn, and anything that could widen its toolset (request_tools would let it load groups its parent
     // never had, sidestepping the subset rule).
@@ -77,9 +81,14 @@ internal static class SubagentManager
     /// <summary>Starts a subagent on its own internal thread with a title, a task prompt and optional context (it
     /// starts with a blank memory, so context carries whatever it needs from this conversation). Returns the run,
     /// or an error message.</summary>
-    internal static (Run? Run, string Message) Spawn(Thread parent, string title, string task, string? context, IReadOnlyList<string>? toolNames)
+    internal static (Run? Run, string Message) Spawn(Thread parent, string title, string task, string? context, IReadOnlyList<string>? toolNames, string? where = null)
     {
         if (Agent is not { } agent) return (null, "Subagents aren't configured on this server.");
+        if (!string.IsNullOrWhiteSpace(where))
+        {
+            if (AgentOn?.Invoke(where.Trim()) is not ({ } placed, _) ) return (null, $"There's no server or slot called \"{where}\". Places: {AgentOn?.Invoke("").Places}.");
+            agent = placed;
+        }
         if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(task)) return (null, "Give the subagent a title and a prompt.");
 
         ThreadRuns state = byThread.GetOrAdd(parent.Key, _ => new ThreadRuns());
@@ -111,7 +120,7 @@ internal static class SubagentManager
         Shared.Logger.LogInformation("[Subagents] ({Thread}) started agent {Id} \"{Title}\" with [{Tools}]: {Task}",
             parent.Key, id, title, string.Join(", ", given), task);
 
-        StringBuilder msg = new($"Agent {id} \"{title}\" started with tools: {(given.Count > 0 ? string.Join(", ", given) : "none")}.");
+        StringBuilder msg = new($"Agent {id} \"{title}\" started on {agent.ServerName}/{agent.SlotName} with tools: {(given.Count > 0 ? string.Join(", ", given) : "none")}.");
         if (refused.Count > 0)
             msg.Append($" Not given (not loaded in this conversation, or never available to subagents): {string.Join(", ", refused)}.");
         msg.Append(" Call wait_for_agent when you need its result.");

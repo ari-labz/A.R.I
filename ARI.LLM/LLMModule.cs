@@ -261,6 +261,20 @@ public class LLMModule : ILLMModule, IDisposable
         else if (_servers.Count > 0 && !disabledAgents.Contains("Subagent"))
             SubagentManager.Agent = Deserialize<Subagent>(JsonDocument.Parse("{\"name\":\"Subagent\"}").RootElement);
         ParentReports.Nudge = WakeIfPending;
+        string subagentJson = rawAgents.TryGetValue("Subagent", out JsonElement subDef) ? subDef.GetRawText() : "{\"name\":\"Subagent\"}";
+        SubagentManager.AgentOn = where =>
+        {
+            string places = string.Join(", ", _servers.SelectMany(sv => sv.Slots.Select(sl => $"{sv.Name}/{sl.Name}")));
+            string[] parts = where.Split('/', 2, StringSplitOptions.TrimEntries);
+            Server? server = _servers.FirstOrDefault(sv => sv.Name.Equals(parts[0], StringComparison.OrdinalIgnoreCase));
+            if (server is null || (parts.Length > 1 && !server.Slots.Any(sl => sl.Name.Equals(parts[1], StringComparison.OrdinalIgnoreCase)))) return (null, places);
+            // The Subagent's own settings from Agents.json, only placed somewhere else.
+            System.Text.Json.Nodes.JsonObject def = System.Text.Json.Nodes.JsonNode.Parse(subagentJson)!.AsObject();
+            foreach (string k in def.Select(p => p.Key).Where(k => k.Equals("ServerName", StringComparison.OrdinalIgnoreCase) || k.Equals("SlotName", StringComparison.OrdinalIgnoreCase)).ToList()) def.Remove(k);
+            def["ServerName"] = server.Name;
+            def["SlotName"]   = parts.Length > 1 ? parts[1] : "";
+            return (Deserialize<Subagent>(JsonDocument.Parse(def.ToJsonString()).RootElement), places);
+        };
 
         // Speech conversational-awareness gate. Uses its own Agents.json entry if present, otherwise
         // gets the same server/slot-fallback treatment as any other unbound agent (Deserialize on an
