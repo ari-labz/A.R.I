@@ -627,11 +627,7 @@ public class LLMModule : ILLMModule, IDisposable
                         else if (share < 0.5) nearFull.TryRemove(threadKey, out _);
                     }
                     if (!engram.ShouldIntervalSweep(threadKey) && !nearCompaction) return;
-                    _ = Task.Run(async () =>
-                    {
-                        try { await engram.RunEngram(threadKey, nearCompaction ? "compaction" : "interval"); }
-                        catch (Exception ex) { _logger.LogWarning("[Interval] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
-                    });
+                    QueueEngram(threadKey, nearCompaction ? "compaction" : "interval");
                 };
         }
         Broadcast(new AppEvent("newThread", threadKey));
@@ -1111,6 +1107,46 @@ public class LLMModule : ILLMModule, IDisposable
     /// thread processed so its deletion timer may proceed. RunEngram sets EngramProcessed on success; if
     /// it can't run (disabled / a concurrent sweep holds the lock) the flag stays false and the thread's
     /// delete-retry poll tries again.</summary>
+    // ── Engram while idle ────────────────────────────────────────────────────────
+    // Interval and compaction sweeps never compete with a reply for the model: they wait in a queue and run only once nothing has
+    // been generating for a while. A thread is queued once however many exchanges pass, and nothing is lost if it closes first:
+    // the sweep at close (or dormancy) reads everything since the last one, which is what a queued run would have read.
+
+    private const int EngramIdleSeconds = 10;
+    private readonly ConcurrentDictionary<string, string> engramQueue = new(StringComparer.OrdinalIgnoreCase);
+    private int engramWorkerRunning;
+
+    private void QueueEngram(string threadKey, string trigger)
+    {
+        // A compaction run is the more urgent of the two, so it keeps its place.
+        engramQueue.AddOrUpdate(threadKey, trigger, (_, queued) => queued == "compaction" ? queued : trigger);
+        if (Interlocked.CompareExchange(ref engramWorkerRunning, 1, 0) != 0) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                DateTime lastBusy = DateTime.UtcNow;
+                while (!engramQueue.IsEmpty)
+                {
+                    if (!IsIdle) { lastBusy = DateTime.UtcNow; await Task.Delay(1000); continue; }
+                    if (DateTime.UtcNow - lastBusy < TimeSpan.FromSeconds(EngramIdleSeconds)) { await Task.Delay(1000); continue; }
+
+                    string? key = engramQueue.Keys.FirstOrDefault(k => engramQueue.TryGetValue(k, out string? t) && t == "compaction") ?? engramQueue.Keys.FirstOrDefault();
+                    if (key is null || !engramQueue.TryRemove(key, out string? trigger)) continue;
+                    if (engram is null || !threads.ContainsKey(key)) continue;
+                    try { await engram.RunEngram(key, trigger); }
+                    catch (Exception ex) { _logger.LogWarning("[Idle] Engram failed for {Key}: {Err}", key, ex.Message); }
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref engramWorkerRunning, 0);
+                // A job queued in the instant the worker was finishing must not be stranded.
+                if (!engramQueue.IsEmpty && engramQueue.Keys.FirstOrDefault() is { } stranded && engramQueue.TryGetValue(stranded, out string? t2)) QueueEngram(stranded, t2);
+            }
+        });
+    }
+
     private void OnThreadDormant(Thread thread)
     {
         bool canSweep = engram is not null && !thread.EngramProcessed && Engram.MaySweep(thread);
