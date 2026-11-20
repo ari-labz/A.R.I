@@ -1,7 +1,9 @@
 import { useState } from "react"
+import { EyeIcon, BrainIcon, SpeechIcon } from "./ThreadIcons"
 import type { ThreadEntry } from "../hooks/useThreads"
 interface Props {
     threads:             ThreadEntry[]
+    unreadThreads?:      Set<string>
     activeThread:        string | null
     activeView:          "chat" | "projects"
     onNewChat:           () => void
@@ -19,7 +21,7 @@ interface Props {
     onHideThread?:       (t: ThreadEntry) => void
 }
 
-export default function Sidebar({ threads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, clientVersion, outdated, userDisplayName, onOpenPreferences, isAdmin, onRenameThread, onHideThread }: Props) {
+export default function Sidebar({ threads, unreadThreads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, clientVersion, outdated, userDisplayName, onOpenPreferences, isAdmin, onRenameThread, onHideThread }: Props) {
     const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
     return (
         <aside id="sidebar" className={collapsed ? "collapsed" : ""}>
@@ -72,6 +74,13 @@ const baseName = t.isInternal
                         return (
                             <li key={t.key} className={classes} onClick={() => onSelectThread(t)}
                                 onContextMenu={e => { if (t.isInternal) return; e.preventDefault(); e.stopPropagation(); setMenu({ key: t.key, x: e.clientX, y: e.clientY }) }}>
+                                <span className="thread-state" aria-hidden="true">
+                                    {t.status === "prefilling" || t.status === "researching" ? <span className="thread-state-fade" title="Reading"><EyeIcon size={18} /></span>
+                                    : t.status === "thinking" ? <span className="thread-state-fade" title="Thinking"><BrainIcon size={18} /></span>
+                                    : t.status === "typing" ? <span className="thread-state-fade" title="Typing"><SpeechIcon size={18} /></span>
+                                    : unreadThreads?.has(t.key) ? <span className="thread-unread-dot" title="Unread message" />
+                                    : null}
+                                </span>
                                 <span className="thread-name">
                                     {t.projectName && (
                                         <span className="thread-project">{t.projectName}/</span>

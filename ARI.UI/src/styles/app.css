@@ -144,6 +144,11 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 :is(#thread-list, .thread-list) li.pending  { opacity: 0.6; font-style: italic; }
 :is(#thread-list, .thread-list) li.inactive { opacity: 0.45; font-style: italic; }
 
+.state-icon { display: inline-block; flex: none; background-color: currentColor; -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; }
+.thread-state { width: 18px; height: 18px; flex: none; margin-right: 8px; display: flex; align-items: center; justify-content: center; }
+.thread-state-fade { display: flex; color: #c8c8c8; animation: thread-state-fade 1.6s ease-in-out infinite; }
+.thread-unread-dot { width: 9px; height: 9px; border-radius: 50%; background: #3b82f6; animation: thread-state-fade 1.6s ease-in-out infinite; }
+@keyframes thread-state-fade { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
 .thread-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .thread-meta { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 .thread-time { font-size: 11px; color: var(--sidebar-dim); }

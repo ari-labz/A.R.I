@@ -9,6 +9,7 @@ export interface ThreadEntry {
     isCodeMode:   boolean
     pipeline:     string  // "dialogue" | "code" | "speech"
     state:        string
+    status?:      ThreadStatus
     lastMessageAt: string
     projectName?: string | null
     projectId?:   string | null

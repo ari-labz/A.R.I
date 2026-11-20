@@ -1,3 +1,4 @@
+import { BrainIcon } from "./ThreadIcons"
 import { Fragment, useEffect, useRef, useState, useCallback } from "react"
 import type { ThreadItem, Attachment } from "../hooks/useThreads"
 import { setBubbleMd, setBubbleBlocks, ensureImageLightbox } from "../hooks/useMarkdown"
@@ -782,13 +783,7 @@ function MemoryMarker({ done }: { done: boolean }) {
     return (
         <div className="memory-marker" role="status" aria-live="polite">
             <div className="memory-marker-icon" aria-hidden="true">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M15.5 13a3.5 3.5 0 0 0 -3.5 3.5v1a3.5 3.5 0 0 0 7 0v-1.8" />
-                    <path d="M8.5 13a3.5 3.5 0 0 1 3.5 3.5v1a3.5 3.5 0 0 1 -7 0v-1.8" />
-                    <path d="M17.5 16a3.5 3.5 0 0 0 0 -7h-.5" />
-                    <path d="M6.5 16a3.5 3.5 0 0 1 0 -7h.5" />
-                    <path d="M12 3v6" />
-                </svg>
+                <BrainIcon size={22} />
             </div>
             <div className="memory-marker-text">
                 <span className="memory-marker-title">{aiName} will remember that</span>

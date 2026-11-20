@@ -149,6 +149,7 @@ export default function App() {
     const [isStreaming,      setIsStreaming]        = useState(false)
     const [isRemembering,    setIsRemembering]      = useState(false)
     const [threadStatus,     setThreadStatus]       = useState<ThreadStatus>("idle")
+    const [unreadThreads,    setUnreadThreads]      = useState<Set<string>>(new Set())
     const watchStreamRef = useRef<EventSource | null>(null)
     const [sidebarCollapsed, setSidebarCollapsed]  = useState(isNarrowPortrait)
     const [pendingAttach,    setPendingAttach]      = useState<PendingAttachment[]>([])
@@ -353,6 +354,8 @@ export default function App() {
                         break
                     case "streamingFinished":
                         loadThreads()
+                        if (data.threadKey !== activeThreadRef.current)
+                            setUnreadThreads(prev => new Set(prev).add(data.threadKey))
                         playResponseChime()   // issue #63: chime when an Ari response completes
                         if (data.threadKey === activeThreadRef.current) {
                             refreshThreadAttach(data.threadKey)
@@ -417,8 +420,8 @@ export default function App() {
     useEffect(() => {
         if (authState !== "authed") return
         connectAndInit()
-        // Long fallback poll — events drive updates; this is only a safety net.
-        const pollId = setInterval(loadThreads, 60_000)
+        // Events drive most updates; this poll also keeps the sidebar's reading / thinking / typing icons current.
+        const pollId = setInterval(loadThreads, 3_000)
 
         // Shows the outdated banner when a newer stable server release exists on GitHub.
         // The server does the GitHub comparison and caches it; we just read the flag.
@@ -1433,11 +1436,12 @@ export default function App() {
             )}
             <Sidebar
                 threads={threads}
+                unreadThreads={unreadThreads}
                 activeThread={activeThread}
                 activeView={activeView}
                 onNewChat={newChat}
                 onOpenProjects={() => setActiveView("projects")}
-                onSelectThread={(t: ThreadEntry) => { setActiveView("chat"); openThread(t.key, t.isInternal, t.agentName, t.isCodeMode, t.projectId ?? null) }}
+                onSelectThread={(t: ThreadEntry) => { setActiveView("chat"); setUnreadThreads(prev => { if (!prev.has(t.key)) return prev; const n = new Set(prev); n.delete(t.key); return n }); openThread(t.key, t.isInternal, t.agentName, t.isCodeMode, t.projectId ?? null) }}
                 onCloseThread={(t: ThreadEntry) => {
                     // On an expired (saved) thread the button deletes it for good, so ask first.
                     if (t.state === "expired" && !window.confirm("Delete this saved conversation forever? This cannot be undone.")) return

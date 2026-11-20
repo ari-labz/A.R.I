@@ -1,3 +1,4 @@
+import { BrainIcon } from "./ThreadIcons"
 import { useRef, useEffect, useState } from "react"
 import { apiFetch } from "../auth"
 
@@ -74,11 +75,7 @@ export default function ThinkingEffort({ serverReady, codeMode }: Props) {
                 title={`Thinking effort — ${STOP_LABELS[step]}`}
                 onClick={() => setOpen(o => !o)}
             >
-                {/* brain icon */}
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9.5 2A2.5 2.5 0 0 0 7 4.5v.5a3 3 0 0 0-2 5.24V15a3 3 0 0 0 3 3 2.5 2.5 0 0 0 5 0V4.5A2.5 2.5 0 0 0 9.5 2Z"/>
-                    <path d="M14.5 2A2.5 2.5 0 0 1 17 4.5v.5a3 3 0 0 1 2 5.24V15a3 3 0 0 1-3 3"/>
-                </svg>
+                <BrainIcon size={16} />
             </button>
             {open && (
                 <div id="thinking-effort-popup">
