@@ -17,7 +17,7 @@ public class ConfigBackupController : ControllerBase
     // Folders under the server's data folder that are saved. Everything else (the Brain, logs, downloaded tools and voice models,
     // projects, scratchpads, previous backups) is either the Brain, rebuildable, or too big to belong in a settings backup.
     private static readonly string[] Folders =
-        { "PersistentData", "CustomTools", "Plugins", "Scripts", "Templates", "Feedback", "Branding", "LLMConfigs", "HiddenThreads",
+        { "PersistentData", "Personas", "CustomTools", "Plugins", "Scripts", "Templates", "Feedback", "Branding", "LLMConfigs", "HiddenThreads",
           "PersistedThreads", "ChatHistory", "Push", "PromptBackups", "Skills" };
 
     private static string Root => Paths.ServerDir("");
