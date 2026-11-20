@@ -18,12 +18,14 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
 
     private readonly ILogger logger;
     private CancellationTokenSource? loopCts;
+    private readonly LookAhead lookAhead;
 
     public CalendarModule(CalendarConfig config, string persistentDataDir, ILogger logger)
     {
         this.logger = logger;
         Database.Path = Path.Combine(persistentDataDir, "Calendar.db");
         Directory.CreateDirectory(persistentDataDir);
+        lookAhead = new LookAhead(persistentDataDir);
         Database.EnsureSchema();
     }
 
@@ -39,7 +41,7 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await CheckDueReminders(ct); await CheckEventReminders(ct); }
+            try { await CheckDueReminders(ct); await CheckEventReminders(ct); await lookAhead.Check(ListEventsInRange, ct); }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { logger.LogError(ex, "[Calendar] Reminder loop error."); }
 
@@ -172,7 +174,8 @@ public sealed class CalendarModule : ICalendarModule, IDisposable
                 if (Database.LastRemindedStart(e.Id) == key) continue;
                 Database.MarkEventReminded(e.Id, key);
                 string when = occ.IsWholeDay ? "today" : $"at {occ.Start:t}";
-                string prompt = $"Give the owner a short heads-up that \"{e.Title}\" starts {when}, about {Describe(occ.Start - now)} from now. Plain and brief; add anything from the event's notes only if it helps.";
+                string prompt = $"Give the owner a short heads-up that \"{e.Title}\" starts {when}, about {Describe(occ.Start - now)} from now. Plain and brief; add anything from the event's notes only if it helps." +
+                                (lead >= TimeSpan.FromDays(1) ? " If it needs something done beforehand (a card or a present for a birthday, booking, packing), say what, like a good secretary would." : "");
                 try { await Modules.Llm.FireReminderAsync(prompt, e.Notes ?? string.Empty, e.Title, ct); }
                 catch (Exception ex) { logger.LogError(ex, "[Calendar] Heads-up for '{Title}' failed.", e.Title); }
                 logger.LogInformation("[Calendar] Heads-up sent for '{Title}' ({Start:u}).", e.Title, occ.Start);

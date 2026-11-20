@@ -41,7 +41,7 @@ internal sealed class CreateEvent : Tool
         function = new
         {
             name        = "create_event",
-            description = "Add an event to ARI's calendar. Events are pure context — they are never acted on by themselves, just shown to you as background (e.g. working hours, a birthday, a trip). Use create_reminder if you actually need to say something to the owner at a given time. Call get_time first whenever the date is relative (\"today\", \"tomorrow\", \"next Friday\") — never guess the current date.",
+            description = "Add an event to ARI's calendar (working hours, a birthday, a trip, a deadline). Use it whenever the owner mentions a date that matters to them: a birthday or anniversary repeats yearly as a whole-day event. Set remind_before_minutes when they'll want a heads-up; for something that needs preparing (a card, a present, booking) a week ahead (10080) is usual. Whole-day events without a reminder still get a look-ahead from you once in the week before. Use create_reminder when you need to do or say something specific at a given time. Call get_time first whenever the date is relative (\"today\", \"tomorrow\", \"next Friday\") — never guess the current date.",
             parameters  = new
             {
                 type       = "object",
