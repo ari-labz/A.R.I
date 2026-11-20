@@ -1836,3 +1836,12 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 #persona-popup button.selected .persona-name { color: var(--accent); }
 #persona-popup .persona-name { font-size: 13px; font-weight: 600; }
 #persona-popup .persona-desc { font-size: 11px; opacity: .65; }
+
+/* live edits: how Ari's corrections to her own reply look while she is still writing */
+.rw-sel { background: var(--col-btn-thinking-effort-hover-colour, #b9dbe3); border-radius: 2px; }
+.rw-del { background: rgba(224, 106, 90, .22); color: #d0604f; text-decoration: line-through; border-radius: 2px; }
+.rw-ins { background: rgba(80, 180, 120, .22); color: #3f9a66; border-radius: 2px; }
+.rw-badge { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
+.rw-selc { background: rgba(160, 120, 230, .25); outline: 1px solid #a07ae6; border-radius: 2px; }
+.rw-cur { position: relative; display: inline-block; width: 0; height: 1.15em; border-left: 2px solid #a07ae6; vertical-align: text-bottom; }
+.rw-cur i { position: absolute; bottom: 100%; left: -2px; white-space: nowrap; background: #a07ae6; color: #fff; font: normal 600 10px ui-monospace, Menlo, monospace; padding: 1px 6px; border-radius: 4px 4px 4px 0; }

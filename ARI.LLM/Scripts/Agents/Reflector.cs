@@ -27,12 +27,22 @@ internal static class ReflectSettings
     internal sealed class Values
     {
         public bool Enabled { get; set; } = true;
+        /// <summary>How an edit looks in the app: cursor (a named second author), retype, select or suggest.</summary>
+        public string EditStyle { get; set; } = "cursor";
         /// <summary>Replies shorter than this are left alone unless they trip a banned phrase.</summary>
         public int MinChars { get; set; } = 240;
         public bool VerifyWork { get; set; } = true;
         /// <summary>While she writes, a paragraph is sent for review once it is at least this long.</summary>
         public int LiveMinChars { get; set; } = 140;
         public List<string> BannedPhrases { get; set; } = DefaultBanned.ToList();
+    }
+
+    internal static readonly string[] EditStyles = { "cursor", "retype", "select", "suggest" };
+
+    internal static void Save(Values v)
+    {
+        if (!EditStyles.Contains(v.EditStyle)) v.EditStyle = "cursor";
+        File.WriteAllText(FilePath, JsonSerializer.Serialize(v, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     internal static Values Load()

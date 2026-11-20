@@ -1066,6 +1066,32 @@ body.cp-win32 #cp-win-controls { display: flex; }
           <span id="persona-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
       </div>
+
+      <div class="vs-section" style="margin-top:20px;">
+        <style>
+          .rw-sel { background:#b9dbe3; color:#101618; border-radius:2px; } .rw-del { background:rgba(224,106,90,.22); color:#d0604f; text-decoration:line-through; border-radius:2px; }
+          .rw-ins { background:rgba(80,180,120,.22); color:#3f9a66; border-radius:2px; } .rw-badge { font:10.5px ui-monospace,Menlo,monospace; color:var(--accent); border:1px solid var(--accent); border-radius:999px; padding:0 6px; margin-left:6px; }
+          .rw-selc { background:rgba(160,120,230,.25); outline:1px solid #a07ae6; border-radius:2px; } .rw-struck { text-decoration:line-through; color:#d0604f; }
+          .rw-cur { position:relative; display:inline-block; width:0; height:1.15em; border-left:2px solid #a07ae6; vertical-align:text-bottom; }
+          .rw-cur i { position:absolute; bottom:100%; left:-2px; white-space:nowrap; background:#a07ae6; color:#fff; font:normal 600 10px ui-monospace,Menlo,monospace; padding:1px 6px; border-radius:4px 4px 4px 0; }
+          .rw-opt { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+          .rw-opt small { display:block; color:var(--text-dim); }
+        </style>
+        <div class="vs-section-title">Live editing</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          While Ari writes, a second pass reads each paragraph and fixes what is wrong in it: echoing you, invented details, padding. You see the fix being made. Pick how it looks; the preview shows it on a sample reply.
+        </p>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:12px;"><input type="checkbox" id="rw-enabled"> Review replies while she writes</label>
+        <div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:16px;align-items:start;">
+          <div id="rw-options" style="display:flex;flex-direction:column;gap:8px;"></div>
+          <div>
+            <div id="rw-preview" style="position:relative;min-height:90px;border:1px dashed var(--border);border-radius:8px;padding:12px 14px;font-size:15px;line-height:1.7;"></div>
+            <button class="vs-btn-primary" id="rw-replay" type="button" style="margin-top:10px;background:transparent;border:1px solid var(--border);color:var(--text);">Replay preview</button>
+            <button class="vs-btn-primary" id="rw-save" type="button" style="margin-top:10px;">Save</button>
+            <span id="rw-status" style="font-size:12px;color:var(--text-dim);margin-left:8px;"></span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Response Feedback tab -->
@@ -1734,7 +1760,7 @@ function switchTab(name) {
     }
     if (name === 'customisation') { loadBranding(); loadCustomisation(); }
     if (name === 'conventions') loadConventions();
-    if (name === 'persona') loadPersona();
+    if (name === 'persona') { loadPersona(); loadReflectSettings(); }
     if (name === 'feedback') loadFeedback();
     if (name === 'models') loadModels();
     if (name === 'brain') loadBrain();
@@ -4120,6 +4146,53 @@ document.getElementById('persona-del-btn').addEventListener('click', async () =>
     if (!confirm('Delete this persona? Conversations using it fall back to the default.')) return;
     await cpFetch('/api/v1/admin/personas/' + encodeURIComponent(personaCurrent), { method: 'DELETE' });
     personaCurrent = 'ari'; await loadPersona();
+});
+
+// ── Live editing style ────────────────────────────────────
+const RW_STYLES = [
+    { id: 'cursor', name: 'Second author with a cursor', note: 'A named cursor selects the phrase, deletes it and types the fix.' },
+    { id: 'retype', name: 'Strike, delete, retype', note: 'The old words are struck through, backspaced away and retyped.' },
+    { id: 'select', name: 'Select, then type over', note: 'The phrase is highlighted, then replaced by typing.' },
+    { id: 'suggest', name: 'Suggestion mode', note: 'Old words in red, new in green, then it settles.' },
+];
+const RW_TEXT = "yes, it was good. stop making a budget spreadsheet in your head over twelve quid of cheese and just get it. you already know you will.";
+const RW_OLD = 'stop making a budget spreadsheet in your head', RW_NEW = 'quit auditing your wallet';
+let rwStyle = 'cursor', rwRun = 0;
+const rwSleep = ms => new Promise(r => setTimeout(r, ms));
+async function rwPlay() {
+    const box = document.getElementById('rw-preview'), id = ++rwRun, t0 = RW_TEXT.indexOf(RW_OLD), t1 = t0 + RW_OLD.length;
+    box.innerHTML = '<span class="pre"></span><span class="tgt"></span><span class="post"></span>';
+    const pre = box.querySelector('.pre'), tgt = box.querySelector('.tgt'), post = box.querySelector('.post');
+    const cur = () => { const c = document.createElement('span'); c.className = 'rw-cur'; c.innerHTML = '<i>Ari · reviewing</i>'; return c; };
+    const type = async (el, text, ms, after) => { for (const ch of text) { if (id !== rwRun) return; el.append(ch); if (after) el.append(after); await rwSleep(ms); if (after) after.remove(); } };
+    const edit = async () => {
+        const old = tgt.textContent; const step = Math.max(1, Math.ceil(old.length / 25));
+        if (rwStyle === 'select') { tgt.className = 'rw-sel'; await rwSleep(850); tgt.textContent = ''; tgt.className = ''; await type(tgt, RW_NEW, 30); }
+        else if (rwStyle === 'suggest') { tgt.className = 'rw-del'; const ins = document.createElement('span'); ins.className = 'rw-ins'; tgt.after(ins); await rwSleep(500); await type(ins, RW_NEW, 28); await rwSleep(1100); tgt.remove(); ins.className = ''; }
+        else if (rwStyle === 'retype') { tgt.className = 'rw-struck'; await rwSleep(600); for (let k = old.length - step; k > 0; k -= step) { tgt.textContent = old.slice(0, k); await rwSleep(24); } tgt.textContent = ''; tgt.className = ''; await type(tgt, RW_NEW, 30); }
+        else { tgt.className = 'rw-selc'; const c = cur(); tgt.after(c); await rwSleep(850); for (let k = old.length - step; k > 0; k -= step) { tgt.textContent = old.slice(0, k); await rwSleep(20); } tgt.textContent = ''; tgt.className = ''; for (const ch of RW_NEW) { if (id !== rwRun) return; tgt.append(ch); await rwSleep(32); } await rwSleep(500); c.remove(); }
+    };
+    let edited = false;
+    for (let i = 0; i < RW_TEXT.length; i++) {
+        if (id !== rwRun) return;
+        (i < t0 ? pre : i < t1 ? tgt : post).append(RW_TEXT[i]);
+        if (!edited && i === t1 + 22) { edited = true; edit(); }
+        await rwSleep(24);
+    }
+}
+function rwRenderOptions() {
+    document.getElementById('rw-options').innerHTML = RW_STYLES.map(s => `<label class="rw-opt" style="${s.id === rwStyle ? 'border-color:var(--accent);' : ''}"><input type="radio" name="rw-style" value="${s.id}" ${s.id === rwStyle ? 'checked' : ''}><span>${escHtml(s.name)}<small>${escHtml(s.note)}</small></span></label>`).join('');
+    document.querySelectorAll('input[name="rw-style"]').forEach(r => r.addEventListener('change', () => { rwStyle = r.value; rwRenderOptions(); rwPlay(); }));
+}
+async function loadReflectSettings() {
+    try { const d = await (await cpFetch('/api/v1/admin/reflect')).json(); rwStyle = d.editStyle || 'cursor'; document.getElementById('rw-enabled').checked = !!d.enabled; } catch {}
+    rwRenderOptions(); rwPlay();
+}
+document.getElementById('rw-replay').addEventListener('click', rwPlay);
+document.getElementById('rw-save').addEventListener('click', async () => {
+    const st = document.getElementById('rw-status'); st.textContent = 'Saving…';
+    const r = await cpFetch('/api/v1/admin/reflect', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ editStyle: rwStyle, enabled: document.getElementById('rw-enabled').checked }) });
+    st.textContent = r.ok ? 'Saved. Applies from her next reply.' : 'Save failed.'; setTimeout(() => st.textContent = '', 4000);
 });
 
 // ── Response Feedback ─────────────────────────────────────

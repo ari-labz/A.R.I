@@ -326,7 +326,7 @@ public abstract class Agent
             string current = turn.ResponseBuilder.ToString();
             int at = current.IndexOf(edit.Old, StringComparison.Ordinal);
             if (at < 0 || current.IndexOf(edit.Old, at + 1, StringComparison.Ordinal) >= 0) continue;   // gone or ambiguous by now
-            if (turn.Control is not null) await turn.Control($"[REWRITE]{edit.Old}\u0001{edit.New}");
+            if (turn.Control is not null) await turn.Control($"[REWRITE]{edit.Old}\u0001{edit.New}\u0001{ReflectSettings.Load().EditStyle}");
             if (waitForAnimation) await Task.Delay(Math.Min(4000, 700 + edit.Old.Length * 12 + edit.New.Length * 25), turn.Ct);
             turn.ResponseBuilder.Remove(at, edit.Old.Length).Insert(at, edit.New);
             if (at < turn.ReflectedChars) turn.ReflectedChars += edit.New.Length - edit.Old.Length;

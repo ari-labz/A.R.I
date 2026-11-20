@@ -151,12 +151,13 @@ export default function App() {
     // ones typed in their place, like an author going back over a line. The server waits about as long as this takes before sending the
     // reply as it now reads, so the two never fight over the text.
     const rewritingRef = useRef(false)   // while true, reply text arriving from the stream waits, so it doesn't overwrite the animation
-    async function animateRewrite(oldText: string, newText: string) {
+    async function animateRewrite(oldText: string, newText: string, style: string) {
         rewritingRef.current = true
-        try { await animateRewriteSteps(oldText, newText) } finally { rewritingRef.current = false }
+        try { await animateRewriteSteps(oldText, newText, style) } finally { rewritingRef.current = false }
     }
-    async function animateRewriteSteps(oldText: string, newText: string) {
+    async function animateRewriteSteps(oldText: string, newText: string, style: string) {
         const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+        const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;")
         const re = /<!--rw-->[\s\S]*?<!--\/rw-->/
         const show = (inner: string) => setItems(prev => {
             for (let i = prev.length - 1; i >= 0; i--) {
@@ -169,14 +170,34 @@ export default function App() {
             }
             return prev
         })
-        show(`~~${oldText}~~`)
-        await sleep(600)
-        const delStep = Math.max(1, Math.ceil(oldText.length / 30))
-        for (let k = oldText.length - delStep; k > 0; k -= delStep) { show(`~~${oldText.slice(0, k)}~~`); await sleep(24) }
-        show("")
+        const cursor = '<span class="rw-cur"><i>Ari · reviewing</i></span>'
+        const delStep = Math.max(1, Math.ceil(oldText.length / 25))
         const typeStep = Math.max(1, Math.ceil(newText.length / 60))
-        for (let j = typeStep; j < newText.length; j += typeStep) { show(newText.slice(0, j)); await sleep(30) }
-        show(newText)
+        const typeNew = async (wrap: (partial: string) => string, ms: number) => {
+            for (let j = typeStep; j < newText.length; j += typeStep) { show(wrap(esc(newText.slice(0, j)))); await sleep(ms) }
+        }
+
+        if (style === "select") {
+            show(`<span class="rw-sel">${esc(oldText)}</span>`); await sleep(850)
+            show(""); await typeNew(t => t, 30)
+        } else if (style === "suggest") {
+            const del = `<span class="rw-del">${esc(oldText)}</span>`
+            show(del); await sleep(500)
+            await typeNew(t => `${del}<span class="rw-ins">${t}</span><span class="rw-badge">suggested</span>`, 28)
+            show(`${del}<span class="rw-ins">${esc(newText)}</span><span class="rw-badge">suggested</span>`); await sleep(1100)
+        } else if (style === "retype") {
+            show(`~~${oldText}~~`); await sleep(600)
+            for (let k = oldText.length - delStep; k > 0; k -= delStep) { show(`~~${oldText.slice(0, k)}~~`); await sleep(24) }
+            show(""); await typeNew(t => t, 30)
+        } else {
+            // cursor (the default): a named second author selects the phrase, deletes it and types the replacement
+            show(`<span class="rw-selc">${esc(oldText)}</span>${cursor}`); await sleep(850)
+            for (let k = oldText.length - delStep; k > 0; k -= delStep) { show(`<span class="rw-selc">${esc(oldText.slice(0, k))}</span>${cursor}`); await sleep(20) }
+            show(cursor)
+            await typeNew(t => t + cursor, 32)
+            show(esc(newText) + cursor); await sleep(500)
+        }
+        show(esc(newText))
     }
 
     // The persona applies from the next reply. With no conversation yet, it is kept until one is made.
@@ -1293,8 +1314,8 @@ export default function App() {
                         return
                     }
                     if (data.startsWith("[REWRITE]")) {
-                        const [oldText, newText = ""] = data.slice(9).split("\u0001")
-                        void animateRewrite(oldText, newText)
+                        const [oldText, newText = "", style = "cursor"] = data.slice(9).split("\u0001")
+                        void animateRewrite(oldText, newText, style)
                         return
                     }
                     if (data.startsWith("[SPLIT]")) {

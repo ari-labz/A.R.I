@@ -35,7 +35,7 @@ public sealed class StreamEvents(JsonSerializerOptions json)
         {
             // The reflector is changing part of the reply: this text out, that text in. Nothing in the reply so far moves until it lands.
             string[] parts = accumulated["[REWRITE]".Length..].Split('\u0001');
-            yield return Format("message.rewrite", new { oldText = parts.ElementAtOrDefault(0), newText = parts.ElementAtOrDefault(1) });
+            yield return Format("message.rewrite", new { oldText = parts.ElementAtOrDefault(0), newText = parts.ElementAtOrDefault(1), style = parts.ElementAtOrDefault(2) ?? "cursor" });
             yield break;
         }
 
