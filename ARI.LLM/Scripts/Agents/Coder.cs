@@ -154,8 +154,28 @@ internal sealed class Coder : Agent
 
     // Phase enforcement. Runs before EVERY tool call on this thread (local ServerFileSystem tools AND the
     // client's forwarded edit/write tools), so "no building in Planning" holds on both paths uniformly.
+    private sealed class CoderTurnState : ToolTurnState { public int Changes; }
+    internal override ToolTurnState NewTurnState() => new CoderTurnState();
+
+    /// <summary>After this many file changes in one turn she must stop and check in with the user. 0 turns it off. Read from Code.json.</summary>
+    private static int CheckInEdits()
+    {
+        try
+        {
+            string path = Path.Combine(Paths.PersistentData, "Code.json");
+            if (File.Exists(path) && JsonDocument.Parse(File.ReadAllText(path)).RootElement.TryGetProperty("CheckInEdits", out JsonElement e) && e.TryGetInt32(out int n)) return Math.Max(0, n);
+        }
+        catch { }
+        return 6;
+    }
+
     internal override string? OnToolCall(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
+        // A pair programmer doesn't disappear into a long run of changes: after a handful, stop and talk it over.
+        if (state is CoderTurnState cs && toolName is "edit_file" or "write_file" or "delete_file" or "move_file"
+            && CheckInEdits() is int limit and > 0 && cs.Changes >= limit)
+            return $"[System: you have made {cs.Changes} file changes this turn. Stop making changes now. Tell the user in a few plain sentences what you have done so far, what is left, and anything you were unsure about, then ask whether to carry on. Do not call any more edit tools this turn.]";
+
         // Safe mode: a pure edit-block overlay, independent of the plan/build phase. She may reason, explore,
         // and even call start_build, but any file-mutating tool bounces until the user disables safe mode
         // (which clears automatically when they approve a plan). This is NOT planning mode.
@@ -188,6 +208,9 @@ internal sealed class Coder : Agent
             string? path = ToolCallParser.TryExtractJsonString(argsJson, "path");
             if (!string.IsNullOrWhiteSpace(path)) thread.TouchedFiles.Add(path.Trim());
         }
+        if (state is CoderTurnState cs && toolName is "edit_file" or "write_file" or "delete_file" or "move_file"
+            && !ToolCallParser.IsError(result) && !result.StartsWith("[System:", StringComparison.Ordinal))
+            cs.Changes++;
         return result;
     }
 
