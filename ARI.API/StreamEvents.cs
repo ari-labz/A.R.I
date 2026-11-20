@@ -35,7 +35,9 @@ public sealed class StreamEvents(JsonSerializerOptions json)
         {
             string[] parts = accumulated["[SPLIT]".Length..].Split('\u0001');
             previous = [];   // what follows is a new message
-            yield return Format("message.split", new { kind = parts.ElementAtOrDefault(0), user = parts.ElementAtOrDefault(1), text = parts.ElementAtOrDefault(2) });
+            // kind, user, the sender's client id, then the text (the id is missing in notices from older servers)
+            bool hasId = parts.Length >= 4;
+            yield return Format("message.split", new { kind = parts.ElementAtOrDefault(0), user = parts.ElementAtOrDefault(1), clientId = hasId && parts[2].Length > 0 ? parts[2] : null, text = hasId ? string.Join('\u0001', parts.Skip(3)) : parts.ElementAtOrDefault(2) });
             yield break;
         }
 

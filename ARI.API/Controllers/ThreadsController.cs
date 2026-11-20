@@ -1198,7 +1198,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? staged);
-        bool folded = Llm.Interject(threadKey, GetUsername(), body?.Text ?? "", staged?.ToList() ?? new());
+        bool folded = Llm.Interject(threadKey, GetUsername(), body?.Text ?? "", staged?.ToList() ?? new(), body?.ClientId);
         if (folded) pendingMessageAttachments.TryRemove(threadKey, out _);
         return folded ? Ok() : Conflict("Thread is not streaming.");
     }
@@ -1510,7 +1510,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 }
 
 public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
-public record InterjectRequest(string? Text);
+public record InterjectRequest(string? Text, string? ClientId = null);
 public record ApprovalAnswer(bool Allow, string? Decision = null);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);

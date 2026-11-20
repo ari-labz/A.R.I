@@ -47,11 +47,13 @@ internal static class ChatHistoryLogger
         }
     }
 
-    /// <summary>Renders the user/ARI turns. Streaming/cancelled responses and internal items are skipped.</summary>
+    /// <summary>Renders the user/ARI turns. Streaming responses, empty cancelled ones and internal items are skipped.</summary>
     private static string? Render(ThreadItem item) => item switch
     {
         Prompt u => $"[{u.Timestamp:yyyy-MM-dd HH:mm:ss}] {u.AuthorName}: {u.Text}{Attachments(u)}",
         Response { State: State.Complete } r => $"[{r.Timestamp:yyyy-MM-dd HH:mm:ss}] ARI: {r.ContentText}",
+        // A reply the user stopped keeps what had been written, marked, so the transcript shows what was said before the interruption.
+        Response { State: State.Cancelled } r when !string.IsNullOrWhiteSpace(r.ContentText) => $"[{r.Timestamp:yyyy-MM-dd HH:mm:ss}] ARI: {r.ContentText}\n[interrupted by the user]",
         _ => null,
     };
 

@@ -1898,14 +1898,14 @@ public class LLMModule : ILLMModule, IDisposable
     /// thought (mid-think, or at the next tool-round boundary). The agent adds it to the history when it folds it in,
     /// so the transcript shows what she'd done by then; returns false if the thread isn't currently streaming
     /// (nothing to interject into — the caller should send a normal message instead).</summary>
-    public bool Interject(string threadKey, string username, string text, List<Attachment> attachments)
+    public bool Interject(string threadKey, string username, string text, List<Attachment> attachments, string? clientId = null)
     {
         if (string.IsNullOrWhiteSpace(text) && attachments.Count == 0) return false;
         if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
         if (thread.State != ThreadState.Streaming) return false;
 
         // The message reaches the chat when the agent folds it in, at the point in her reply where it landed.
-        thread.Interject(username, text, attachments);
+        thread.Interject(username, text, attachments, clientId);
         return true;
     }
 

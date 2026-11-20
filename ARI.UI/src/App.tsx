@@ -128,7 +128,7 @@ function dedupeRecentUserMessages(items: ThreadItem[]): ThreadItem[] {
     const out: ThreadItem[] = []
     items.forEach((it, i) => {
         if (i >= cut && it.type === "userMessage") {
-            const key = it.content ?? ""
+            const key = it.clientId ?? it.content ?? ""
             if (seen.has(key)) return
             seen.add(key)
         }
@@ -1047,22 +1047,23 @@ export default function App() {
             // Her reply hasn't got any text yet, so the new message goes ABOVE her pending bubble straight away: it is the last thing said, and
             // what she writes will answer it. Once she has written something it goes after that bubble, as before.
             const interjectStamp = new Date().toISOString()
+            const clientId = crypto.randomUUID()
             setItems(prev => {
-                const msg: ThreadItem = { type: "userMessage", content: prompt, timestamp: interjectStamp, attachments: interjectAttach as Attachment[] | undefined }
+                const msg: ThreadItem = { type: "userMessage", content: prompt, clientId, timestamp: interjectStamp, attachments: interjectAttach as Attachment[] | undefined }
                 const last = prev[prev.length - 1]
                 const pending = last?.type === "ariResponse" && last.isStreaming && !last.content && !(last.blocks?.length)
                 return pending ? [...prev.slice(0, -1), msg, last] : [...prev, msg]
             })
             const res = await apiFetch(`/api/v1/threads/${key}/interjections`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text: prompt }),
+                body: JSON.stringify({ text: prompt, clientId }),
             }).catch(() => null)
             // 409 = the turn finished between keypress and send, or she hasn't started it yet (she is waiting on memory); fall through to a normal
             // new message. That send adds the message and a fresh reply bubble itself, so take back the copy shown above and the old pending
             // bubble, or the message would appear twice with a stale "Reading" left behind.
             if (res && res.ok) return
             setItems(prev => prev
-                .filter(it => !(it.type === "userMessage" && it.timestamp === interjectStamp && it.content === prompt))
+                .filter(it => !(it.type === "userMessage" && it.clientId === clientId))
                 .filter(it => !(it.type === "ariResponse" && it.isStreaming && !it.content && !(it.blocks?.length)))
                 .map(it => it.type === "ariResponse" && it.isStreaming ? { ...it, isStreaming: false } : it))
         }
@@ -1245,26 +1246,30 @@ export default function App() {
                         //             bubble below the interjection for the continuation.
                         //   before -> the response has NO content yet: slot the interjection ABOVE the still-
                         //             streaming bubble instead of leaving an empty one; it keeps streaming below.
-                        const fields  = data.slice(7).split("\u0001")
-                        const mode    = fields.length >= 3 ? fields[0] : "split"
-                        const msgText = fields.length >= 3 ? fields.slice(2).join("\u0001") : fields[fields.length - 1]
-                        const mkMsg = () => ({ type: "userMessage" as const, content: msgText, timestamp: new Date().toISOString() })
+                        // Newer servers send mode, username, the sender's client id, then the text; older ones have no id.
+                        const fields   = data.slice(7).split("\u0001")
+                        const mode     = fields.length >= 3 ? fields[0] : "split"
+                        const hasId    = fields.length >= 4
+                        const clientId = hasId && fields[2] ? fields[2] : undefined
+                        const msgText  = hasId ? fields.slice(3).join("\u0001") : fields.length >= 3 ? fields.slice(2).join("\u0001") : fields[fields.length - 1]
+                        const isSame   = (it: ThreadItem) => it.type === "userMessage" && (clientId && it.clientId ? it.clientId === clientId : it.content === msgText)
+                        const mkMsg = () => ({ type: "userMessage" as const, content: msgText, clientId, timestamp: new Date().toISOString() })
                         setItems(prev => {
                             const arr = [...prev]
                             let respIdx = -1
                             for (let i = arr.length - 1; i >= 0; i--) if (arr[i].type === "ariResponse" && arr[i].isStreaming) { respIdx = i; break }
                             if (mode === "before") {
                                 // Drop the optimistic copy (appended after the bubble), then insert ABOVE the bubble.
-                                const dupIdx = arr.findIndex(it => it.type === "userMessage" && it.content === msgText)
+                                const dupIdx = arr.findIndex(isSame)
                                 if (dupIdx >= 0 && dupIdx !== respIdx) { arr.splice(dupIdx, 1); if (dupIdx < respIdx) respIdx-- }
                                 arr.splice(respIdx >= 0 ? respIdx : arr.length, 0, mkMsg())
                             } else {
                                 if (respIdx >= 0) arr[respIdx] = { ...arr[respIdx], isStreaming: false, continued: true }
                                 // The optimistic copy may sit above the bubble (it was placed there while she had written nothing); she has since
                                 // written some, so the message belongs after it.
-                                const early = arr.findIndex(it => it.type === "userMessage" && it.content === msgText)
+                                const early = arr.findIndex(isSame)
                                 if (early >= 0 && early < respIdx) arr.splice(early, 1)
-                                if (!arr.some(it => it.type === "userMessage" && it.content === msgText)) arr.push(mkMsg())
+                                if (!arr.some(isSame)) arr.push(mkMsg())
                                 arr.push({ type: "ariResponse", content: "", timestamp: new Date().toISOString(), isStreaming: true })
                             }
                             return dedupeRecentUserMessages(arr)

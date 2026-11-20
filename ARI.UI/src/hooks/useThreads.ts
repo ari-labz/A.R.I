@@ -87,6 +87,8 @@ export interface ThreadItem {
     content:         string
     blocks?:         ContentBlock[]
     username?:       string
+    /** Made up by the sender, so its own optimistic copy of a message can be told from the stored one. */
+    clientId?:       string
     timestamp:       string
     thinkingSeconds?: number
     prefillSeconds?:  number

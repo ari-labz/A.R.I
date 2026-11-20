@@ -668,8 +668,8 @@ public abstract class Agent
         {
             // A message that arrived after the last step was never folded in. Keep it in the chat, so it isn't lost
             // and the next turn reads it.
-            while (turn.Thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments) late))
-                turn.Thread.History.Add(new Prompt { AuthorName = late.User, Text = late.Text, Attachments = late.Attachments.Count > 0 ? late.Attachments : null });
+            while (turn.Thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments, string? ClientId) late))
+                turn.Thread.History.Add(new Prompt { AuthorName = late.User, Text = late.Text, ClientId = late.ClientId, Attachments = late.Attachments.Count > 0 ? late.Attachments : null });
             OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Idle);
         }
 
@@ -682,21 +682,22 @@ public abstract class Agent
     // than treating it as a brand-new request. Reused by both drain points (step boundary + mid-stream).
     /// <summary>Drains pending interjections into both the model-facing steer text and the raw user text +
     /// username for the visible split. Returns null when the queue is empty.</summary>
-    private (object Model, string Raw, string User, List<Attachment> Attachments)? TakeInterjections(Thread thread)
+    private (object Model, string Raw, string User, List<Attachment> Attachments, string? ClientId)? TakeInterjections(Thread thread)
     {
         if (thread.Interjections.IsEmpty) return null;
-        List<string> parts = new(); List<string> raw = new(); List<Attachment> attachments = new(); string user = "";
-        while (thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments) m))
+        List<string> parts = new(); List<string> raw = new(); List<Attachment> attachments = new(); string user = ""; string? clientId = null;
+        while (thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments, string? ClientId) m))
         {
             parts.Add(string.IsNullOrWhiteSpace(m.User) ? m.Text : $"{m.User}: {m.Text}");
             raw.Add(m.Text);
             attachments.AddRange(m.Attachments);
             if (user.Length == 0) user = m.User;
+            clientId ??= m.ClientId;
         }
         if (parts.Count == 0) return null;
         string model = "[The user jumped in mid-response — read this, then continue what you were doing, "
                      + "folding in the new information. Do not restart from scratch.]\n" + string.Join("\n", parts);
-        return (WithAttachments(thread, model, attachments), string.Join("\n", raw), user, attachments);
+        return (WithAttachments(thread, model, attachments), string.Join("\n", raw), user, attachments, clientId);
     }
 
     /// <summary>The content of a user message with its attachments: text files inline, and images shown to the model
@@ -742,10 +743,10 @@ public abstract class Agent
     /// response for the continuation to stream into — so the thread reads chronologically top to bottom.
     /// Skipped when the current segment has no visible content yet, which would leave an empty bubble; then
     /// the interjection just folds into the ongoing response.</summary>
-    private static void SplitResponse(Turn turn, string username, string rawText, List<Attachment> attachments)
+    private static void SplitResponse(Turn turn, string username, string rawText, List<Attachment> attachments, string? clientId)
     {
         Thread thread    = turn.Thread;
-        Prompt interject = new() { AuthorName = username, Text = rawText, Attachments = attachments.Count > 0 ? attachments : null };
+        Prompt interject = new() { AuthorName = username, Text = rawText, ClientId = clientId, Attachments = attachments.Count > 0 ? attachments : null };
         string safeText  = rawText.Replace("\n", " ").Replace("\r", " ");   // keep it one SSE line
         string segText   = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);
 
@@ -755,7 +756,7 @@ public abstract class Agent
             // response so it reads user → interjection → response, and let that same response stream below it.
             int idx = thread.History.IndexOf(turn.AriResponse);
             if (idx >= 0) thread.History.Insert(idx, interject); else thread.History.Add(interject);
-            thread.PendingSplitNotice = $"before\u0001{username}\u0001{safeText}";
+            thread.PendingSplitNotice = $"before\u0001{username}\u0001{clientId}\u0001{safeText}";
             thread.RaiseUpdated();
             return;
         }
@@ -777,7 +778,7 @@ public abstract class Agent
         turn.ContentBuilder.Clear();
         turn.ResponseBuilder.Clear();
         // \u0001 separates username from text; newlines stripped so it stays one SSE line.
-        thread.PendingSplitNotice = $"split\u0001{username}\u0001{safeText}";
+        thread.PendingSplitNotice = $"split\u0001{username}\u0001{clientId}\u0001{safeText}";
         thread.RaiseUpdated();
     }
 
@@ -789,7 +790,7 @@ public abstract class Agent
         // user message before the next request. Mid-think interjections are handled in ProcessDelta instead.
         if (TakeInterjections(thread) is { } inj)
         {
-            SplitResponse(turn, inj.User, inj.Raw, inj.Attachments);
+            SplitResponse(turn, inj.User, inj.Raw, inj.Attachments, inj.ClientId);
             turn.Messages.Add(new { role = "user", content = inj.Model });
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection at step boundary.", Name, thread.Key);
         }
@@ -1068,7 +1069,7 @@ public abstract class Agent
                 if (turn.PendingThinkRedirect is null && thinkBoundary && thread.HasInterjections
                     && TakeInterjections(thread) is { } midInj)
                 {
-                    SplitResponse(turn, midInj.User, midInj.Raw, midInj.Attachments);
+                    SplitResponse(turn, midInj.User, midInj.Raw, midInj.Attachments, midInj.ClientId);
                     string capturedThink = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
                         ? "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n"
                         : "";
@@ -1257,7 +1258,7 @@ public abstract class Agent
             // it into the same chain of thought she was mid-way through.
             if (TakeInterjections(thread) is { } inj)
             {
-                SplitResponse(turn, inj.User, inj.Raw, inj.Attachments);
+                SplitResponse(turn, inj.User, inj.Raw, inj.Attachments, inj.ClientId);
                 string capturedThink = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
                     ? "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n"
                     : "";
