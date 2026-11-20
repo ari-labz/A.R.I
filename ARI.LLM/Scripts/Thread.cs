@@ -206,7 +206,10 @@ public class Thread
     /// scratchpad or project gives it one. ToolFactories reads this for ANY agent's request_tools call;
     /// availability depends on this state, not on which agent is asking (no per-agent allowlist).</summary>
     internal string? FilesystemRoot   { get; set; }
-    internal FileSnapshots? Snapshots     { get; set; }
+    // Created on first use: a chat that isn't a Code thread had none, so its reads were never recorded and edit_file
+    // refused every file with "read it first", however often she had.
+    private FileSnapshots? snapshots;
+    internal FileSnapshots? Snapshots     { get => snapshots ??= new FileSnapshots(); set => snapshots = value; }
     internal bool     IsBrainVault { get; set; }
     internal bool     IsRemoteProject { get; set; }
     internal CancellationToken Ct  { get; set; }

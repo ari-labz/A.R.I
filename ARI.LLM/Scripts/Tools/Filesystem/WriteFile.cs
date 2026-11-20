@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Linq;
 
@@ -73,7 +75,32 @@ internal sealed class WriteFile : Tool
         return null;
     }
 
-    internal override Task<ToolResult> Execute(string argsJson) => fs.Write(argsJson).AsMutationResult();
+    // The window the chat opens beside it for this write (a new file shows all its lines as added); see EditWindow.
+    private readonly ConcurrentDictionary<string, string> windows = new();
+
+    internal override async Task<ToolResult> Execute(string argsJson)
+    {
+        string? path = null; string before = "";
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            path = doc.RootElement.TryGetProperty("path", out JsonElement p) ? p.GetString() : null;
+            if (path is not null)
+                try { before = Encoding.UTF8.GetString(await fs.ReadBytes(path)); } catch { /* a new file has nothing before */ }
+        }
+        catch { }
+
+        ToolResult result = await fs.Write(argsJson).AsMutationResult();
+
+        if (path is not null)
+        {
+            try { windows[argsJson] = EditWindow.Marker(path, before, Encoding.UTF8.GetString(await fs.ReadBytes(path))); }
+            catch { }
+        }
+        return result;
+    }
+
+    internal override Func<string, string>? DisplayAfter => args => windows.TryRemove(args, out string? m) ? m : "";
 
     // Remember files created here so PreCheck lets ARI rewrite her own drafts later in the conversation.
     internal override ToolResult PostRun(Thread thread, string argsJson, ToolResult result)

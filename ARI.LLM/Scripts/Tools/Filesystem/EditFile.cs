@@ -163,7 +163,7 @@ internal static class EditWindow
 
     internal static string Marker(string path, string before, string after)
     {
-        string[] a = before.Replace("\r\n", "\n").Split('\n'), b = after.Replace("\r\n", "\n").Split('\n');
+        string[] a = before.Length == 0 ? Array.Empty<string>() : before.Replace("\r\n", "\n").Split('\n'), b = after.Replace("\r\n", "\n").Split('\n');
         int p = 0;
         while (p < a.Length && p < b.Length && a[p] == b[p]) p++;
         int s = 0;
