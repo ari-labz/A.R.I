@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("ari", {
     copy:     ()   => ipcRenderer.invoke("copy"),
     logs:     ()   => ipcRenderer.invoke("logs"),
     config:   ()   => ipcRenderer.invoke("config"),
+    loginStart:    ()   => ipcRenderer.invoke("login-start"),
+    setLoginStart: (on) => ipcRenderer.invoke("set-login-start", on),
     onLog:    (cb) => ipcRenderer.on("log", (_e, line) => cb(line)),
     onStatus: (cb) => ipcRenderer.on("status", (_e, s) => cb(s)),
 })

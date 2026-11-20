@@ -54,4 +54,11 @@ $("btn-copy").addEventListener("click",    () => window.ari.copy())
 $("btn-logs").addEventListener("click",    () => window.ari.logs())
 $("btn-config").addEventListener("click",  () => window.ari.config())
 
+// Start at login: only offered where the OS supports it (macOS and Windows); hidden in a dev run, which isn't the installed app.
+window.ari.loginStart().then(s => {
+    if (!s.supported) { $("login-row").hidden = true; return }
+    $("login-start").checked = s.on
+    $("login-start").addEventListener("change", e => window.ari.setLoginStart(e.target.checked))
+})
+
 window.ari.state?.().then(renderState)

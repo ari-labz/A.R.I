@@ -178,3 +178,8 @@ ipcMain.handle("open",    () => shell.openExternal(endpoint()))
 ipcMain.handle("copy",    () => clipboard.writeText(endpoint()))
 ipcMain.handle("logs",    () => shell.openPath(logsDir))
 ipcMain.handle("config",  () => shell.openPath(configFile))
+
+// Start at login, so a machine left on keeps ARI running after a restart. Not offered in a dev run: it would register Electron itself.
+const loginSupported = () => app.isPackaged && (process.platform === "darwin" || process.platform === "win32")
+ipcMain.handle("login-start",     () => ({ supported: loginSupported(), on: loginSupported() && app.getLoginItemSettings().openAtLogin }))
+ipcMain.handle("set-login-start", (_, on) => { if (loginSupported()) app.setLoginItemSettings({ openAtLogin: !!on }) })
