@@ -29,14 +29,7 @@ internal class Read : Tool
         function = new
         {
             name        = "read_file",
-            description =
-                "Read a file. What comes back depends on the kind of file, so you never choose a different tool: " +
-                "TEXT and CODE are read by lines (start_line/end_line; at most 100 lines per call, so pass the range you need: preview_file first shows what is in a code file). " +
-                "A PDF, Word (.docx), PowerPoint (.pptx) or Excel (.xlsx) file is opened as a document: with only a path you get its page or sheet count and the opening; " +
-                "then use pages to read parts, find to search the whole file for a word, and for Excel sheet and range such as A1:F50. " +
-                "Each text read ends with a coverage note saying how much of the file you have read so far. To review, check or summarise a file you must read all of it: keep reading the next window until the note says the whole file has been read, and never say you reviewed a file you only partly read. " +
-                "An IMAGE (a path or an http(s) URL) is shown to you so you can see it. A .ipynb notebook returns its cells as text. " +
-                "Never open a document with the shell or by its raw bytes.",
+            description = "Read a file; the right reader is picked for you. Text and code: by lines, up to 100 per call (start_line, end_line; preview_file shows a code file's outline first). PDF, Word, PowerPoint, Excel: a path alone gives the size and opening, then use pages, find, or sheet and range. Images (a path or URL) are shown to you; .ipynb gives its cells. Each read ends with a coverage note: to review or summarise a file, keep reading until it says the whole file is covered. Never open documents with the shell.",
             parameters  = new
             {
                 type       = "object",
@@ -65,6 +58,9 @@ internal class Read : Tool
         if (DocumentReader.Extensions.Contains(Extension(path)) || await SniffsAsDocument(path))
             return await new ReadDocument(fs).Execute(argsJson);
 
+        // Files read_file can't show, but another tool can: say which, instead of handing back raw bytes.
+        if (OtherReader(Extension(path)) is { } other) return other;
+
         Read? decoder = For(path, fs);
 
         if (decoder is null)   // plain text — the existing windowed, preview-gated path (both backends)
@@ -89,6 +85,14 @@ internal class Read : Tool
             return $"[Error reading {path}: {ex.Message}]";
         }
     }
+
+    private static string? OtherReader(string ext) => ext switch
+    {
+        "glb" or "gltf" or "obj" or "stl" or "fbx" or "blend" => "This is a 3D model, which read_file can't show. Use preview_model (in visual_tools) to see it from several angles, with its triangle count and size.",
+        "wav" or "mp3" or "m4a" or "flac" or "ogg" or "aac" => "This is a sound file, which read_file can't play. Use audio_look (the ffmpeg plugin) to see its waveform, spectrogram, loudness and silences.",
+        "mp4" or "mov" or "mkv" or "webm" or "avi" => "This is a video, which read_file can't play. Use video_info and video_frames (the ffmpeg plugin) to see what's in it.",
+        _ => null,
+    };
 
     private static readonly HttpClient Http = new();
 
