@@ -38,8 +38,13 @@ internal static class CapabilitiesBlock
             sb.AppendLine("If you feel you're missing context, list_chats and read_chat show your other recent conversations.");
 
         if (conversation && thread.Medium != ThreadMedium.Channel)
-            sb.AppendLine("Your files and commands are on the server you run on, not on the user's own computer or phone. You can't open a file from their device: they upload it into the chat, " +
-                          "and you give them yours with deliver_file. If they mention a file on their desktop, ask them to attach it.");
+            sb.AppendLine(owner
+                ? $"Where you run, read from the machine just now (this beats anything a memory says): {MachineFacts.Line}. A path under {MachineFacts.Home} is on this machine and your tools can open it, so try. " +
+                  "The owner may be talking to you from another device, like a phone: a file only on that device needs attaching to the chat, and you give files back with deliver_file."
+                : "Your files and commands are on the server you run on, not on the user's own computer or phone. You can't open a file from their device: they upload it into the chat, " +
+                  "and you give them yours with deliver_file. If they mention a file on their desktop, ask them to attach it.");
+        if (conversation)
+            sb.AppendLine("Memories about what you can or can't do, or what machine you're on, may be out of date: the tools listed here are the truth. If a memory says you can't but a tool says you can, use the tool.");
 
         if (conversation)
             sb.AppendLine("Can and can't: if your tools, or code you run, or a tool you write, can get it done, do it. Work out the steps and fix errors yourself; don't refuse " +
@@ -117,5 +122,34 @@ internal static class CapabilitiesBlock
         if (first.Length <= BlurbLength) return first;
         int cut = first.LastIndexOf(' ', BlurbLength);
         return first[..(cut > 40 ? cut : BlurbLength)] + "…";
+    }
+}
+
+/// <summary>The machine ARI is running on, read once at start-up: its name, chip, memory and the user's home folder.</summary>
+internal static class MachineFacts
+{
+    internal static readonly string Home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+    internal static readonly string Line = Build();
+
+    private static string Build()
+    {
+        string chip = OperatingSystem.IsMacOS() ? Sysctl("machdep.cpu.brand_string") : "";
+        string model = OperatingSystem.IsMacOS() ? Sysctl("hw.model") : "";
+        double ramGb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024d / 1024d / 1024d;
+        string os = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+        return $"{Environment.MachineName}{(model.Length > 0 ? $" ({model})" : "")}, {(chip.Length > 0 ? chip + ", " : "")}{Math.Round(ramGb)} GB memory, {os}, as user {Environment.UserName}";
+    }
+
+    private static string Sysctl(string key)
+    {
+        try
+        {
+            using System.Diagnostics.Process p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("sysctl", $"-n {key}") { RedirectStandardOutput = true, UseShellExecute = false })!;
+            string v = p.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit(2000);
+            return v;
+        }
+        catch { return ""; }
     }
 }
