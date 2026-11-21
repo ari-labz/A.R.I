@@ -5,7 +5,7 @@ import type { PendingAttachment } from "../App"
 import type { Project } from "../hooks/useThreads"
 import PipelineSelector from "./PipelineSelector"
 import ThinkingEffort from "./ThinkingEffort"
-import PersonaPicker, { type PersonaOption } from "./PersonaPicker"
+import type { PersonaOption } from "./PersonaPicker"
 
 interface Command { cmd: string; desc: string }
 
@@ -49,7 +49,7 @@ export default function InputArea({
     pipelines, selectedPipeline, onPipelineChange, onBeginSpeech, threadLocked, serverReady,
     onSend, onUploadFiles, onRemoveAttach,
     onHeartbeatStart, onHeartbeatStop,
-    codeMode, safetyMode, onToggleSafety, personas, personaId, onChoosePersona,
+    codeMode, safetyMode, onToggleSafety,
 }: Props) {
     const aiName = useAssistantName()
     const [input, setInput]         = useState("")
@@ -297,7 +297,6 @@ export default function InputArea({
             {!speechCompose && (
                 <div id="input-hint-row">
                     <p id="input-hint">Enter to send &nbsp;·&nbsp; Shift+Enter for new line</p>
-                    <PersonaPicker personas={personas} current={personaId} onChoose={onChoosePersona} />
                     <ThinkingEffort serverReady={serverReady} codeMode={codeMode} />
                 </div>
             )}
