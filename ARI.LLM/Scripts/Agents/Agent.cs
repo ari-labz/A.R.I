@@ -30,10 +30,13 @@ public abstract class Agent
     /// <summary>When set, overrides the global ReasoningEffortStore level for this agent's requests.</summary>
     public string? ReasoningEffortOverride { get; init; }
     public int BudgetThinking { get; init; }
-    // Resolved to Slot (and id_slot) at bind time. Null = no slot pin.
+    // Resolved to Slot (and id_slot) at bind time. Empty = the agent belongs to its server and each turn takes a free slot there.
     public string? SlotName { get; set; }
     public SamplerSettings? SamplerSettings { get; set; }
-    [JsonIgnore] internal int BudgetContext => Slot?.ContextLimit ?? 0;
+    [JsonIgnore] internal int BudgetContext => Slot?.ContextLimit ?? (Floating ? Server?.FreeLanes().Select(l => l.ContextLimit).DefaultIfEmpty(0).Max() ?? 0 : 0);
+
+    /// <summary>Bound to a server rather than a slot: each turn runs on whichever of the server's free slots suits it (see Server.PickLane).</summary>
+    [JsonIgnore] internal bool Floating { get; set; }
 
     // Compaction: off by default. When on, stubs oldest tool outputs one at a time, once usage exceeds
     // CompactHighPct of the bound slot's context, until it drops under CompactLowPct — both percentages
@@ -56,7 +59,8 @@ public abstract class Agent
     /// <summary>The slot this agent runs the thread on: its own bound slot, or, when that slot is in a pool, the lane the
     /// thread has been given in it (see <see cref="NamedSlot.Pool"/>).</summary>
     private NamedSlot? LaneFor(Thread thread) =>
-        Slot is null || Server is null ? Slot : Server.LaneFor(Slot, thread.PoolLanes);
+        Floating && Server is not null ? Server.AssignedLane(thread.PoolLanes)
+        : Slot is null || Server is null ? Slot : Server.LaneFor(Slot, thread.PoolLanes);
 
     /// <summary>Called when the processing phase changes for a thread. Set by LLMModule to update the watch-stream status.</summary>
     [JsonIgnore] internal Action<string, ThreadPhase>? OnPhaseChange { get; set; }
@@ -752,8 +756,8 @@ public abstract class Agent
                 // below before tool execution, which is file/network I/O, not GPU work, and shouldn't hold
                 // the inference slot while it runs.
                 // A pooled slot has a queue per lane, so two conversations on different lanes generate at the same time.
-                NamedSlot? lane = LaneFor(thread);
-                bool pooled = lane is not null && Server is not null && Server.IsPooled(lane);
+                NamedSlot? lane = Floating && Server is not null ? Server.PickLane(thread.PoolLanes, turn.EstimatedTextTokens + turn.MaxTokens) : LaneFor(thread);
+                bool pooled = lane is not null && Server is not null && (Floating || Server.IsPooled(lane));
                 if (pooled) Server!.LaneBusy(lane!, 1);
                 LLMQueue? stepQueue = pooled ? Server!.QueueForLane(lane!) : Queue;
                 LLMQueue.Slot? slot;

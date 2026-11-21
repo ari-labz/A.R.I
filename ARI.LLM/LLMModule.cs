@@ -238,7 +238,11 @@ public class LLMModule : ILLMModule, IDisposable
                 talkingAgent.Think = false;
                 // A slot of its own keeps the voice prompt cached while chats and coding use theirs.
                 if (talkingAgent.Server?.Slots.FirstOrDefault(sl => sl.Name.Equals("Voice", StringComparison.OrdinalIgnoreCase)) is { } voiceSlot)
+                {
                     talkingAgent.Slot = voiceSlot;
+                    talkingAgent.Floating = false;
+                    lock (talkingAgent.Server.Held) talkingAgent.Server.Held.Add(voiceSlot.Id);
+                }
             }
             agentMap["Dialogue"] = textingAgent;
         }
@@ -262,18 +266,25 @@ public class LLMModule : ILLMModule, IDisposable
             SubagentManager.Agent = Deserialize<Subagent>(JsonDocument.Parse("{\"name\":\"Subagent\"}").RootElement);
         ParentReports.Nudge = WakeIfPending;
         string subagentJson = rawAgents.TryGetValue("Subagent", out JsonElement subDef) ? subDef.GetRawText() : "{\"name\":\"Subagent\"}";
-        SubagentManager.AgentOn = where =>
+        SubagentManager.ServerList = () => "Servers: " + string.Join("; ", _servers.Select(sv =>
+            $"\"{sv.Name}\" ({sv.CurrentModelName ?? "no model"}{(sv.Status == ServerStatus.Online ? "" : ", not running")}, {sv.Slots.Count} slot{(sv.Slots.Count == 1 ? "" : "s")})")) + ".";
+        SubagentManager.AgentOn = (where, instructions) =>
         {
-            string places = string.Join(", ", _servers.SelectMany(sv => sv.Slots.Select(sl => $"{sv.Name}/{sl.Name}")));
-            string[] parts = where.Split('/', 2, StringSplitOptions.TrimEntries);
-            Server? server = _servers.FirstOrDefault(sv => sv.Name.Equals(parts[0], StringComparison.OrdinalIgnoreCase));
+            string places = string.Join(", ", _servers.Select(sv => sv.Name));
+            string[] parts = (where ?? "").Split('/', 2, StringSplitOptions.TrimEntries);
+            Server? server = parts[0].Length == 0 ? SubagentManager.Agent?.Server : _servers.FirstOrDefault(sv => sv.Name.Equals(parts[0], StringComparison.OrdinalIgnoreCase));
             if (server is null || (parts.Length > 1 && !server.Slots.Any(sl => sl.Name.Equals(parts[1], StringComparison.OrdinalIgnoreCase)))) return (null, places);
-            // The Subagent's own settings from Agents.json, only placed somewhere else.
+            // The Subagent's own settings from Agents.json, placed on the chosen server (any free slot unless one was named),
+            // and with Ari's own instructions for this worker in place of its usual prompt when she gave some.
             System.Text.Json.Nodes.JsonObject def = System.Text.Json.Nodes.JsonNode.Parse(subagentJson)!.AsObject();
-            foreach (string k in def.Select(p => p.Key).Where(k => k.Equals("ServerName", StringComparison.OrdinalIgnoreCase) || k.Equals("SlotName", StringComparison.OrdinalIgnoreCase)).ToList()) def.Remove(k);
+            foreach (string k in def.Select(p => p.Key).Where(k => k.Equals("ServerName", StringComparison.OrdinalIgnoreCase) || k.Equals("SlotName", StringComparison.OrdinalIgnoreCase)
+                                                                 || (instructions is { Length: > 0 } && k.Equals("AgentPrompt", StringComparison.OrdinalIgnoreCase))).ToList()) def.Remove(k);
             def["ServerName"] = server.Name;
             def["SlotName"]   = parts.Length > 1 ? parts[1] : "";
-            return (Deserialize<Subagent>(JsonDocument.Parse(def.ToJsonString()).RootElement), places);
+            if (instructions is { Length: > 0 }) def["AgentPrompt"] = instructions;
+            Subagent made = Deserialize<Subagent>(JsonDocument.Parse(def.ToJsonString()).RootElement);
+            RecomputeHeldSlots();   // a worker sent to a named slot borrows it; it doesn't take it from the floating agents for good
+            return (made, places);
         };
 
         // Speech conversational-awareness gate. Uses its own Agents.json entry if present, otherwise
@@ -375,6 +386,8 @@ public class LLMModule : ILLMModule, IDisposable
                 Endpoint     = textingAgent.Endpoint,
                 Server       = textingAgent.Server,
                 SlotName               = textingAgent.SlotName,
+                Slot                   = textingAgent.Slot,
+                Floating               = textingAgent.Floating,
                 Think                  = textingAgent.Think,
                 ReasoningEffortOverride = "xhigh",
                 UsePersona             = true,
@@ -530,17 +543,13 @@ public class LLMModule : ILLMModule, IDisposable
             {
                 agent.Slot = agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
                 if (agent.Slot is null)
-                    _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — falling back to its first slot.",
+                    _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — it will take any free slot there instead.",
                         agent.Name, agent.SlotName, agent.Server.Name);
             }
-            // No name given (or it didn't resolve) — default to the server's first slot, same as the
-            // old raw agent.Slot ??= 0 behaviour, so an agent still gets pinned/context-derived out of
-            // the box without needing the control panel touched first.
-            if (agent.Slot is null && agent.Server.Slots.Count > 0)
-            {
-                agent.Slot = agent.Server.Slots[0];
-                agent.SlotName  = agent.Slot.Name;
-            }
+            // No slot named (or it didn't resolve): the agent belongs to the server and each turn takes a free slot there,
+            // so conversations run side by side on different slots instead of queueing for one.
+            agent.Floating = agent.Slot is null;
+            if (agent.Slot is not null) lock (agent.Server.Held) agent.Server.Held.Add(agent.Slot.Id);
         }
         agent.Queue = QueueFor(agent.Server);
         return agent;
@@ -855,7 +864,18 @@ public class LLMModule : ILLMModule, IDisposable
         agent.Slot = agent.SlotName is { Length: > 0 }
             ? server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase))
             : null;
+        agent.Floating = agent.Slot is null;
+        agent.Queue = QueueFor(server);
+        RecomputeHeldSlots();
         return true;
+    }
+
+    /// <summary>Which slots are held: those some live agent names for itself. Every other slot is shared by the floating agents.</summary>
+    private void RecomputeHeldSlots()
+    {
+        foreach (Server server in _servers) lock (server.Held) server.Held.Clear();
+        foreach (Agent a in agentMap.Values.Append(talkingAgent).OfType<Agent>().Distinct())
+            if (!a.Floating && a is { Server: { } srv, Slot: { } held }) lock (srv.Held) srv.Held.Add(held.Id);
     }
 
     /// <summary>
@@ -870,6 +890,8 @@ public class LLMModule : ILLMModule, IDisposable
         agent.Slot = agent.Server is not null && slotName is { Length: > 0 }
             ? agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase))
             : null;
+        agent.Floating = agent.Slot is null;
+        RecomputeHeldSlots();
         return true;
     }
 

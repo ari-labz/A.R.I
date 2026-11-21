@@ -47,7 +47,7 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
         if (ReservedNames.Contains(name, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"'{name}' is the name of a built-in agent." });
         Server? server = persistentData.GetServers().FirstOrDefault(s => s.Name == req.ServerName) ?? persistentData.GetServers().FirstOrDefault();
-        if (!persistentData.CreateCustomAgent(name, server?.Name ?? "", req.SlotName ?? server?.Slots.FirstOrDefault()?.Name, req.AgentPrompt ?? "", req.ReadOnly))
+        if (!persistentData.CreateCustomAgent(name, server?.Name ?? "", req.SlotName, req.AgentPrompt ?? "", req.ReadOnly))
             return Conflict(new { error = $"An agent called '{name}' already exists." });
         LoadLive(name);
         return Ok(new { ok = true });
@@ -93,7 +93,7 @@ public class AgentsController(PersistentData persistentData) : ControllerBase
             string? server = req["serverName"]?.GetValue<string>(), slot = req["slotName"]?.GetValue<string>();
             Llm.ApplyAgentPatch(name, req);
             if (server is not null) Llm.AssignAgentServer(name, server);
-            if (slot is { Length: > 0 }) Llm.AssignAgentSlot(name, slot);
+            if (req.ContainsKey("slotName")) Llm.AssignAgentSlot(name, slot);   // null or empty: any free slot on its server
             // A custom agent is rebuilt from its saved entry, so an edited prompt applies to the next run too.
             if (Llm.Agents.TryGetValue(name, out ARI.LLM.Agent? live) && live.GetType().Name == "CustomAgent")
                 LoadLive(name);

@@ -5195,21 +5195,26 @@ function agBindingPickers(agent) {
 
     function fillSlots() {
         const s = (agData.servers || []).find(x => x.name === srv.value);
-        const slots = (s && s.slots && s.slots.length) ? s.slots : [{ name: 'Default' }];
+        const slots = (s && s.slots && s.slots.length) ? s.slots : [];
         slot.innerHTML = '';
+        // The usual choice: the agent belongs to the server and each turn takes whichever slot is free. Naming a slot holds it for this agent.
+        const any = document.createElement('option');
+        any.value = ''; any.textContent = 'Any free slot';
+        slot.append(any);
         slots.forEach(sl => {
             const o = document.createElement('option');
-            o.value = sl.name; o.textContent = sl.name;
+            o.value = sl.name; o.textContent = 'Hold ' + sl.name;
             if (sl.name === agent.slotName) o.selected = true;
             slot.append(o);
         });
-        // Nothing matched (unnamed / renamed since) — fall back to whatever's first, same as the server.
-        if (!slots.some(sl => sl.name === agent.slotName)) slot.value = slots[0]?.name ?? '';
+        // Nothing matched (unnamed, or renamed since): it takes any free slot, the same as the server does.
+        if (!slots.some(sl => sl.name === agent.slotName)) slot.value = '';
+        slot.title = 'Any free slot: each turn runs on whichever of the server\'s slots is idle or least busy, so conversations run side by side. Hold a slot: this agent always uses it, and nothing else does.';
     }
     fillSlots();
 
-    srv.addEventListener('change', () => { agent.serverName = srv.value; agent.slotName = null; fillSlots(); agent.slotName = slot.value; agDirty(); });
-    slot.addEventListener('change', () => { agent.slotName = slot.value; agDirty(); });
+    srv.addEventListener('change', () => { agent.serverName = srv.value; agent.slotName = null; fillSlots(); agent.slotName = slot.value || null; agDirty(); });
+    slot.addEventListener('change', () => { agent.slotName = slot.value || null; agDirty(); });
     wrap.append(srv, slot);
     return wrap;
 }
@@ -5440,7 +5445,7 @@ function prRenderList() {
     add.onclick = async () => {
         const name = (prompt('Name for the new agent?') || '').trim(); if (!name) return;
         const srv = (agData.servers || [])[0] || { name: '', slots: [] };
-        const r = await cpFetch('/api/v1/admin/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, serverName: srv.name, slotName: (srv.slots && srv.slots[0] && (srv.slots[0].name || srv.slots[0])) || null, agentPrompt: '' }) });
+        const r = await cpFetch('/api/v1/admin/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, serverName: srv.name, slotName: null, agentPrompt: '' }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { alert(j.error || 'Could not create the agent.'); return; }
         agIsDirty = false; agData = null; prSelected = 'agent:' + name; await loadAgents();
@@ -5734,7 +5739,7 @@ function pipDraw(p) {
             });
             if (pws.length) { const t = agEl('div', '', 'PATHWAY TOOLS ▲'); t.className = 'pip-tools'; t.title = 'The tools this agent ends with. Each one is an output: wire it to where that answer should go. A wire back to the writer makes a loop.'; d.append(t); }
             ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
-            const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
+            const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName ? 'holds ' + def.slotName : 'any free slot') + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
             outs.forEach((o, i) => { const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, o); d.append(po); });
             ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28 + (pws.length ? 22 : 0)}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
@@ -5838,7 +5843,7 @@ function pipInspector(p) {
     }
     const def = pipDef(n);
     box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
-    lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName || 'default slot'));
+    lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName ? 'holds ' + def.slotName : 'any free slot'));
     lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? (p.edges.find(e => e.to === n.id && e.port === q).fromPort === 'message' ? 'latest message' : 'conversation history') : pipLabel(f); })() : 'nothing') ).join('\n') || 'none');
     if ((def.pathways || []).length) {
         lab('Pathway tools');
