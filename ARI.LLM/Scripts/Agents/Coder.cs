@@ -89,7 +89,27 @@ internal sealed class Coder : Agent
         return sb.ToString();
     }
 
-    internal override string PersistentContext(Thread thread) => BuildStaticContext(GetOrCreateState(thread.Key));
+    internal override string PersistentContext(Thread thread) => BuildStaticContext(GetOrCreateState(thread.Key)) + ProjectInstructions(thread);
+
+    // A project's own instruction file, the way coding agents read CLAUDE.md or AGENTS.md: the first of these at the project's root is
+    // given to the Coder on every turn. Read again only when the file changes, so it costs nothing until it's edited.
+    private static readonly string[] InstructionFiles = ["ARI.md", "AGENTS.md", "CLAUDE.md"];
+    private const int MaxInstructionChars = 8000;
+    private readonly ConcurrentDictionary<string, (DateTime Written, string Block)> instructionCache = new();
+
+    private string ProjectInstructions(Thread thread)
+    {
+        if (thread is not { FilesystemRoot: { Length: > 0 } root, IsRemoteProject: false }) return "";
+        string? path = InstructionFiles.Select(f => Path.Combine(root, f)).FirstOrDefault(File.Exists);
+        if (path is null) return "";
+        DateTime written = File.GetLastWriteTimeUtc(path);
+        if (instructionCache.TryGetValue(path, out var cached) && cached.Written == written) return cached.Block;
+        string text = File.ReadAllText(path).Trim();
+        if (text.Length > MaxInstructionChars) text = text[..MaxInstructionChars] + "\n… (cut short; read the file for the rest)";
+        string block = $"\n\n## Project instructions ({Path.GetFileName(path)}, from the project's owner — follow them)\n{text}";
+        instructionCache[path] = (written, block);
+        return block;
+    }
 
     // #112: during long exploration the agent goes minutes emitting only tool calls. Every ~90s of
     // tool-only work, force a one-sentence check-in — better UX and it re-anchors purpose against the
@@ -172,7 +192,7 @@ internal sealed class Coder : Agent
     internal override string? OnToolCall(Thread thread, ToolTurnState state, string toolName, string callId, string argsJson)
     {
         // A pair programmer doesn't disappear into a long run of changes: after a handful, stop and talk it over.
-        if (state is CoderTurnState cs && toolName is "edit_file" or "write_file" or "delete_file" or "move_file"
+        if (state is CoderTurnState cs && toolName is "edit_file" or "edit_files" or "write_file" or "delete_file" or "move_file"
             && CheckInEdits() is int limit and > 0 && cs.Changes >= limit)
             return $"[System: you have made {cs.Changes} file changes this turn. Stop making changes now. Tell the user in a few plain sentences what you have done so far, what is left, and anything you were unsure about, then ask whether to carry on. Do not call any more edit tools this turn.]";
 
@@ -180,12 +200,12 @@ internal sealed class Coder : Agent
         // and even call start_build, but any file-mutating tool bounces until the user disables safe mode
         // (which clears automatically when they approve a plan). This is NOT planning mode.
         if (thread.SafeMode
-            && toolName is "edit_file" or "write_file" or "delete_file" or "move_file" or "build_project")
+            && toolName is "edit_file" or "edit_files" or "write_file" or "delete_file" or "move_file" or "build_project")
             return "[System: you are in safemode, editing files is not permitted. if you think this is an error, " +
                    "report back to the user to disable safemode, otherwise keep planning.]";
 
         if (thread.Phase == CodePhase.Planning
-            && toolName is "edit_file" or "write_file" or "delete_file" or "move_file" or "build_project")
+            && toolName is "edit_file" or "edit_files" or "write_file" or "delete_file" or "move_file" or "build_project")
             return "[System: you are in planning mode — either call start_build to implement this directly (for a " +
                    "simple, well-understood change) or finish your plan and call plan_proposed. Editing and building " +
                    "are disabled until you do one of those.]";
@@ -202,13 +222,23 @@ internal sealed class Coder : Agent
     // the local and remote paths.
     internal override string OnToolResult(Thread thread, ToolTurnState state, string toolName, string argsJson, string result)
     {
-        if (toolName is "edit_file" or "write_file"
+        if (toolName is "edit_file" or "edit_files" or "write_file"
             && !ToolCallParser.IsError(result) && !result.StartsWith("[System:", StringComparison.Ordinal))
         {
+            if (toolName == "edit_files")
+            {
+                try
+                {
+                    using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(argsJson);
+                    foreach (System.Text.Json.JsonElement f in doc.RootElement.GetProperty("files").EnumerateArray())
+                        if (f.TryGetProperty("path", out System.Text.Json.JsonElement fp) && fp.GetString() is { Length: > 0 } each) thread.TouchedFiles.Add(each.Trim());
+                }
+                catch { }
+            }
             string? path = ToolCallParser.TryExtractJsonString(argsJson, "path");
             if (!string.IsNullOrWhiteSpace(path)) thread.TouchedFiles.Add(path.Trim());
         }
-        if (state is CoderTurnState cs && toolName is "edit_file" or "write_file" or "delete_file" or "move_file"
+        if (state is CoderTurnState cs && toolName is "edit_file" or "edit_files" or "write_file" or "delete_file" or "move_file"
             && !ToolCallParser.IsError(result) && !result.StartsWith("[System:", StringComparison.Ordinal))
             cs.Changes++;
         return result;
@@ -501,7 +531,7 @@ internal sealed class Coder : Agent
         foreach (Response r in child.History.OfType<Response>())
             foreach (TraceStep s in r.Trace ?? Enumerable.Empty<TraceStep>())
             {
-                if (s.Kind != "tool_result" || s.Name is not ("edit_file" or "write_file" or "revert_file" or "move_file" or "delete_file")) continue;
+                if (s.Kind != "tool_result" || s.Name is not ("edit_file" or "edit_files" or "write_file" or "revert_file" or "move_file" or "delete_file")) continue;
                 string t = (s.Text ?? "").TrimStart();
                 lastMutatingFailed = t.StartsWith("[Blocked") || t.StartsWith("[Error") || t.StartsWith("[System") || t.StartsWith("Error");
             }
@@ -527,7 +557,7 @@ internal sealed class Coder : Agent
         foreach (Response r in child.History.OfType<Response>())
             foreach (TraceStep s in r.Trace ?? Enumerable.Empty<TraceStep>())
             {
-                if (s.Kind != "tool_result" || s.Name is not ("edit_file" or "write_file" or "move_file" or "delete_file")) continue;
+                if (s.Kind != "tool_result" || s.Name is not ("edit_file" or "edit_files" or "write_file" or "move_file" or "delete_file")) continue;
                 string t = (s.Text ?? "").TrimStart();
                 if (!t.StartsWith("[Error") && !t.StartsWith("[System") && !t.StartsWith("SAFETY MODE") && !t.StartsWith("Error"))
                     return true;
@@ -607,6 +637,7 @@ internal sealed class Coder : Agent
         new SearchFiles(fs).Register(child);
         new FindFiles(fs).Register(child);
         new EditFile(fs).Register(child);
+        new EditFiles(fs).Register(child);
         new WriteFile(fs).Register(child);
         new RevertFile(root, ct, snapshots).Register(child);   // RevertFile is snapshot-tied — not via FileSystem yet
         new DeleteFile(fs).Register(child);

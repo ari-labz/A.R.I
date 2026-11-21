@@ -1319,6 +1319,17 @@ body.cp-win32 #cp-win-controls { display: flex; }
           Drop a <code>.cs</code> or <code>.txt</code> file anywhere on this table to start a new custom tool from it. A saved custom tool is live straight away and runs with full access to this machine.
         </p>
       </div>
+    
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">MCP servers</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">Tool servers other AI apps share. Each one listed here is started by ARI, and its tools become Ari's (for you only), named mcp_&lt;server&gt;_&lt;tool&gt;. Example: <code>{"servers":[{"name":"files","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}]}</code></p>
+        <textarea id="mcp-config" class="vs-input" spellcheck="false" style="width:100%;min-height:160px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;"></textarea>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap;">
+          <button class="vs-btn-primary" id="mcp-save-btn" type="button">Save and restart servers</button>
+          <span id="mcp-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+        <div id="mcp-servers" style="display:flex;flex-direction:column;gap:6px;margin-top:12px;font-size:13px;"></div>
+      </div>
     </div>
 
     <!-- Settings tab -->
@@ -1832,7 +1843,7 @@ function switchTab(name) {
     if (name === 'pipelines' && !pipDirty) pipMode = 'list';   // the tab always opens on the list; Edit opens the editor
     if (name === 'agents' || name === 'pipelines') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
-    if (name === 'tools') loadTools();
+    if (name === 'tools') { loadTools(); loadMcp(); }
     if (name === 'calendar') loadCalendar();
     if (name === 'plugins') { loadPlugins(); plSetMode('installed'); }
     if (name === 'debug') loadDebugThreads();
@@ -5960,6 +5971,24 @@ async function loadAutoUpdate() {
         });
     }
 }
+
+// ── MCP servers ───────────────────────────────────────────────────────
+function renderMcpServers(list) {
+    const box = document.getElementById('mcp-servers');
+    box.innerHTML = (list || []).length === 0 ? '<span style="color:var(--text-dim);">No servers running.</span>' : list.map(s =>
+        `<div><b>${escHtml(s.name)}</b> <span style="color:${s.state === 'running' ? 'var(--accent)' : 'var(--text-dim)'};">${escHtml(s.state)}</span>${s.tools.length ? ' · ' + s.tools.map(escHtml).join(', ') : ''}</div>`).join('');
+}
+async function loadMcp() {
+    try { const r = await cpFetch('/api/v1/admin/mcp'); if (!r.ok) return; const d = await r.json(); document.getElementById('mcp-config').value = d.config; renderMcpServers(d.servers); } catch {}
+}
+document.getElementById('mcp-save-btn').addEventListener('click', async () => {
+    const st = document.getElementById('mcp-status'); st.textContent = 'Starting…';
+    const r = await cpFetch('/api/v1/admin/mcp', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config: document.getElementById('mcp-config').value }) });
+    const d = await r.json().catch(() => ({}));
+    st.textContent = r.ok ? 'Saved.' : (d.error || 'Save failed.');
+    if (r.ok) renderMcpServers(d.servers);
+    setTimeout(() => st.textContent = '', 6000);
+});
 
 async function srvAction(id, action) {
     await cpFetch(`/api/v1/admin/servers/${id}/${action}`, { method:'POST' });

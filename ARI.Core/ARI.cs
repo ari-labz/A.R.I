@@ -179,6 +179,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         // Plugins (Discord, GitHub and the rest) are installed from .ari files; the host gives each one what it needs when it is created.
         CompiledPlugins.Host = new PluginHost(loggerFactory, () => llmModule, () => appStoppingToken, moduleTasks.Add);
         await ScriptPlugins.StartAsync();       // plugins written as source (the owner's, and Ari's) and plugins installed from built .ari files
+        _ = LLMModule.StartMcpServersAsync();   // MCP servers from McpServers.json; their tools appear as each one comes up
 
         // ── Calendar ──────────────────────────────────────────────────────────────
         // Refactor's daily walk (see DreamOrchestrator for why Curiosity/ProactiveMessage were retired

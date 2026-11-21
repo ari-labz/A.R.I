@@ -305,15 +305,88 @@ internal static class BrowserHost
                 shots.Add(await page.ScreenshotBase64Async(new ScreenshotOptions { Type = ScreenshotType.Png }));
             }
 
-            int columns = times.Count <= 4 ? times.Count : times.Count <= 9 ? 3 : 4;
-            int cell = Math.Min(width, 1600 / columns);
-            StringBuilder sheet = new($"<body style=\"margin:0;padding:12px;background:#101618;font:12px system-ui;color:#cadde2;display:grid;grid-template-columns:repeat({columns},{cell}px);gap:12px\">");
-            for (int i = 0; i < shots.Count; i++)
-                sheet.Append($"<figure style=\"margin:0\"><img src=\"data:image/png;base64,{shots[i]}\" style=\"width:{cell}px;display:block;border:1px solid #33464d\"><figcaption style=\"padding-top:4px\">#{i + 1} · {times[i]} ms</figcaption></figure>");
-            await page.SetViewportAsync(new ViewPortOptions { Width = columns * (cell + 12) + 12, Height = 200 });
-            await page.SetContentAsync(sheet + "</body>");
-            return (await page.ScreenshotDataAsync(new ScreenshotOptions { Type = ScreenshotType.Png, FullPage = true }), errors.Distinct().Take(6).ToList());
+            return (await Sheet(page, shots, times.Select((t, i) => $"#{i + 1} · {t} ms").ToList(), width), errors.Distinct().Take(6).ToList());
         }
+        finally { try { await page.CloseAsync(); } catch { } }
+    }
+
+    /// <summary>Lays screenshots out as one labelled sheet on the page and returns it as a PNG.</summary>
+    private static async Task<byte[]> Sheet(IPage page, List<string> shots, List<string> labels, int width)
+    {
+        int columns = shots.Count <= 4 ? shots.Count : shots.Count <= 9 ? 3 : 4;
+        int cell = Math.Min(width, 1600 / columns);
+        StringBuilder sheet = new($"<body style=\"margin:0;padding:12px;background:#101618;font:12px system-ui;color:#cadde2;display:grid;grid-template-columns:repeat({columns},{cell}px);gap:12px\">");
+        for (int i = 0; i < shots.Count; i++)
+            sheet.Append($"<figure style=\"margin:0\"><img src=\"data:image/png;base64,{shots[i]}\" style=\"width:{cell}px;display:block;border:1px solid #33464d\"><figcaption style=\"padding-top:4px\">{System.Net.WebUtility.HtmlEncode(labels[i])}</figcaption></figure>");
+        await page.SetViewportAsync(new ViewPortOptions { Width = columns * (cell + 12) + 12, Height = 200 });
+        await page.SetContentAsync(sheet + "</body>");
+        return await page.ScreenshotDataAsync(new ScreenshotOptions { Type = ScreenshotType.Png, FullPage = true });
+    }
+
+    // A three.js viewer: __load(base64, kind) loads a model and frames the camera on it, __view(yaw, pitch, wire) draws it from there.
+    private const string ModelViewer = """
+        <!doctype html><html><body style="margin:0;background:#2a3439">
+        <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+        <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+        import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+        import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+        const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+        renderer.setSize(innerWidth, innerHeight); document.body.appendChild(renderer.domElement);
+        const scene = new THREE.Scene(); scene.background = new THREE.Color(0x2a3439);
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
+        const sun = new THREE.DirectionalLight(0xffffff, 1.8); sun.position.set(3, 5, 4); scene.add(sun);
+        const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 10000);
+        let model, centre = new THREE.Vector3(), radius = 1, materials = [];
+        window.__load = async (b64, kind) => {
+          const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
+          if (kind === 'glb' || kind === 'gltf') model = (await new Promise((ok, no) => new GLTFLoader().parse(bytes, '', ok, no))).scene;
+          else if (kind === 'obj') model = new OBJLoader().parse(new TextDecoder().decode(bytes));
+          else if (kind === 'fbx') model = new FBXLoader().parse(bytes, '');
+          else if (kind === 'stl') model = new THREE.Mesh(new STLLoader().parse(bytes), new THREE.MeshStandardMaterial({ color: 0xcadde2 }));
+          scene.add(model);
+          let triangles = 0, meshes = 0;
+          model.traverse(o => { if (o.isMesh) { meshes++; const g = o.geometry; triangles += (g.index ? g.index.count : g.attributes.position.count) / 3;
+            (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => materials.push(m)); if (o.material && o.material.isMeshBasicMaterial === false && !o.material.map && kind === 'obj') o.material = new THREE.MeshStandardMaterial({ color: 0xcadde2 }); } });
+          const box = new THREE.Box3().setFromObject(model); const size = box.getSize(new THREE.Vector3());
+          const sphere = box.getBoundingSphere(new THREE.Sphere()); centre = sphere.center; radius = sphere.radius || 1;
+          return { meshes, triangles: Math.round(triangles), size: [size.x, size.y, size.z].map(v => +v.toFixed(3)) };
+        };
+        window.__view = (yaw, pitch, wire) => {
+          materials.forEach(m => { if (m) m.wireframe = !!wire; });
+          const d = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.1, y = THREE.MathUtils.degToRad(yaw), p = THREE.MathUtils.degToRad(pitch);
+          camera.position.set(centre.x + d * Math.cos(p) * Math.sin(y), centre.y + d * Math.sin(p), centre.z + d * Math.cos(p) * Math.cos(y));
+          camera.lookAt(centre); renderer.render(scene, camera);
+        };
+        window.__ready = true;
+        </script></body></html>
+        """;
+
+    /// <summary>A 3D model drawn from each (yaw, pitch) as one labelled sheet, with its triangle count and size, or why it couldn't be drawn.</summary>
+    internal static async Task<(byte[]? Sheet, string Facts, List<string> Errors)> RenderModel(byte[] model, string kind, IReadOnlyList<(int Yaw, int Pitch, string Label)> views, bool wireframe, int size)
+    {
+        List<string> errors = new();
+        IPage page;
+        await gate.WaitAsync();
+        try { page = await (await Launch()).NewPageAsync(); } finally { gate.Release(); }
+        try
+        {
+            page.PageError += (_, e) => errors.Add(e.Message.Split('\n')[0]);
+            await page.SetViewportAsync(new ViewPortOptions { Width = size, Height = size });
+            await page.SetContentAsync(ModelViewer, new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.Networkidle0 }, Timeout = 30_000 });
+            await page.WaitForFunctionAsync("() => window.__ready === true", new WaitForFunctionOptions { Timeout = 20_000 });
+            JsonElement facts = await page.EvaluateFunctionAsync<JsonElement>("(b, k) => window.__load(b, k)", Convert.ToBase64String(model), kind);
+            List<string> shots = new();
+            foreach ((int yaw, int pitch, _) in views)
+            {
+                await page.EvaluateFunctionAsync("(y, p, w) => window.__view(y, p, w)", yaw, pitch, wireframe);
+                shots.Add(await page.ScreenshotBase64Async(new ScreenshotOptions { Type = ScreenshotType.Png }));
+            }
+            return (await Sheet(page, shots, views.Select(v => v.Label).ToList(), size), facts.GetRawText(), errors.Distinct().Take(6).ToList());
+        }
+        catch (Exception e) { errors.Add(e.Message.Split('\n')[0]); return (null, "", errors.Distinct().Take(6).ToList()); }
         finally { try { await page.CloseAsync(); } catch { } }
     }
 

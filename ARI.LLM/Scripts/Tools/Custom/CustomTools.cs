@@ -357,6 +357,7 @@ public static class CustomTools
         }).ToList();
         paths.Add(typeof(Tool).Assembly.Location);     // ARI.LLM: Tool, [Tool], [Param]
         paths.Add(typeof(Shared).Assembly.Location);   // ARI.Common: Shared.Logger, Paths
+        paths.Add(typeof(ARI.BrainVault.Brain).Assembly.Location);   // ARI.Brain: reading notes (plugins could already read the files themselves)
         return references = paths.Where(p => p.Length > 0).Distinct().Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)).ToList();
     }
 

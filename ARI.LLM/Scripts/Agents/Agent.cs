@@ -321,7 +321,7 @@ public abstract class Agent
         await ApplyPendingEdits(turn, thread, waitForAnimation: true);
     }
 
-    private static readonly HashSet<string> ChangeTools = new(StringComparer.OrdinalIgnoreCase) { "edit_file", "write_file", "edit_xlsx", "edit_docx", "write_xlsx", "write_docx", "write_pptx", "write_pdf", "delete_file", "move_file" };
+    private static readonly HashSet<string> ChangeTools = new(StringComparer.OrdinalIgnoreCase) { "edit_file", "edit_files", "write_file", "edit_xlsx", "edit_docx", "write_xlsx", "write_docx", "write_pptx", "write_pdf", "delete_file", "move_file" };
     private static readonly HashSet<string> RunTools    = new(StringComparer.OrdinalIgnoreCase) { "shell", "shell_session", "run_command", "build_project", "run_code" };
 
     /// <summary>Hard facts about this turn that need no judgement, worked out from the order the tools ran in: whether files were changed,
@@ -2030,7 +2030,7 @@ public abstract class Agent
                 }
 
                 // File mutations are logged with their result so a refused/ineffective edit is diagnosable from the log.
-                if (call.Name is "edit_file" or "write_file" && !ToolCallParser.IsError(result))
+                if (call.Name is "edit_file" or "edit_files" or "write_file" && !ToolCallParser.IsError(result))
                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) Tool '{Tool}' result: {Result}", Name, thread.Key, call.Name,
                         result.Length > 160 ? result[..160] + "…" : result);
                 if (ToolCallParser.IsError(result))

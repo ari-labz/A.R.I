@@ -1994,6 +1994,9 @@ public class LLMModule : ILLMModule, IDisposable
     /// pipeline applies it to every code thread each turn — see <see cref="Coder.RefreshConventions"/>.</summary>
     public static Func<string?>? ConventionsProvider { get; set; }
 
+    /// <summary>Starts the MCP servers listed in McpServers.json, in the background of start-up.</summary>
+    public static Task StartMcpServersAsync() => McpTools.ReloadAsync();
+
     /// <summary>Saves the coding-conventions text (set by the API module alongside <see cref="ConventionsProvider"/>).</summary>
     public static Action<string>? ConventionsSaver { get; set; }
 
