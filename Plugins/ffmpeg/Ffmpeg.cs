@@ -1,4 +1,4 @@
-[Plugin("ffmpeg", "Lets Ari look inside video: facts about a clip, and still frames she can open and see.")]
+[Plugin("ffmpeg", "Lets Ari look inside video and sound: a clip's facts, still frames, and a sound's waveform, loudness and silences.")]
 public class FfmpegPlugin : ScriptPlugin
 {
     public override IReadOnlyList<PluginSetting> Settings { get; } =

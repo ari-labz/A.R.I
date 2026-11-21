@@ -156,7 +156,7 @@
       ]
     },
     "visual_tools": {
-      "Description": "Show a visual in the chat itself: show_visual displays HTML you write (a chart, diagram, table, timeline, calculator or small interactive page) under your message. Use it when a picture or something interactive explains better than words. preview_animation shows an animated page frame by frame; preview_model shows a 3D model (.glb, .gltf, .obj, .stl, .fbx) from several angles.",
+      "Description": "See 3D models (preview_model: .glb .obj .stl .fbx), animation frames (preview_animation), and show HTML visuals in the chat (show_visual: charts, diagrams, tables, small interactive pages).",
       "Tools": [
         "show_visual", "preview_animation", "preview_model"]
     },
