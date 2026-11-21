@@ -338,6 +338,7 @@ public class LLMModule : ILLMModule, IDisposable
                 engram.Init(textingAgent, context, threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
+                _ = Task.Run(MemoryQueueLoop);
                 _logger.LogInformation("Engram is active. Brain connected.");
             }
 
@@ -671,7 +672,8 @@ public class LLMModule : ILLMModule, IDisposable
                         else if (share < 0.5) nearFull.TryRemove(threadKey, out _);
                     }
                     if (!engram.ShouldIntervalSweep(threadKey) && !nearCompaction) return;
-                    QueueEngram(threadKey, nearCompaction ? "compaction" : "interval");
+                    try { engram.TakeSnapshot(thread, nearCompaction ? "compaction" : "interval"); }
+                    catch (Exception ex) { _logger.LogWarning("[Engram] snapshot failed for {Key}: {Err}", threadKey, ex.Message); }
                 };
         }
         Broadcast(new AppEvent("newThread", threadKey));
@@ -942,8 +944,8 @@ public class LLMModule : ILLMModule, IDisposable
         dreamOrchestrator?.Start();
         _ = WarmDialogueAsync();
         _ = WarmRecallAsync();
-        // Conversations ARI closed on before Engram reached them, now that the model is up to sweep them.
-        if (engram is not null) _ = Task.Run(engram.SweepSavedAsync);
+        // Conversations ARI closed on before Engram reached them go into the memory queue.
+        if (engram is not null) _ = Task.Run(engram.QueueUnsweptSaved);
 
         async Task BootOne(Server server, Model? model)
         {
@@ -1177,9 +1179,9 @@ public class LLMModule : ILLMModule, IDisposable
     /// it can't run (disabled / a concurrent sweep holds the lock) the flag stays false and the thread's
     /// delete-retry poll tries again.</summary>
     // ── Engram while idle ────────────────────────────────────────────────────────
-    // Interval and compaction sweeps never compete with a reply for the model: they wait in a queue and run only once nothing has
-    // been generating for a while. A thread is queued once however many exchanges pass, and nothing is lost if it closes first:
-    // the sweep at close (or dormancy) reads everything since the last one, which is what a queued run would have read.
+    // Memory never holds up a conversation: each sweep trigger only queues a snapshot (see Engram.TakeSnapshot), and the queue is
+    // worked through here, oldest first, only while she is idle — nothing generating, and either no conversation active or ten
+    // minutes with no prompts, replies or typing. A snapshot already being swept when she gets busy again is finished; the next waits.
 
     // While nothing else is happening, the Reflector reads its own recent corrections and leaves suggestions for the owner to approve.
     private async Task ReflectionProposalLoop()
@@ -1206,42 +1208,35 @@ public class LLMModule : ILLMModule, IDisposable
         }
     }
 
-    private const int EngramIdleSeconds = 10;
-    private readonly ConcurrentDictionary<string, string> engramQueue = new(StringComparer.OrdinalIgnoreCase);
-    private int engramWorkerRunning;
+    private static readonly TimeSpan MemoryQueueIdle = TimeSpan.FromMinutes(10);
+    private DateTime lastActivity = DateTime.UtcNow;
 
-    private void QueueEngram(string threadKey, string trigger)
+    /// <summary>Nothing generating, and no conversation active or none for <see cref="MemoryQueueIdle"/>.</summary>
+    private bool IdleForMemory()
     {
-        // A compaction run is the more urgent of the two, so it keeps its place.
-        engramQueue.AddOrUpdate(threadKey, trigger, (_, queued) => queued == "compaction" ? queued : trigger);
-        if (Interlocked.CompareExchange(ref engramWorkerRunning, 1, 0) != 0) return;
-        _ = Task.Run(async () =>
+        if (!IsIdle) { lastActivity = DateTime.UtcNow; return false; }
+        bool anyActive = threads.Values.Any(t => !t.Internal && t.State is ThreadState.Active or ThreadState.Streaming);
+        return !anyActive || DateTime.UtcNow - lastActivity >= MemoryQueueIdle;
+    }
+
+    private async Task MemoryQueueLoop()
+    {
+        while (true)
         {
+            await Task.Delay(TimeSpan.FromSeconds(5));
             try
             {
-                DateTime lastBusy = DateTime.UtcNow;
-                while (!engramQueue.IsEmpty)
-                {
-                    if (!IsIdle) { lastBusy = DateTime.UtcNow; await Task.Delay(1000); continue; }
-                    if (DateTime.UtcNow - lastBusy < TimeSpan.FromSeconds(EngramIdleSeconds)) { await Task.Delay(1000); continue; }
-
-                    string? key = engramQueue.Keys.FirstOrDefault(k => engramQueue.TryGetValue(k, out string? t) && t == "compaction") ?? engramQueue.Keys.FirstOrDefault();
-                    if (key is null || !engramQueue.TryRemove(key, out string? trigger)) continue;
-                    if (engram is null || !threads.ContainsKey(key)) continue;
-                    try
-                    {
-                        await SweepOrHandOff(key, trigger, () => engram.RunEngram(key, trigger));
-                    }
-                    catch (Exception ex) { _logger.LogWarning("[Idle] Engram failed for {Key}: {Err}", key, ex.Message); }
-                }
+                if (!IdleForMemory() || engram is not { IsEnabled: true } e) continue;
+                if (Engram.QueuedSnapshots().FirstOrDefault() is not { } file) continue;
+                (string key, string trigger) = Engram.SnapshotInfo(file);
+                bool done = true;
+                await SweepOrHandOff(key, trigger, async () => done = await e.SweepSnapshot(file));
+                if (File.Exists(file) && done) Engram.DropSnapshot(file);   // a plugin took the sweep
+                // A snapshot the model couldn't answer for stays first in line; give the server a minute before trying it again.
+                if (!done) await Task.Delay(TimeSpan.FromMinutes(1));
             }
-            finally
-            {
-                Interlocked.Exchange(ref engramWorkerRunning, 0);
-                // A job queued in the instant the worker was finishing must not be stranded.
-                if (!engramQueue.IsEmpty && engramQueue.Keys.FirstOrDefault() is { } stranded && engramQueue.TryGetValue(stranded, out string? t2)) QueueEngram(stranded, t2);
-            }
-        });
+            catch (Exception ex) { _logger.LogWarning("[Idle] memory queue: {Err}", ex.Message); await Task.Delay(TimeSpan.FromMinutes(1)); }
+        }
     }
 
     /// <summary>A memory sweep: a plugin that replaces sweeps takes it, otherwise Engram runs. The add-on sweep hooks fire either way.</summary>
@@ -1253,19 +1248,6 @@ public class LLMModule : ILLMModule, IDisposable
         PluginHooks.Fire(p => p.OnMemorySweep(sweep));
     }
 
-    /// <summary>Waits until nothing has been generating for a while, so a memory sweep never competes with a reply for the model.
-    /// Gives up after ten minutes so a busy server can't hold a closed thread forever.</summary>
-    private async Task WaitUntilIdle()
-    {
-        DateTime start = DateTime.UtcNow, lastBusy = DateTime.UtcNow;
-        while (DateTime.UtcNow - start < TimeSpan.FromMinutes(10))
-        {
-            if (!IsIdle) lastBusy = DateTime.UtcNow;
-            else if (DateTime.UtcNow - lastBusy >= TimeSpan.FromSeconds(EngramIdleSeconds)) return;
-            await Task.Delay(1000);
-        }
-    }
-
     private void OnThreadDormant(Thread thread)
     {
         bool canSweep = engram is not null && !thread.EngramProcessed && Engram.MaySweep(thread);
@@ -1273,11 +1255,8 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
         {
-            _ = Task.Run(async () =>
-            {
-                try { await WaitUntilIdle(); await SweepOrHandOff(thread.Key, "dormant", () => engram!.RunEngram(thread.Key, "dormant")); }
-                catch (Exception ex) { _logger.LogWarning("[Dormant] Engram failed for {Key}: {Err}", thread.Key, ex.Message); }
-            });
+            try { engram!.TakeSnapshot(thread, "dormant"); }
+            catch (Exception ex) { _logger.LogWarning("[Dormant] Engram snapshot failed for {Key}: {Err}", thread.Key, ex.Message); }
         }
         else
         {
@@ -1285,31 +1264,30 @@ public class LLMModule : ILLMModule, IDisposable
         }
     }
 
-    /// <summary>Manually close a thread (close-thread button): remove it from the UI immediately, run a real
-    /// Engram sweep (forced past any disabled gate — a user closing wants it saved), then delete once the
-    /// sweep finishes. The thread stays in the registry, hidden, until Engram completes.</summary>
-    public async Task<bool> CloseThreadAsync(string threadKey)
+    /// <summary>Manually close a thread (close-thread button): remove it from the UI, queue a snapshot of what Engram hasn't
+    /// seen yet (swept later, while she is idle), then delete it.</summary>
+    public Task<bool> CloseThreadAsync(string threadKey)
     {
-        if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
+        if (!threads.TryGetValue(threadKey, out Thread? thread)) return Task.FromResult(false);
 
         Cancel(threadKey);   // stop any active send before we sweep + delete
 
-        // 1) Clear it from the UI now; the thread lingers in the registry until Engram is done.
+        // 1) Clear it from the UI now.
         Broadcast(new AppEvent("threadDeleted", threadKey) { OwnerId = thread.OwnerId });
 
-        // 2) Guarantee the conversation is saved before deletion (honours the no-delete-before-Engram rule).
+        // 2) Queue what it said for memory before deletion (honours the no-delete-before-Engram rule).
         if (engram is not null && !thread.Internal && thread.HasUserMessages)
         {
             if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
             {
-                try { await WaitUntilIdle(); await SweepOrHandOff(threadKey, "closed", () => engram.RunEngram(threadKey, "closed", force: true)); }
-                catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
+                try { engram.TakeSnapshot(thread, "closed"); }
+                catch (Exception ex) { _logger.LogWarning("[Close] Engram snapshot failed for {Key}: {Err}", threadKey, ex.Message); }
             }
         }
 
         // 3) Delete for real (fires Deleted → registry removal + a final threadDeleted broadcast).
         thread.Delete();
-        return true;
+        return Task.FromResult(true);
     }
 
     /// <summary>Whether a conversational-awareness gate is available.</summary>
@@ -1902,6 +1880,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     public void NotifyTyping(string threadKey)
     {
+        lastActivity = DateTime.UtcNow;
         if (threads.TryGetValue(threadKey, out Thread? t)) t.OnUserTyping();
     }
 
