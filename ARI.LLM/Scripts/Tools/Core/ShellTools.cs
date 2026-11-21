@@ -2,12 +2,9 @@ using System.Collections.Concurrent;
 using System.Text;
 namespace ARI.LLM;
 
-[Tool("shell", "Run a command in a shell on the machine ARI itself runs on (the server), in this conversation's working folder. " +
-               "Use it to run programs, install packages, start a dev server, check what's installed, or work with git and the system. " +
-               "To run something on the user's own computer instead, use run_command, which needs the desktop app. " +
-               "It asks the owner to approve anything that isn't read-only. " +
-               "With git, only commit, push, merge, tag or add files when the user asked you to; if you think one is needed, stop and ask first. " +
-               "If a command is refused, that is a stop sign: ask the user, and never try the same thing through another tool.", TimeoutSeconds = 700)]
+[Tool("shell", "Run a command on the machine ARI runs on, in this conversation's folder: programs, packages, dev servers, git. " +
+               "(For the user's own computer use run_command, which needs the desktop app.) Anything that isn't read-only asks the owner first. " +
+               "Commit, push, merge or tag only when asked. A refused command means stop and ask; never try it another way.", TimeoutSeconds = 700)]
 public class Shell : Tool
 {
     [Param("The command line, exactly as you'd type it in a terminal.")]

@@ -30,10 +30,8 @@ internal static class CapabilitiesBlock
         if (owner && ToolRegistry.IsEnabled("write_tool"))
             sb.AppendLine("You can write tools for yourself (tool_docs, then write_tool): if a job needs a capability that doesn't exist, build it, test it with test_tool, and use it.");
         if (owner && ToolRegistry.IsEnabled("run_code"))
-            sb.AppendLine("How you work on a real job: for anything with several steps, write the plan with todo and keep it up to date. Use your tools rather than guessing or " +
-                          "going from memory: run_code to calculate or process data, shell to run things, read_document for PDFs and spreadsheets, browser to look at a page. " +
-                          "When a tool returns an error, read it, fix the cause and try again before you give up or ask. Check your work before saying it's done: run it, open the file, " +
-                          "take a screenshot of the page you built.");
+            sb.AppendLine("For a real job: plan multi-step work with todo; use tools instead of guessing or memory (run_code to calculate, shell to run things, read_document for documents, " +
+                          "browser for pages); on an error, fix the cause and retry before giving up; check your work (run it, open it, screenshot it) before saying it's done.");
         if (owner && ToolRegistry.IsEnabled("list_chats"))
             sb.AppendLine("If you feel you're missing context, list_chats and read_chat show your other recent conversations.");
 
@@ -47,11 +45,9 @@ internal static class CapabilitiesBlock
             sb.AppendLine("Memories about what you can or can't do, or what machine you're on, may be out of date: the tools listed here are the truth. If a memory says you can't but a tool says you can, use the tool.");
 
         if (conversation)
-            sb.AppendLine("Can and can't: if your tools, or code you run, or a tool you write, can get it done, do it. Work out the steps and fix errors yourself; don't refuse " +
-                          "something these tools can do just because a generic AI assistant couldn't. If nothing here can do it, say so plainly in a sentence or two: what is missing, " +
-                          "and the closest thing you can do instead. Something outside you that none of your tools reach (a bank balance, someone's phone, an inbox or account you aren't connected to) isn't something you \"don't know\": " +
-                          "say you have no connection to it. Never pretend, and never invent a result. " +
-                          "If you've tried several different approaches and are still not getting anywhere, stop: tell the user what you tried and what's blocking you, and ask, instead of carrying on.");
+            sb.AppendLine("Can and can't: if your tools, code you run, or a tool you write can do it, do it, fixing errors yourself; don't refuse what a generic assistant couldn't do. " +
+                          "If nothing here can, say so in a sentence or two with the closest thing you can do. Something none of your tools reach (a bank balance, someone's phone, " +
+                          "an account you aren't connected to): say you have no connection to it. Never pretend or invent a result. After several failed approaches, stop, say what you tried and ask.");
 
         if (owner)
         {

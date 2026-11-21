@@ -21,10 +21,7 @@ internal sealed class ShowVisual : Tool
         function = new
         {
             name        = "show_visual",
-            description = "Show a visual right in the chat: a chart, diagram, table, timeline, calculator, small interactive page or illustration. You write it as HTML (with CSS, and JavaScript if it needs to be interactive) and it appears under your message. " +
-                          "Use it when a picture or interactive thing explains something better than words. Keep it self-contained: put the CSS and JavaScript inline; the only outside code allowed is from cdnjs.cloudflare.com and cdn.jsdelivr.net (e.g. Chart.js, d3), " +
-                          "and the page cannot make network requests. Use a transparent background and the default font; dark text on light and light text on dark both work if you use currentColor. " +
-                          "Give it sensible proportions (it is about 700px wide, and grows to fit its content). Draw SVG for diagrams. Chart.js draws into a <canvas>, not a div. The page is test-run first and not shown if it raises errors; you'll be told what failed. For a chart that goes into a document use make_chart instead. After showing it, say in a sentence what it shows; don't describe it in detail.",
+            description = "Show a visual right in the chat: a chart, diagram, table, timeline, calculator or small interactive page, as self-contained HTML with inline CSS and JavaScript (outside code only from cdnjs.cloudflare.com or cdn.jsdelivr.net; no network requests). Use a transparent background and currentColor; it is about 700px wide. Chart.js draws into a <canvas>. It is test-run first and errors come back to you. For a chart in a document use make_chart. Afterwards say in one sentence what it shows.",
             parameters = new
             {
                 type       = "object",
