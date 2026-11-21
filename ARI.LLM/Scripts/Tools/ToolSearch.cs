@@ -87,6 +87,12 @@ internal sealed class ToolSearch : Tool
         ["remember"] = new[] { "memory" }, ["recall"] = new[] { "memory" }, ["reminder"] = new[] { "calendar" }, ["schedule"] = new[] { "calendar" }, ["event"] = new[] { "calendar" },
         ["pull"] = new[] { "github" }, ["issue"] = new[] { "github" }, ["repo"] = new[] { "git" }, ["commit"] = new[] { "git" }, ["voice"] = new[] { "discord" },
         ["background"] = new[] { "jobs" }, ["cancel"] = new[] { "jobs" }, ["playbook"] = new[] { "skill" },
+        ["3d"] = new[] { "preview_model" }, ["model"] = new[] { "preview_model" }, ["mesh"] = new[] { "preview_model" }, ["glb"] = new[] { "preview_model" }, ["gltf"] = new[] { "preview_model" },
+        ["obj"] = new[] { "preview_model" }, ["stl"] = new[] { "preview_model" }, ["fbx"] = new[] { "preview_model" },
+        ["animation"] = new[] { "preview_animation" }, ["animate"] = new[] { "preview_animation" }, ["frame"] = new[] { "preview_animation", "video_frames" }, ["motion"] = new[] { "preview_animation" },
+        ["audio"] = new[] { "audio_look" }, ["sound"] = new[] { "audio_look" }, ["waveform"] = new[] { "audio_look" }, ["silence"] = new[] { "audio_look" },
+        ["video"] = new[] { "video_frames", "video_info" }, ["unity"] = new[] { "unity" }, ["mcp"] = new[] { "mcp" },
+        ["rename"] = new[] { "edit_files" }, ["refactor"] = new[] { "edit_files" },
     };
 
     /// <summary>The words of the request plus what they mean in tool names, with plurals folded ("spreadsheets" is "spreadsheet").</summary>
