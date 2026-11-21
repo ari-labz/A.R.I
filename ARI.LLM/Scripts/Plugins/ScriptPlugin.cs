@@ -102,8 +102,21 @@ public abstract class ScriptPlugin : IPlugin, IToolProvider
         State = PluginState.Stopped;
     }
 
-    // ── Hooks: ARI tells a running plugin what is happening, so it can do something alongside ─────────────────
-    // A plugin overrides only the ones it needs. They run in the background and never hold anything up; a hook that throws is logged and ignored.
+    // ── Hooks: ARI tells a running plugin what is happening, so it can do something alongside, or instead ─────────
+    // A plugin overrides only the ones it needs. The On… hooks add a step: they run in the background, in HookOrder, and never hold
+    // anything up. RewriteUserMessage and ReplacesMemorySweep replace a step: ARI waits for them (briefly), in HookOrder. A hook that
+    // throws is logged and ignored.
+
+    /// <summary>Where this plugin's hooks run among other plugins' hooks on the same step: lower first. Ties go by plugin id.</summary>
+    public virtual int HookOrder => 0;
+
+    /// <summary>Replaces the text of a message before Ari reads it. Return null to leave it alone. With several plugins, each sees the
+    /// text the one before it returned. ARI waits up to five seconds, then carries on without it.</summary>
+    public virtual Task<string?> RewriteUserMessage(HookMessage message) => Task.FromResult<string?>(null);
+
+    /// <summary>Return true to handle a memory sweep instead of Engram (do the plugin's own sweep inside). The first plugin to say true
+    /// takes it and Engram doesn't run for that sweep.</summary>
+    public virtual Task<bool> ReplacesMemorySweep(HookSweep sweep) => Task.FromResult(false);
 
     /// <summary>Someone sent a message in a chat. <see cref="HookMessage.IsOwner"/> says whether it was the owner.</summary>
     public virtual Task OnUserMessage(HookMessage message) => Task.CompletedTask;
@@ -204,16 +217,53 @@ internal static class PluginHooks
 {
     internal static Func<string, CancellationToken, Task<string>>? Ask { get; set; }
 
+    private static readonly TimeSpan RewriteWait = TimeSpan.FromSeconds(5);
+
+    private static List<ScriptPlugin> Running() => PluginRegistry.All.OfType<ScriptPlugin>()
+        .Where(p => p.State == PluginState.Running).OrderBy(p => p.HookOrder).ThenBy(p => p.Id, StringComparer.Ordinal).ToList();
+
+    private static bool Overrides(ScriptPlugin p, string method) => p.GetType().GetMethod(method)?.DeclaringType != typeof(ScriptPlugin);
+
+    /// <summary>Runs an add-on hook on every running plugin, one after another in HookOrder, in the background.</summary>
     internal static void Fire(Func<ScriptPlugin, Task> hook)
     {
-        foreach (ScriptPlugin p in PluginRegistry.All.OfType<ScriptPlugin>().Where(p => p.State == PluginState.Running))
+        List<ScriptPlugin> plugins = Running();
+        if (plugins.Count == 0) return;
+        _ = Task.Run(async () =>
         {
-            ScriptPlugin plugin = p;
-            _ = Task.Run(async () =>
+            foreach (ScriptPlugin plugin in plugins)
             {
                 try { await hook(plugin); }
                 catch (Exception ex) { Shared.Logger.LogWarning("[Plugin {Id}] hook failed: {Err}", plugin.Id, ex.Message); }
-            });
+            }
+        });
+    }
+
+    /// <summary>The message after every plugin that rewrites messages has had its turn, in HookOrder.</summary>
+    internal static async Task<string> RewriteUserMessage(HookMessage message)
+    {
+        string text = message.Text;
+        foreach (ScriptPlugin plugin in Running().Where(p => Overrides(p, nameof(ScriptPlugin.RewriteUserMessage))))
+        {
+            try
+            {
+                Task<string?> rewrite = plugin.RewriteUserMessage(message with { Text = text });
+                if (await Task.WhenAny(rewrite, Task.Delay(RewriteWait)) != rewrite) { Shared.Logger.LogWarning("[Plugin {Id}] took too long to rewrite a message; carried on without it.", plugin.Id); continue; }
+                if (await rewrite is { } changed && changed != text) { text = changed; Shared.Logger.LogInformation("[Plugin {Id}] rewrote a message.", plugin.Id); }
+            }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Plugin {Id}] rewrite failed: {Err}", plugin.Id, ex.Message); }
         }
+        return text;
+    }
+
+    /// <summary>The id of the plugin that took this sweep instead of Engram, or null when Engram should run.</summary>
+    internal static async Task<string?> TakeMemorySweep(HookSweep sweep)
+    {
+        foreach (ScriptPlugin plugin in Running().Where(p => Overrides(p, nameof(ScriptPlugin.ReplacesMemorySweep))))
+        {
+            try { if (await plugin.ReplacesMemorySweep(sweep)) return plugin.Id; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Plugin {Id}] sweep hook failed: {Err}", plugin.Id, ex.Message); }
+        }
+        return null;
     }
 }

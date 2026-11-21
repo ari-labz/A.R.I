@@ -1206,7 +1206,10 @@ public class LLMModule : ILLMModule, IDisposable
                     string? key = engramQueue.Keys.FirstOrDefault(k => engramQueue.TryGetValue(k, out string? t) && t == "compaction") ?? engramQueue.Keys.FirstOrDefault();
                     if (key is null || !engramQueue.TryRemove(key, out string? trigger)) continue;
                     if (engram is null || !threads.ContainsKey(key)) continue;
-                    try { await engram.RunEngram(key, trigger); PluginHooks.Fire(p => p.OnMemorySweep(new HookSweep(key, trigger))); }
+                    try
+                    {
+                        await SweepOrHandOff(key, trigger, () => engram.RunEngram(key, trigger));
+                    }
                     catch (Exception ex) { _logger.LogWarning("[Idle] Engram failed for {Key}: {Err}", key, ex.Message); }
                 }
             }
@@ -1217,6 +1220,15 @@ public class LLMModule : ILLMModule, IDisposable
                 if (!engramQueue.IsEmpty && engramQueue.Keys.FirstOrDefault() is { } stranded && engramQueue.TryGetValue(stranded, out string? t2)) QueueEngram(stranded, t2);
             }
         });
+    }
+
+    /// <summary>A memory sweep: a plugin that replaces sweeps takes it, otherwise Engram runs. The add-on sweep hooks fire either way.</summary>
+    private async Task SweepOrHandOff(string key, string trigger, Func<Task> engramSweep)
+    {
+        HookSweep sweep = new(key, trigger);
+        if (await PluginHooks.TakeMemorySweep(sweep) is { } taker) _logger.LogInformation("[Idle] Plugin {Plugin} handled the memory sweep of {Key} instead of Engram.", taker, key);
+        else await engramSweep();
+        PluginHooks.Fire(p => p.OnMemorySweep(sweep));
     }
 
     /// <summary>Waits until nothing has been generating for a while, so a memory sweep never competes with a reply for the model.
@@ -1241,7 +1253,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             _ = Task.Run(async () =>
             {
-                try { await WaitUntilIdle(); await engram!.RunEngram(thread.Key, "dormant"); }
+                try { await WaitUntilIdle(); await SweepOrHandOff(thread.Key, "dormant", () => engram!.RunEngram(thread.Key, "dormant")); }
                 catch (Exception ex) { _logger.LogWarning("[Dormant] Engram failed for {Key}: {Err}", thread.Key, ex.Message); }
             });
         }
@@ -1268,7 +1280,7 @@ public class LLMModule : ILLMModule, IDisposable
         {
             if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
             {
-                try { await WaitUntilIdle(); await engram.RunEngram(threadKey, "closed", force: true); }
+                try { await WaitUntilIdle(); await SweepOrHandOff(threadKey, "closed", () => engram.RunEngram(threadKey, "closed", force: true)); }
                 catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
             }
         }
@@ -1337,7 +1349,9 @@ public class LLMModule : ILLMModule, IDisposable
         if (threads.TryGetValue(threadKey, out Thread? hooked) && !hooked.Internal)
         {
             bool owner = hooked.OwnerId is not null && hooked.OwnerId == Shared.MasterUserId;
-            PluginHooks.Fire(p => p.OnUserMessage(new HookMessage(threadKey, prompt, owner, DateTime.Now)));
+            HookMessage arrived = new(threadKey, prompt, owner, DateTime.Now);
+            prompt = await PluginHooks.RewriteUserMessage(arrived);
+            PluginHooks.Fire(p => p.OnUserMessage(arrived with { Text = prompt }));
         }
         try { return await Route(threadKey, prompt, username, platformContext, onDelta, externalCt, messageAttachments, localPath, priority, steering, onTextDelta); }
         finally { WakeIfPending(threadKey); }
