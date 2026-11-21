@@ -687,8 +687,7 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             ARI.LLM.ThreadPhase.Working     => "working",
             _                               => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
         };
-        return (Llm?.IsWaitingOnMemory(threadKey) ?? false) ? "queued"
-             : phase != "idle" ? phase
+        return phase != "idle" ? phase
              : (Llm?.IsEngramSweeping(threadKey) ?? false) ? "remembering"
              : "idle";
     }

@@ -94,13 +94,6 @@ internal sealed class GraphPipeline : Pipeline
     {
         PipelineGraph graph = graphFor(thread.GraphId);
 
-        if (engram?.BlocksReply(threadKey) == true)
-        {
-            Shared.Logger.LogInformation("[Graph] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
-            thread.WaitingOnMemory = true; notifyWatchers(threadKey);
-            try { await engram.WaitForSweep(threadKey, cts.Token); }
-            finally { thread.WaitingOnMemory = false; notifyWatchers(threadKey); }
-        }
         Shared.Logger.LogInformation("[Graph:{Graph}] ({Thread}) prompt\n\"{Prompt}\"", graph.Name, threadKey, effectivePrompt);
 
         string? contextSummary = context?.GetContext(threadKey);

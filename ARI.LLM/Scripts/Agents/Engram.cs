@@ -58,12 +58,6 @@ internal class Engram : MemoryAgent, IDisposable
         return count >= TurnsBeforeSweep;
     }
 
-    // Sweeps (interval, compaction) that run beside the conversation: the reply does not wait for them.
-    private readonly ConcurrentDictionary<string, byte> backgroundSweeps = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>A sweep the next reply must wait for (dormant, closed, manual...). Interval and compaction sweeps run in parallel with replies.</summary>
-    internal bool BlocksReply(string threadKey) => IsSweeping(threadKey) && !backgroundSweeps.ContainsKey(threadKey);
-
     private ConcurrentDictionary<string, Thread> threads = new();
 
     internal event Action<string>? SweepCompleted;
@@ -72,25 +66,6 @@ internal class Engram : MemoryAgent, IDisposable
 
     /// <summary>Saving something right now, from a full sweep or from the chat's quick "remember" saves. Drives the "adding to memory" notice.</summary>
     internal bool IsSaving(string threadKey) => IsSweeping(threadKey) || reflexDraining.ContainsKey(threadKey);
-
-    internal async Task WaitForSweep(string threadKey, CancellationToken ct)
-    {
-        if (!IsSweeping(threadKey)) return;
-
-        TaskCompletionSource<bool> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        Action<string>? handler = null;
-        handler = key =>
-        {
-            if (!key.Equals(threadKey, StringComparison.OrdinalIgnoreCase)) return;
-            SweepCompleted -= handler;
-            tcs.TrySetResult(true);
-        };
-        SweepCompleted += handler;
-        if (!IsSweeping(threadKey)) { SweepCompleted -= handler; return; }
-
-        using CancellationTokenRegistration reg = ct.Register(() => { SweepCompleted -= handler; tcs.TrySetCanceled(ct); });
-        await tcs.Task;
-    }
 
     public Engram() { }
 
@@ -205,7 +180,6 @@ internal class Engram : MemoryAgent, IDisposable
         if (force) await engramLock.WaitAsync();
         else if (!await engramLock.WaitAsync(0)) return;
         sweepingThreads[threadKey] = 0;
-        if (trigger is "interval" or "compaction") backgroundSweeps[threadKey] = 0;
         exchangeCounts[threadKey] = 0;
 
         // --- Session record: the sweep's non-LLM decisions. The placement thread's own LLM traffic is
@@ -216,12 +190,14 @@ internal class Engram : MemoryAgent, IDisposable
         int     committed      = 0;
         int     blockedCount   = 0;
         bool    processed      = false;
+        int     snapshotCount  = 0;
 
         try
         {
             Thread? dialogueThread = sweptThread;
             List<ThreadItem> allItems = dialogueThread is not null ? SnapshotHistory(dialogueThread) : new List<ThreadItem>();
             List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
+            snapshotCount = conversationItems.Count;
 
             // A code thread is swept with its own prompts: what was done and decided, filed on the project's note —
             // never the code itself (the repo and git already hold that).
@@ -336,12 +312,12 @@ internal class Engram : MemoryAgent, IDisposable
                 ["processed"]           = processed,
             });
 
-            // The invariant latch: a completed sweep (or a "nothing to store") releases the thread for deletion.
-            if (processed && sweptThread is not null)
+            // The invariant latch: a completed sweep (or a "nothing to store") releases the thread for deletion — unless the conversation
+            // carried on while the sweep read its snapshot, in which case the newer messages still need a sweep of their own.
+            if (processed && sweptThread is not null && ConversationCount(SnapshotHistory(sweptThread)) <= snapshotCount)
                 sweptThread.EngramProcessed = true;
 
             sweepingThreads.TryRemove(threadKey, out _);
-            backgroundSweeps.TryRemove(threadKey, out _);
             engramLock.Release();
             SweepCompleted?.Invoke(threadKey);
         }

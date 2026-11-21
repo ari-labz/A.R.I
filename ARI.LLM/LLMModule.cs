@@ -1709,7 +1709,6 @@ public class LLMModule : ILLMModule, IDisposable
     public bool IsEngramSweeping(string threadKey) => engram?.IsSaving(threadKey) ?? false;
 
     /// <summary>A reply is held back until Engram finishes saving this chat.</summary>
-    public bool IsWaitingOnMemory(string threadKey) => threads.TryGetValue(threadKey, out Thread? t) && t.WaitingOnMemory;
 
     /// <summary>How many completed exchanges an active thread accumulates before Engram sweeps it
     /// mid-conversation. 0 = interval sweeping disabled (dormant/close remain the only triggers).</summary>
