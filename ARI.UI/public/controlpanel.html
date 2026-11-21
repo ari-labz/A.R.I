@@ -4267,7 +4267,7 @@ async function showPersona(id) {
     document.getElementById('persona-desc').value = info?.description || '';
     document.getElementById('persona-default-btn').disabled = id === personaDefault;
 }
-document.getElementById('persona-select').addEventListener('change', e => { renderPersonaSelect(); showPersona(e.target.value); });
+document.getElementById('persona-select').addEventListener('change', e => { personaCurrent = e.target.value; renderPersonaSelect(); showPersona(personaCurrent); });
 document.getElementById('persona-save-btn').addEventListener('click', async () => {
     const status = document.getElementById('persona-status');
     status.textContent = 'Saving…';
