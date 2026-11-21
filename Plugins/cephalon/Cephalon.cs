@@ -16,6 +16,7 @@ public class CephalonPlugin : ScriptPlugin
     ];
 
     internal static readonly string[] Parts = ["voice", "mind", "life", "people"];
+    private const int MaxPart = 4000;
     private static readonly SemaphoreSlim Busy = new(1, 1);
 
     internal string Samples   => System.IO.Path.Combine(PluginFolder, "samples.jsonl");
@@ -122,6 +123,7 @@ public class CephalonPlugin : ScriptPlugin
                 string current = File.Exists(PartFile(part)) ? File.ReadAllText(PartFile(part)) : "";
                 string answer = (await AskModel(PromptFor(part, words, brain, current))).Trim();
                 if (answer.Length < 120) continue;   // a failed or empty answer never replaces a good part
+                if (answer.Length > MaxPart) answer = answer[..Math.Max(answer.LastIndexOf("\n\n", MaxPart), MaxPart / 2)].TrimEnd();   // the persona carries all four parts, so each stays short
                 if (current.Length > 0)
                 {
                     Directory.CreateDirectory(System.IO.Path.Combine(PluginFolder, "versions", stamp));
