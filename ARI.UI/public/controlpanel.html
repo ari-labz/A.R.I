@@ -598,32 +598,34 @@ body.cp-win32 #cp-win-controls { display: flex; }
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
         <div class="cp-nav-item top-level" data-tab="users">Users</div>
-        <div class="cp-nav-item top-level" data-tab="settings">Settings</div>
-        <div class="cp-nav-item top-level" data-tab="plugins" id="nav-plugins">Plugins</div>
-        <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
-        <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
-        <div class="cp-nav-item" data-tab="customisation" data-group="system">Customisation</div>
-        <div class="cp-nav-item" data-tab="calendar" data-group="system" id="nav-calendar">Calendar</div>
-        <div class="cp-nav-group" data-group-id="llm">LLM<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-group" data-group-id="ari">Ari<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="persona" data-group="ari">Persona</div>
+        <div class="cp-nav-item" data-tab="customisation" data-group="ari">Customisation</div>
+        <div class="cp-nav-item" data-tab="calendar" data-group="ari" id="nav-calendar">Calendar</div>
+        <div class="cp-nav-item" data-tab="feedback" data-group="ari">Response Feedback</div>
+        <div class="cp-nav-group" data-group-id="llm">Models<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="servers" data-group="llm">Servers</div>
         <div class="cp-nav-item" data-tab="models" data-group="llm">Models</div>
         <div class="cp-nav-item" data-tab="agents" data-group="llm">Agents</div>
         <div class="cp-nav-item" data-tab="pipelines" data-group="llm">Pipelines</div>
         <div class="cp-nav-item" data-tab="tools" data-group="llm">Tools</div>
-        <div class="cp-nav-item" data-tab="conventions" data-group="llm">Coding Conventions</div>
-        <div class="cp-nav-item" data-tab="persona" data-group="llm">Persona</div>
-        <div class="cp-nav-item" data-tab="feedback" data-group="llm">Response Feedback</div>
         <div class="cp-nav-item" data-tab="llmconfigs" data-group="llm">Configurations</div>
+        <div class="cp-nav-group" data-group-id="coding">Coding<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="conventions" data-group="coding">Coding Conventions</div>
+        <div class="cp-nav-group" id="nav-group-memory" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="brain" data-group="memory" id="nav-brain">Brain</div>
         <div class="cp-nav-group" id="nav-group-voice" data-group-id="voice">Voice<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="voices" data-group="voice" id="nav-voices">Voices</div>
         <div class="cp-nav-item" data-tab="voice" data-group="voice" id="nav-voice">Voice Synthesis</div>
         <div class="cp-nav-item" data-tab="dataset" data-group="voice" id="nav-dataset">Dataset Builder</div>
-        <div class="cp-nav-group" id="nav-group-memory" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="brain" data-group="memory" id="nav-brain">Brain</div>
         <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">ImageGen<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="imagegen-model" data-group="imagegen" id="nav-imagegen-model">Models</div>
         <div class="cp-nav-item" data-tab="imagegen-settings" data-group="imagegen" id="nav-imagegen-settings">Settings</div>
+        <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="settings" data-group="system">Settings</div>
+        <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
+        <div class="cp-nav-item" data-tab="plugins" data-group="system" id="nav-plugins">Plugins</div>
+        <div class="cp-nav-item" data-tab="debug" data-group="system">Deep Thread Inspection (DTI)</div>
       </div>
     </div>
   </aside>
@@ -660,19 +662,9 @@ body.cp-win32 #cp-win-controls { display: flex; }
       <div id="srv-machine" style="margin-bottom:16px;"></div>
       <div id="srv-cards" style="display:flex;flex-direction:column;gap:12px;"></div>
 
-      <div class="vs-section" style="margin-top:24px;">
-        <div class="vs-section-title">Loads when needed</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">These start the first time they are used and are unloaded after sitting idle, which frees their memory. Voice picks up a new time when ARI next starts.</p>
-        <div id="lazy-table" style="display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(90px,.8fr) minmax(150px,1fr) auto;gap:8px 14px;align-items:center;font-size:13px;"></div>
-        <span id="lazy-status" style="font-size:12px;color:var(--text-dim);"></span>
-      </div>
+      
 
-      <div class="vs-section" style="margin-top:24px;">
-        <div class="vs-section-title">Updates</div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;"><input type="checkbox" id="au-enabled"> Update automatically</label>
-        <p style="color:var(--text-dim);font-size:13px;margin:6px 0 0;">When a new version is out, ARI waits until nothing has been happening for ten minutes, installs it and starts again on her own.</p>
-        <div id="au-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;"></div>
-      </div>
+      
     </div>
 
     <!-- Models tab -->
@@ -1071,7 +1063,7 @@ body.cp-win32 #cp-win-controls { display: flex; }
           <input id="persona-name" class="vs-input" type="text" placeholder="Name" style="width:140px;font-size:13px;display:none;">
           <input id="persona-desc" class="vs-input" type="text" placeholder="One line about it" style="flex:1;min-width:160px;font-size:13px;display:none;">
           <button class="vs-btn-primary" id="persona-new-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">New persona</button>
-          <button class="vs-btn-primary" id="persona-default-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">Make default</button>
+          <button class="vs-btn-primary" id="persona-default-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);" title="Ari speaks as this persona in every conversation">Use this persona</button>
           <button class="vs-btn-primary" id="persona-del-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);display:none;">Delete</button>
         </div>
         <textarea id="persona-text" class="vs-input" style="width:100%;min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;resize:vertical;" placeholder="You are Ari, an AI assistant. …"></textarea>
@@ -1287,6 +1279,13 @@ body.cp-win32 #cp-win-controls { display: flex; }
         </div>
       </div>
 
+    
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">Loads when needed</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">These start the first time they are used and are unloaded after sitting idle, which frees their memory. Voice picks up a new time when ARI next starts.</p>
+        <div id="lazy-table" style="display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(90px,.8fr) minmax(150px,1fr) auto;gap:8px 14px;align-items:center;font-size:13px;"></div>
+        <span id="lazy-status" style="font-size:12px;color:var(--text-dim);"></span>
+      </div>
     </div>
 
     <!-- Tools tab -->
@@ -1342,22 +1341,7 @@ body.cp-win32 #cp-win-controls { display: flex; }
         </div>
       </div>
 
-      <div class="vs-section" style="margin-top:28px;">
-        <div class="vs-section-title">Memory and other people</div>
-        <div style="display:flex;align-items:flex-start;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,var(--col-control-panel-line-1656-colour));">
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Let Engram remember conversations with other people</div>
-            <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">
-              Off by default: Engram only remembers your own conversations. Turn this on and it also remembers server channels, direct messages
-              with other people and guests' chats. Anything someone says there can become a note, so a guest's words end up in the brain,
-              and notes from a conversation with several people can attribute things to the wrong person. What ARI recalls for them is still
-              filtered. Applies immediately.
-            </div>
-            <div id="eo-status" style="font-size:12px;color:var(--text-dim);margin-top:8px;"></div>
-          </div>
-          <div id="eo-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
-        </div>
-      </div>
+      
 
       <div class="vs-section" style="margin-top:28px;">
         <div class="vs-section-title">Dreaming</div>
@@ -1383,6 +1367,28 @@ body.cp-win32 #cp-win-controls { display: flex; }
           </div>
           <div style="display:flex;flex-direction:column;gap:12px;" id="lg-rows"></div>
           <div id="lg-status" style="font-size:12px;color:var(--text-dim);margin-top:10px;"></div>
+        </div>
+      </div>
+    
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">Updates</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;"><input type="checkbox" id="au-enabled"> Update automatically</label>
+        <p style="color:var(--text-dim);font-size:13px;margin:6px 0 0;">When a new version is out, ARI waits until nothing has been happening for ten minutes, installs it and starts again on her own.</p>
+        <div id="au-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;"></div>
+      </div>
+    
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">Settings backup</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          Everything except the Brain: settings, agents, servers, persona, feedback, plugins, custom tools, accounts and conversations.
+          Restoring it on a fresh install brings ARI back as she was. Your current settings are saved first, and ARI has to be restarted afterwards.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <button class="vs-btn-primary" id="cfg-export-btn" type="button">Download settings backup</button>
+          <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cfg-export-keys"> Include keys and tokens</label>
+          <button class="vs-btn-primary" id="cfg-restore-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">Restore from file…</button>
+          <input type="file" id="cfg-restore-file" accept=".zip" style="display:none;">
+          <span id="cfg-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
       </div>
     </div>
@@ -1483,6 +1489,23 @@ body.cp-win32 #cp-win-controls { display: flex; }
           <span id="brain-interval-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
       </div>
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Memory and other people</div>
+        <div style="display:flex;align-items:flex-start;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,var(--col-control-panel-line-1656-colour));">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Let Engram remember conversations with other people</div>
+            <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">
+              Off by default: Engram only remembers your own conversations. Turn this on and it also remembers server channels, direct messages
+              with other people and guests' chats. Anything someone says there can become a note, so a guest's words end up in the brain,
+              and notes from a conversation with several people can attribute things to the wrong person. What ARI recalls for them is still
+              filtered. Applies immediately.
+            </div>
+            <div id="eo-status" style="font-size:12px;color:var(--text-dim);margin-top:8px;"></div>
+          </div>
+          <div id="eo-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
+        </div>
+      </div>
+
       <div class="vs-section">
         <div class="vs-section-title">Backups</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
@@ -1517,18 +1540,6 @@ body.cp-win32 #cp-win-controls { display: flex; }
         </div>
         <div id="brain-prop-list" style="display:flex;flex-direction:column;gap:8px;"></div>
 
-        <div class="vs-section-title" style="margin-top:28px;">Settings backup</div>
-        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
-          Everything except the Brain: settings, agents, servers, persona, feedback, plugins, custom tools, accounts and conversations.
-          Restoring it on a fresh install brings ARI back as she was. Your current settings are saved first, and ARI has to be restarted afterwards.
-        </p>
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-          <button class="vs-btn-primary" id="cfg-export-btn" type="button">Download settings backup</button>
-          <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cfg-export-keys"> Include keys and tokens</label>
-          <button class="vs-btn-primary" id="cfg-restore-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">Restore from file…</button>
-          <input type="file" id="cfg-restore-file" accept=".zip" style="display:none;">
-          <span id="cfg-status" style="font-size:12px;color:var(--text-dim);"></span>
-        </div>
       </div>
     </div>
 
@@ -1816,7 +1827,7 @@ function switchTab(name) {
     if (name === 'persona') { loadPersona(); loadReflectSettings(); }
     if (name === 'feedback') loadFeedback();
     if (name === 'models') loadModels();
-    if (name === 'brain') { loadBrain(); loadBrainProposals(); loadBrainBrowser(); }
+    if (name === 'brain') { loadBrain(); loadBrainProposals(); loadBrainBrowser(); loadEngramOthers(); }
     if (name === 'servers') loadServers();
     if (name === 'pipelines' && !pipDirty) pipMode = 'list';   // the tab always opens on the list; Edit opens the editor
     if (name === 'agents' || name === 'pipelines') loadAgents();
@@ -1826,8 +1837,8 @@ function switchTab(name) {
     if (name === 'plugins') { loadPlugins(); plSetMode('installed'); }
     if (name === 'debug') loadDebugThreads();
     if (name === 'users') loadUserManagement();
-    if (name === 'settings') { loadPersistedThreads(); loadLogging(); loadDreaming(); loadEngramOthers(); }
-    if (name === 'modules') loadModules();
+    if (name === 'settings') { loadPersistedThreads(); loadLogging(); loadDreaming(); loadAutoUpdate(); }
+    if (name === 'modules') { loadModules(); loadLazyServices(); }
     if (name === 'voices') { closeVoiceDetail(); loadVoicesList(); }
     if (name === 'voice') vsRestoreTraining();
     if (name === 'imagegen-model' || name === 'imagegen-settings') igLoad();
@@ -4230,7 +4241,7 @@ async function loadPersona() {
 }
 function renderPersonaSelect() {
     const sel = document.getElementById('persona-select');
-    sel.innerHTML = personaList.map(p => `<option value="${escHtml(p.id)}" ${p.id === personaCurrent ? 'selected' : ''}>${escHtml(p.name)}${p.id === personaDefault ? ' (default)' : ''}</option>`).join('');
+    sel.innerHTML = personaList.map(p => `<option value="${escHtml(p.id)}" ${p.id === personaCurrent ? 'selected' : ''}>${escHtml(p.name)}${p.id === personaDefault ? ' (active)' : ''}</option>`).join('');
 }
 async function showPersona(id) {
     personaCurrent = id;
@@ -5901,8 +5912,6 @@ async function loadServers() {
     await srvLoadExtras();
     renderMachinePanel(data.servers ?? []);
     renderServerCards(data.servers ?? []);
-    if (!document.activeElement?.dataset?.lazy) loadLazyServices();
-    if (!document.getElementById('au-enabled').dataset.wired) loadAutoUpdate();
     clearTimeout(srvPollTimer);
     const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping' || s.download);
     srvPollTimer = setTimeout(loadServers, hasTransient ? 1500 : 6000);
