@@ -101,7 +101,9 @@ internal static class BrainCuration
         // Only a sentence where Ari herself says she can't: "I can't", "Ari cannot", "she has no way to" (the last only on Ari's own note).
         // Anything else saying "unable to" is about someone else, often private, and is never a candidate.
         Regex cant = new(@"[^.\n]*\b(?<who>I|Ari|ARI|A\.R\.I|she)\s+(can't|cannot|can not|is unable to|am unable to|isn't able to|has no way to|have no way to|doesn't have (a|the) (way|ability))\b[^.\n]*[.\n]?", RegexOptions.IgnoreCase);
-        string tools = string.Join(", ", ToolFactories.AllNames().OrderBy(n => n));
+        // Everything she can call: the tool factories plus the tools every conversation is given directly (switch_pipeline, remember, …).
+        List<string> toolNames = ToolFactories.AllNames().Concat(ToolRegistry.SystemTools).Append("revert_file").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n).ToList();
+        string tools = string.Join(", ", toolNames);
         foreach (Note n in Brain.Search(["can't", "cannot", "unable", "ability"], 30).Select(r => r.Note).DistinctBy(n => n.Title))
         {
             if (fresh.Count >= max) break;
@@ -119,7 +121,7 @@ internal static class BrainCuration
                     $"Ari's tools today are: {tools}.\n\nIs this paragraph about something ARI herself can't do, which one of those tools now lets her do? " +
                     "If yes, answer exactly: STALE | <the whole paragraph rewritten to be true now, same voice and detail, nothing left that says she can't, no tool names> | <one-sentence reason naming the tool>. Otherwise answer exactly: FINE", ct);
                 Match m = Regex.Match(answer, @"STALE\s*\|\s*(?<fix>[^|]+)\|\s*(?<why>.+)", RegexOptions.IgnoreCase);
-                bool namesATool = m.Success && ToolFactories.AllNames().Any(t => m.Groups["why"].Value.Contains(t, StringComparison.OrdinalIgnoreCase));
+                bool namesATool = m.Success && toolNames.Any(t => m.Groups["why"].Value.Contains(t, StringComparison.OrdinalIgnoreCase));
                 if (!namesATool) { all.Add(new BrainProposal { Kind = "stale", A = n.Title, B = sentence, Status = "dismissed", Why = "still true" }); continue; }
                 fresh.Add(new BrainProposal { Kind = "stale", A = n.Title, B = sentence, Value = m.Groups["fix"].Value.Trim(), Why = m.Groups["why"].Value.Trim() });
                 if (fresh.Count >= max) break;
