@@ -43,9 +43,15 @@ jobs:
       # Only SmartReader is needed to build; the voice-engine submodules are ~1 GB and stay out of the image.
       - run: git submodule update --init --depth 1 Submodules/SmartReader
 
+      # A release tag's number wins over manifest.json, and is written into it so the server inside reports it too.
       - id: meta
         run: |
-          V="$(python3 -c "import json;print(json.load(open('manifest.json'))['version'])")"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+            tmp="$(mktemp)"; jq --arg v "$V" '.version = $v' manifest.json > "$tmp" && mv "$tmp" manifest.json
+          else
+            V="$(python3 -c "import json;print(json.load(open('manifest.json'))['version'])")"
+          fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "pair=${{ matrix.platform }}" | sed 's#/#-#' >> "$GITHUB_OUTPUT"
 
@@ -96,7 +102,8 @@ jobs:
       - name: Create the multi-arch tags
         working-directory: /tmp/digests
         run: |
-          V="$(python3 -c "import json;print(json.load(open('${GITHUB_WORKSPACE}/manifest.json'))['version'])")"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"
+          else V="$(python3 -c "import json;print(json.load(open('${GITHUB_WORKSPACE}/manifest.json'))['version'])")"; fi
           # "latest" is the newest build of main; a release tag also publishes its version number so it can be pinned.
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             TAGS="-t ${IMAGE}:${V} -t ${IMAGE}:latest"
