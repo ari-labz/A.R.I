@@ -91,7 +91,8 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             const res = await apiFetch("/api/v1/projects", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), category: category.trim(), chatPipeline }),
+                // Made in the desktop app, a project's files start out on this machine only; made on the web, Ari keeps them.
+                body: JSON.stringify({ name: name.trim(), description: description.trim(), instructions: instructions.trim(), category: category.trim(), chatPipeline, serverCopy: !isElectron }),
             })
             if (!res.ok) { setError((await res.json().catch(() => null))?.error ?? "Failed to create project."); return }
             setName(""); setDescription(""); setInstructions(""); setCategory(""); setChatPipeline("auto")
@@ -191,6 +192,43 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         finally { setEditSaving(false) }
     }
 
+    const [copyBusy, setCopyBusy] = useState(false)
+    const [copyError, setCopyError] = useState<string | null>(null)
+
+    // Whether Ari keeps a copy of the files on her server. Switching it off deletes that copy, so on the desktop the project is synced
+    // first (nothing Ari changed there is lost); with no files on this machine to fall back on, it asks first.
+    async function setServerCopy(on: boolean) {
+        if (!selected || copyBusy) return
+        const localPath = localPaths[selected.id] ?? null
+        setCopyBusy(true); setCopyError(null)
+        try {
+            if (!on) {
+                if (localPath && canSyncHere) {
+                    const result = await window.electronBridge!.syncRun!({ projectId: selected.id, localPath, token: getToken() }) as SyncStatus
+                    setSyncStatuses(prev => ({ ...prev, [selected.id]: result }))
+                    if (!["up-to-date", "pushed", "pulled", "merged"].includes(result.state)) {
+                        setCopyError("Couldn't sync first, so the server's copy was kept. Fix the sync, then try again.")
+                        return
+                    }
+                } else if (!confirm(`This deletes the copy of "${selected.name}" on Ari's server. There's no copy on this device, so any files only there will be lost. Continue?`)) return
+                void window.electronBridge?.syncWatch?.({ projectId: selected.id, localPath: localPath ?? "", on: false })
+                localStorage.removeItem(`ari-autosync-${selected.id}`)
+                setAutoSync(false)
+            }
+            const res = await apiFetch(`/api/v1/projects/${selected.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ serverCopy: on }),
+            })
+            if (!res.ok) { setCopyError((await res.json().catch(() => null))?.error ?? "Couldn't change it."); return }
+            setSelected(await res.json())
+            onProjectCreated()
+            // A new server copy starts empty: send this machine's files up.
+            if (on && localPath && canSyncHere) void handleSync()
+        } catch { setCopyError("Could not reach ARI.") }
+        finally { setCopyBusy(false) }
+    }
+
     async function handleDelete() {
         if (!selected) return
         if (!confirm(`Delete "${selected.name}"? This cannot be undone.`)) return
@@ -270,6 +308,25 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     </div>
                 )}
 
+                {/* ── Whether Ari keeps a copy of the files on her server ── */}
+                <div className="project-section">
+                    <div className="project-section-header">
+                        <h2>Ari's copy</h2>
+                    </div>
+                    <label className="sync-autosync-row">
+                        <input type="checkbox" checked={selected.serverCopy !== false} disabled={copyBusy}
+                               onChange={e => void setServerCopy(e.target.checked)} />
+                        Keep a copy on Ari's server, so chats outside the desktop app can use this project's files
+                    </label>
+                    <span className="field-optional">
+                        {selected.serverCopy !== false
+                            ? "The files are stored twice: on Ari's server and on any computer that syncs them."
+                            : "The files are only on the computers you sync them from. Ari can use them in the desktop app."}
+                    </span>
+                    {copyBusy && <span className="field-optional">Working…</span>}
+                    {copyError && <span className="form-error">{copyError}</span>}
+                </div>
+
                 {/* ── App settings (Electron only — local path preferred over server path) ── */}
                 {isElectron && (
                     <div className="project-section">
@@ -287,7 +344,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                 {editPath && <button type="button" className="btn-secondary btn-pick-folder" onClick={clearEditFolder}>Clear</button>}
                             </div>
                         </label>
-                        {editPath && selected && (() => {
+                        {editPath && selected && selected.serverCopy !== false && (() => {
                             const ss = syncStatuses[selected.id] ?? { state: "idle" }
                             const label: Record<string, string> = {
                                 "idle":         "Check status",

@@ -25,11 +25,11 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
     {
         // A project's backend is sent as its name ("ServerFs"), not the number it is stored as.
         if (!IsAdmin())
-            return new { p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt, p.Category, Backend = p.Backend.ToString() };
+            return new { p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt, p.Category, Backend = p.Backend.ToString(), p.ServerCopy };
         string owner = p.OwnerId == 0 ? "admin"
             : names is not null && names.TryGetValue(p.OwnerId, out string? n) ? n
             : users.GetById(p.OwnerId)?.Username ?? "unknown";
-        return new { p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt, p.Category, Backend = p.Backend.ToString(), p.RootPath, p.OwnerId, OwnerUsername = owner, p.ChatPipeline };
+        return new { p.Id, p.Name, p.Description, p.Instructions, p.CreatedAt, p.Category, Backend = p.Backend.ToString(), p.RootPath, p.OwnerId, OwnerUsername = owner, p.ChatPipeline, p.ServerCopy };
     }
 
     [HttpPost]
@@ -38,7 +38,9 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Name is required." });
 
-        ARI.Common.ProjectSummary? summary = projects.Create(req.Name, req.Category, "ServerFs");
+        // A project made in the desktop app starts with its files on that machine only; one made on the web keeps them here.
+        bool serverCopy = req.ServerCopy ?? true;
+        ARI.Common.ProjectSummary? summary = projects.Create(req.Name!, req.Category, serverCopy ? "ServerFs" : "RemoteFs");
         if (summary is null) return BadRequest(new { error = "Failed to create project." });
 
         Project? created = store.Get(summary.Id);
@@ -51,6 +53,7 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             Instructions = req.Instructions?.Trim() ?? created.Instructions,
             OwnerId      = ownerId,
             ChatPipeline = CleanPipeline(req.ChatPipeline) ?? created.ChatPipeline,
+            ServerCopy   = serverCopy,
         };
         store.Update(created);
 
@@ -71,9 +74,17 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
         if (name != existing.Name) projects.Rename(id, name);
 
         Project current = store.Get(id) ?? existing;
+        bool serverCopy = req.ServerCopy ?? current.ServerCopy;
 
-        // Ensure every project has a server folder — migrate legacy RemoteFs projects on first save.
-        string rootPath = current.RootPath ?? ProjectStore.CreateServerFolder(id, name);
+        // Stopping the server copy deletes the folder this server made for it. A folder an admin pointed the project at is theirs, so
+        // that is refused rather than deleted.
+        if (!serverCopy && current.ServerCopy && current.RootPath is { } oldRoot)
+        {
+            if (!ProjectStore.IsManagedFolder(oldRoot))
+                return BadRequest(new { error = "This project uses a folder on the server that you chose, so it can't stop keeping a server copy." });
+            try { if (Directory.Exists(oldRoot)) Directory.Delete(oldRoot, recursive: true); }
+            catch (Exception e) { return StatusCode(500, new { error = $"Couldn't remove the server's copy: {e.Message}" }); }
+        }
 
         Project updated = current with
         {
@@ -81,8 +92,10 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
             Instructions = req.Instructions?.Trim() ?? current.Instructions,
             Category     = req.Category?.Trim() ?? current.Category,
             ChatPipeline = CleanPipeline(req.ChatPipeline) ?? current.ChatPipeline,
-            Backend      = StorageBackend.ServerFs,
-            RootPath     = rootPath,
+            ServerCopy   = serverCopy,
+            // With a server copy the project has a folder here (made now if it is being switched on); without one, none.
+            Backend      = serverCopy ? StorageBackend.ServerFs : StorageBackend.RemoteFs,
+            RootPath     = serverCopy ? current.RootPath ?? ProjectStore.CreateServerFolder(id, name) : null,
         };
         store.Update(updated);
         return Ok(Shape(updated));
@@ -245,5 +258,5 @@ public class ProjectsController(ProjectStore store, ProjectServiceAdapter projec
 }
 
 public record CreateProjectRequest(
-    string Name, string? Description, string? Instructions,
-    string? Category, string? ChatPipeline = null);
+    string? Name, string? Description, string? Instructions,
+    string? Category, string? ChatPipeline = null, bool? ServerCopy = null);

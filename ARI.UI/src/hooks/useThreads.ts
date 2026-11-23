@@ -30,6 +30,7 @@ export interface Project {
     backend:      StorageBackend
     rootPath:     string | null
     chatPipeline?: string   // "auto", "dialogue", "code" or a pipeline id: what a new chat in the project runs on
+    serverCopy?:   boolean  // Ari keeps a copy of the files on her server, so chats outside the desktop app can use them
 }
 
 export function useThreads() {

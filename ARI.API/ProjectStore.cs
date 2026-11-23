@@ -30,7 +30,10 @@ public record Project(
     int            OwnerId     = 0,
     // What a new chat in this project runs on: "auto" (code unless it looks like a notes vault — see
     // ProjectCodeRules), "dialogue", "code", or the id of a pipeline made in the control panel.
-    string         ChatPipeline = "auto");
+    string         ChatPipeline = "auto",
+    // Whether Ari keeps a copy of the files on this server, so chats outside the desktop app can use them. Off means the files are
+    // only on the desktop machine. A row from before this setting has a copy (the start-up migration gave every project one).
+    bool           ServerCopy   = true);
 
 public class ProjectStore
 {
@@ -102,6 +105,11 @@ public class ProjectStore
     /// <summary>Derives and creates this project's folder under Paths.ServerDir("Projects") — never
     /// user-typed. Disambiguates a name collision by appending a short suffix of the project's Id.
     /// Also initialises an .ariproject hidden git repo and .ariignore for ARI Project Sync.</summary>
+    /// <summary>True for a folder this server made for a project under Projects/, as opposed to one an admin pointed a project at.
+    /// Only these are ever deleted when a project stops keeping a server copy.</summary>
+    public static bool IsManagedFolder(string? path) =>
+        path is not null && Path.GetFullPath(path).StartsWith(Path.GetFullPath(Paths.ServerDir("Projects")) + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+
     public static string CreateServerFolder(string projectId, string projectName)
     {
         string root = Paths.ServerDir("Projects");
@@ -258,6 +266,7 @@ public class ProjectStore
             for (int i = 0; i < all.Count; i++)
             {
                 Project p = all[i];
+                if (!p.ServerCopy) continue;   // kept on the desktop only, by choice
                 if (p.Backend == StorageBackend.ServerFs && p.RootPath is not null) continue;
                 string root = p.RootPath ?? CreateServerFolder(p.Id, p.Name);
                 InitAriProject(root);
