@@ -982,6 +982,8 @@ button, a, input, select, textarea, label, [role="button"] {
     user-select: none;
 }
 .sync-autosync-row input[type="checkbox"] { accent-color: var(--accent, var(--col-sync-autosync-row-input-colour)); }
+.server-copy-row  { color: var(--text); }
+.server-copy-note { display: block; font-size: 12px; color: var(--text-dim); margin: 4px 0 0 21px; }
 /* ── iOS-style toggle ────────────────────────────────────── */
 .toggle-row {
     display: flex; align-items: center; justify-content: space-between;

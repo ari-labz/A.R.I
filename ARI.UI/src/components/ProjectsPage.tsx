@@ -313,17 +313,17 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                     <div className="project-section-header">
                         <h2>Ari's copy</h2>
                     </div>
-                    <label className="sync-autosync-row">
+                    <label className="sync-autosync-row server-copy-row">
                         <input type="checkbox" checked={selected.serverCopy !== false} disabled={copyBusy}
                                onChange={e => void setServerCopy(e.target.checked)} />
                         Keep a copy on Ari's server, so chats outside the desktop app can use this project's files
                     </label>
-                    <span className="field-optional">
+                    <span className="server-copy-note">
                         {selected.serverCopy !== false
                             ? "The files are stored twice: on Ari's server and on any computer that syncs them."
                             : "The files are only on the computers you sync them from. Ari can use them in the desktop app."}
                     </span>
-                    {copyBusy && <span className="field-optional">Working…</span>}
+                    {copyBusy && <span className="server-copy-note">Working…</span>}
                     {copyError && <span className="form-error">{copyError}</span>}
                 </div>
 
