@@ -1167,7 +1167,16 @@ export default function App() {
         let key = activeThreadRef.current
         let newIsCode = false
         if (needsNew) {
-            const made = await createThreadWithMode(selectedProject, selectedPipeline)
+            let made: { key: string; isCodeMode: boolean }
+            try {
+                made = await createThreadWithMode(selectedProject, selectedPipeline)
+                if (!made.key) throw new Error("no thread")
+            } catch {
+                // She isn't there to start the chat: say so under the message instead of leaving it unanswered.
+                pendingMsgRef.current = null
+                setItems(prev => [...prev, { type: "ariResponse", content: "couldn't reach A·R·I. she isn't running right now, so this message wasn't sent.", timestamp: new Date().toISOString() }])
+                return
+            }
             key = made.key; newIsCode = made.isCodeMode
             if (pendingPersona && pendingPersona !== defaultPersona)
                 void apiFetch(`/api/v1/threads/${key}/persona`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personaId: pendingPersona }) })
@@ -1263,16 +1272,41 @@ export default function App() {
         abortRef.current = ctrl
         const keyForStream = key!
 
+        // The send never reached her, or she refused it: say so in her reply bubble instead of leaving it empty.
+        // The message stays in the chat so it can be copied and sent again.
+        function showSendError(text: string) {
+            abortRef.current = null; setIsStreaming(false)
+            setItems(prev => {
+                for (let i = prev.length - 1; i >= 0; i--)
+                    if (prev[i].type === "ariResponse" && prev[i].isStreaming) {
+                        const next = [...prev]; next[i] = { ...prev[i], content: text, isStreaming: false }; return next
+                    }
+                return [...prev, { type: "ariResponse", content: text, timestamp: new Date().toISOString() }]
+            })
+        }
+
         async function runStream() {
+            let resp: Response
             try {
-                const resp = await apiFetch(`/api/v1/threads/${keyForStream}/messages`, {
+                resp = await apiFetch(`/api/v1/threads/${keyForStream}/messages`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ prompt, ...(localPath ? { localPath } : {}), ...(safetyMode && !isApprove ? { safeMode: true } : {}) }),
                     signal: ctrl.signal,
                 })
+            } catch (err: unknown) {
+                if (err instanceof Error && err.name === "AbortError") return
+                showSendError("couldn't reach A·R·I. she isn't running right now, so this message wasn't sent.")
+                return
+            }
+            if (!resp.ok || !resp.body) {
+                const err = await resp.json().catch(() => null) as { error?: string } | null
+                showSendError(err?.error ?? `A·R·I couldn't take that message (error ${resp.status}).`)
+                return
+            }
 
-                const reader  = resp.body!.getReader()
+            try {
+                const reader  = resp.body.getReader()
                 const decoder = new TextDecoder()
                 let buf = ""
 
