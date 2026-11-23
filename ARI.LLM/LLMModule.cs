@@ -1872,7 +1872,7 @@ public class LLMModule : ILLMModule, IDisposable
         if (thread.Internal || thread.OwnerId is null || thread.Pipeline is not (ThreadPipeline.Dialogue or ThreadPipeline.Code)) return;
         unreadNotifier ??= new UnreadNotifier(TimeSpan.FromMinutes(2), HasWatchers,
             key => threads.TryGetValue(key, out Thread? t)
-                ? (t.OwnerId, t.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText)
+                ? (t.OwnerId, t.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContextText)
                 : null,
             (key, text, owner) => SendProactivePush(text, key, owner));
         unreadNotifier.ReplyFinished(threadKey, thread.OwnerId);
