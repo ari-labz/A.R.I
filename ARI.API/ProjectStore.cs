@@ -145,6 +145,17 @@ public class ProjectStore
         if (code != 0) RunGit(folderPath, "commit --allow-empty -m \"Init\"");
     }
 
+    /// <summary>Records any changes in the server's copy that aren't in its history yet (files Ari edited in a chat that wasn't in the
+    /// desktop app) as a commit, so a sync carries them to the desktop instead of a push overwriting them. True if anything was recorded.</summary>
+    public static bool CommitPending(string folderPath)
+    {
+        if (!Directory.Exists(Path.Combine(folderPath, ".ariproject"))) return false;
+        SyncExcludeFile(folderPath);
+        RunGit(folderPath, "add --all");
+        if (RunGit(folderPath, "status --porcelain").Output.Trim().Length == 0) return false;
+        return RunGit(folderPath, $"commit -m \"Ari's changes {DateTime.Now:yyyy-MM-dd HH:mm}\"").ExitCode == 0;
+    }
+
     private static void SyncExcludeFile(string folderPath)
     {
         string ariIgnore = Path.Combine(folderPath, ".ariignore");

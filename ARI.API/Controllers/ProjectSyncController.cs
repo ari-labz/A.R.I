@@ -34,7 +34,8 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
         if (!IsCommitId(clientSha)) return BadRequest(new { error = "clientSha must be a commit id (7 to 40 hex digits)." });
 
-        // Reading the status never changes anything: a project's history is set up when the project is made.
+        // Edits Ari made in the server's copy become a commit first, so the desktop sees them as changes to pull.
+        CommitPending(id, root);
         var (shaCode, serverSha) = ProjectStore.RunGit(root, "rev-parse HEAD");
         serverSha = shaCode == 0 && System.Text.RegularExpressions.Regex.IsMatch(serverSha.Trim(), "^[0-9a-f]{40}$") ? serverSha.Trim() : "";
 
@@ -77,6 +78,7 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         if (project.RootPath is not { } root) return BadRequest(new { error = "Project has no server folder." });
         if (!IsCommitId(clientSha)) return BadRequest(new { error = "clientSha must be a commit id (7 to 40 hex digits)." });
         if (!Directory.Exists(Path.Combine(root, ".ariproject"))) return Conflict(new { error = "This project has no sync history yet." });
+        CommitPending(id, root);
 
         string tmp = Path.GetTempFileName();
         try
@@ -116,6 +118,8 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
         string tmp = Path.GetTempFileName();
         try
         {
+            // Ari's uncommitted edits would be wiped by the reset below; as a commit, a push that lacks them is refused as a conflict.
+            ProjectStore.CommitPending(root);
             using (FileStream fs = System.IO.File.OpenWrite(tmp))
                 await Request.Body.CopyToAsync(fs);
 
@@ -162,6 +166,15 @@ public class ProjectSyncController(ProjectStore store) : ControllerBase
     }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> PushLocks = new();
+
+    /// <summary>Commits the server copy's pending changes under the project's lock, so it never runs during a push.</summary>
+    private static void CommitPending(string id, string root)
+    {
+        SemaphoreSlim gate = PushLocks.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
+        gate.Wait();
+        try { ProjectStore.CommitPending(root); }
+        finally { gate.Release(); }
+    }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
