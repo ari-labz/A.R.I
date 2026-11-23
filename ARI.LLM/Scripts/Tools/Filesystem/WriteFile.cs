@@ -96,6 +96,14 @@ internal sealed class WriteFile : Tool
         {
             try { windows[argsJson] = EditWindow.Marker(path, before, Encoding.UTF8.GetString(await fs.ReadBytes(path))); }
             catch { }
+            // A page is run, not just written: an error that only shows once it plays (a script that throws mid-animation) comes back now.
+            if (result.Text.StartsWith("Successfully", StringComparison.Ordinal) && Path.GetExtension(path).ToLowerInvariant() is ".html" or ".htm")
+            {
+                List<string> problems = new();
+                try { problems = await BrowserHost.CheckHtml(Encoding.UTF8.GetString(await fs.ReadBytes(path))); } catch { /* no browser available: unchecked */ }
+                if (problems.Count > 0)
+                    return result.Text + $"\nWhen run, the page has errors: {string.Join("; ", problems)}. Fix them before showing it.";
+            }
         }
         return result;
     }
