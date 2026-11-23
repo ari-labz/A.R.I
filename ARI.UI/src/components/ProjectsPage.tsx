@@ -6,7 +6,8 @@ import ProjectFileExplorer from "./ProjectFileExplorer"
 import { usePipelines } from "../hooks/usePipelines"
 
 type SyncState = "idle" | "checking" | "up-to-date" | "ahead" | "behind" | "conflict" | "dirty" | "syncing" | "error" | "no-local-path" | "uninitialized"
-interface SyncStatus { state: SyncState; ahead?: number; behind?: number; message?: string }
+    | "pulled" | "pushed" | "outdated-app"
+interface SyncStatus { state: SyncState; ahead?: number; behind?: number; message?: string; files?: string[] }
 
 interface Props {
     projects:         Project[]
@@ -56,6 +57,8 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     const [autoSync,         setAutoSync]         = useState(false)
 
     const isElectron = !!window.electronBridge
+    // A desktop app from before sync (older than 0.4) has no sync calls at all.
+    const canSyncHere = !!window.electronBridge?.syncStatus && !!window.electronBridge?.syncRun
 
     useEffect(() => {
         if (!isElectron) return
@@ -64,8 +67,19 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                 const map: Record<string, string | null> = {}
                 results.forEach(r => { map[r.id] = r.path })
                 setLocalPaths(map)
+                // Projects with automatic sync on are handed to the desktop app, which keeps them in sync with this page closed
+                // (it ignores a project it is already watching).
+                for (const r of results)
+                    if (r.path && localStorage.getItem(`ari-autosync-${r.id}`) === "1")
+                        void window.electronBridge?.syncWatch?.({ projectId: r.id, localPath: r.path, on: true })
             })
     }, [projects, isElectron])
+
+    // The desktop app reports each automatic sync, so the badge stays current.
+    useEffect(() => window.electronBridge?.onSyncChanged?.(d => {
+        const { projectId, ...status } = d as SyncStatus & { projectId: string }
+        setSyncStatuses(prev => ({ ...prev, [projectId]: status }))
+    }), [])
 
     // ── Create ────────────────────────────────────────────────────────────────────
 
@@ -120,6 +134,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
     async function clearEditFolder() {
         if (!selected) return
         setEditPath(null)
+        void window.electronBridge?.syncWatch?.({ projectId: selected.id, localPath: "", on: false })
         await env.setLocalPath(selected.id, null)
         setLocalPaths(prev => ({ ...prev, [selected.id]: null }))
         setSyncStatuses(prev => ({ ...prev, [selected.id]: { state: "no-local-path" } }))
@@ -130,6 +145,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
             setSyncStatuses(prev => ({ ...prev, [projectId]: { state: "no-local-path" } }))
             return
         }
+        if (!canSyncHere) {
+            setSyncStatuses(prev => ({ ...prev, [projectId]: { state: "outdated-app" } }))
+            return
+        }
         setSyncStatuses(prev => ({ ...prev, [projectId]: { state: "checking" } }))
         try {
             const result = await window.electronBridge!.syncStatus!({ projectId, localPath, token: getToken() })
@@ -137,10 +156,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
         } catch (e: unknown) {
             setSyncStatuses(prev => ({ ...prev, [projectId]: { state: "error", message: String(e) } }))
         }
-    }, [isElectron])
+    }, [isElectron, canSyncHere])
 
     async function handleSync() {
-        if (!selected || syncing) return
+        if (!selected || syncing || !canSyncHere) return
         const localPath = localPaths[selected.id] ?? null
         if (!localPath) return
         setSyncing(true)
@@ -277,7 +296,12 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                 "dirty":        "Unsynced changes",
                                 "ahead":        `${ss.ahead} commit${ss.ahead === 1 ? "" : "s"} ahead`,
                                 "behind":       `${ss.behind} commit${ss.behind === 1 ? "" : "s"} behind`,
-                                "conflict":     "Conflict — manual resolve needed",
+                                "conflict":     ss.files?.length
+                                    ? `Changed on both sides: ${ss.files.join(", ")}. Make the lines match, then sync`
+                                    : "Changed on both sides — sync again to merge",
+                                "pulled":       "Synced (pulled Ari's changes)",
+                                "pushed":       "Synced (sent your changes)",
+                                "outdated-app": "Update the desktop app to sync this project",
                                 "syncing":      "Syncing…",
                                 "error":        `Sync error${ss.message ? `: ${ss.message}` : ""}`,
                                 "no-local-path":"Set a local path to sync",
@@ -285,13 +309,17 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                             }
                             const badge: Record<string, string> = {
                                 "up-to-date": "sync-badge-ok",
+                                "pulled":     "sync-badge-ok",
+                                "pushed":     "sync-badge-ok",
+                                "outdated-app": "sync-badge-error",
                                 "dirty":      "sync-badge-ahead",
                                 "ahead":      "sync-badge-ahead",
                                 "behind":     "sync-badge-behind",
                                 "conflict":   "sync-badge-conflict",
                                 "error":      "sync-badge-error",
                             }
-                            const canSync = ["idle", "up-to-date", "dirty", "ahead", "behind", "uninitialized"].includes(ss.state)
+                            // Syncing is the way out of a clash or an error too, once the files are fixed.
+                            const canSync = canSyncHere && !["checking", "syncing", "no-local-path"].includes(ss.state)
                             const busy    = ss.state === "checking" || ss.state === "syncing" || syncing
                             return (<>
                                 <div className="sync-row">
@@ -301,7 +329,7 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                     <button
                                         type="button"
                                         className="btn-secondary"
-                                        disabled={busy || ss.state === "conflict"}
+                                        disabled={busy || ss.state === "outdated-app"}
                                         onClick={canSync ? handleSync : () => checkSyncStatus(selected.id, editPath)}
                                     >
                                         {busy ? "Working…" : canSync ? "Sync now" : "Refresh"}
@@ -316,9 +344,10 @@ export default function ProjectsPage({ projects, onProjectCreated }: Props) {
                                             setAutoSync(on)
                                             if (on) localStorage.setItem(`ari-autosync-${selected.id}`, "1")
                                             else localStorage.removeItem(`ari-autosync-${selected.id}`)
+                                            void window.electronBridge?.syncWatch?.({ projectId: selected.id, localPath: editPath, on })
                                         }}
                                     />
-                                    Auto-sync at the start of each conversation
+                                    Keep in sync automatically: when a file changes, every minute, and at the start of each conversation
                                 </label>
                             </>)
                         })()}

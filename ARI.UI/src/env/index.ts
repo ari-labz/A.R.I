@@ -64,6 +64,8 @@ declare global {
       clearToken?(): void
       syncStatus?(args: { projectId: string; localPath: string; token: string | null }): Promise<unknown>
       syncRun?(args:    { projectId: string; localPath: string; token: string | null }): Promise<unknown>
+      syncWatch?(args:  { projectId: string; localPath: string; on: boolean }): Promise<boolean>
+      onSyncChanged?(callback: (data: unknown) => void): () => void
     }
   }
 }
