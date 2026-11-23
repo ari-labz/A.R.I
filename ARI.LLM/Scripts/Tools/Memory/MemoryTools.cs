@@ -220,7 +220,7 @@ internal sealed class AskMemory(Thread thread) : Tool
         function = new
         {
             name        = "ask_memory",
-            description = "Ask your memory a question in plain words, e.g. \"do we know anything about [Name]'s workplace?\". A memory agent searches the brain and answers with what it finds, or says there is nothing. Use it when a topic comes up that the recall at the start of this reply didn't cover, or to check before saying you don't know.",
+            description = "Ask your memory a question in plain words, e.g. \"do we know anything about Person B's workplace?\". A memory agent searches the brain and answers with what it finds, or says there is nothing. Use it when a topic comes up that the recall at the start of this reply didn't cover, or to check before saying you don't know.",
             parameters  = new { type = "object", properties = new { question = new { type = "string", description = "What you want to know, as a question." } }, required = new[] { "question" } },
         },
     };
