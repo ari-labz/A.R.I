@@ -887,7 +887,10 @@ public abstract class Agent
             // A message that arrived after the last step was never folded in. Keep it in the chat, so it isn't lost
             // and the next turn reads it.
             while (turn.Thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments, string? ClientId) late))
+            {
                 turn.Thread.History.Add(new Prompt { AuthorName = late.User, Text = late.Text, ClientId = late.ClientId, Attachments = late.Attachments.Count > 0 ? late.Attachments : null });
+                SessionRecorder.ChatLine(turn.Thread, turn.Thread.Key, late.User, late.Text, late.Attachments, "while ARI was replying");
+            }
             OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Idle);
         }
 
@@ -967,6 +970,10 @@ public abstract class Agent
         Prompt interject = new() { AuthorName = username, Text = rawText, ClientId = clientId, Attachments = attachments.Count > 0 ? attachments : null };
         string safeText  = rawText.Replace("\n", " ").Replace("\r", " ");   // keep it one SSE line
         string segText   = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);
+
+        // The chat log reads in order too: what she'd said so far, then the message that cut in.
+        if (!string.IsNullOrWhiteSpace(segText)) SessionRecorder.ChatLine(thread, thread.Key, "ARI", segText);
+        SessionRecorder.ChatLine(thread, thread.Key, username, rawText, attachments, "while ARI was replying");
 
         if (string.IsNullOrWhiteSpace(segText))
         {

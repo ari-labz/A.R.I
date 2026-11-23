@@ -153,20 +153,32 @@ public static class SessionRecorder
 
     // ── Chat transcript ───────────────────────────────────────────────────────
 
-    /// <summary>Appends one line to the human-readable "who said what when" script for a user-facing
+    /// <summary>Appends one message to the human-readable "who said what when" script for a user-facing
     /// thread — a plain-text script, not the DTI trace. One file per thread under Logs/ChatLogs/&lt;date&gt;.
+    /// The chat window's markers become readable lines ("[tool call: read_file notes.txt]"), attachments are
+    /// listed under the message, and a chat service's "[date] [name via DM]:" prefix is dropped.
     /// Dream threads are excluded — they have no human on the other end, so DreamLogs (the DTI trace) is
     /// their whole record.</summary>
-    internal static void ChatLine(Thread thread, string threadKey, string speaker, string text)
+    internal static void ChatLine(Thread thread, string threadKey, string speaker, string text, IEnumerable<Attachment>? attachments = null, string? note = null)
     {
-        if (Off || thread.Pipeline == ThreadPipeline.Dream || string.IsNullOrWhiteSpace(text)) return;
+        if (Off || thread.Pipeline == ThreadPipeline.Dream) return;
 
         try
         {
+            string   body  = ChatLogText.Readable(text ?? "", speaker);
+            string[] files = attachments?.Select(a => $"[attachment: {a.Name}]").ToArray() ?? [];
+            if (body.Length == 0 && files.Length == 0) return;
+
+            string who  = note is null ? speaker : $"{speaker} ({note})";
+            string head = $"[{DateTime.Now:HH:mm:ss}] {who}:";
+            StringBuilder entry = new(head);
+            if (body.Length > 0) entry.Append(body.Contains('\n') ? "\n" : " ").Append(body);
+            foreach (string f in files) entry.Append('\n').Append(f);
+            entry.Append("\n\n");
+
             string file = Path.Combine(DayDir(Paths.ChatLogs), $"{Sanitize(threadKey)}.md");
-            string line = $"[{DateTime.Now:HH:mm:ss}] {speaker}: {text}\n\n";
             lock (FileGates.GetOrAdd(file, _ => new object()))
-                File.AppendAllText(file, line);
+                File.AppendAllText(file, entry.ToString());
         }
         catch (Exception ex)
         {

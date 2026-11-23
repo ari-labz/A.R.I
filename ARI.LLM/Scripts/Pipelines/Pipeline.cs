@@ -58,7 +58,7 @@ internal abstract class Pipeline
                 Timestamp   = DateTime.Now,
                 Attachments = messageAttachments is { Count: > 0 } ? messageAttachments : null,
             });
-            SessionRecorder.ChatLine(thread, threadKey, username, prompt);
+            SessionRecorder.ChatLine(thread, threadKey, username, prompt, messageAttachments);
         }
 
         // Everything this prompt sets off — Memory's recall, Context's summariser, the primary agent,
