@@ -609,6 +609,8 @@ button, a, input, select, textarea, label, [role="button"] {
 #main.code-mode .bubble th { background: var(--col-code-bubble-th-colour); }
 .bubble hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
 .bubble a { color: var(--accent); text-decoration: underline; }
+#main.code-mode .bubble a { color: var(--col-code-bubble-link-colour); }
+#main.code-mode .bubble a:hover { color: var(--col-code-bubble-link-hover-colour); }
 .msg-row.user .bubble code { background: var(--col-msg-row-user-bubble-code-colour); border-color: var(--col-msg-row-user-bubble-code-colour-2); }
 
 /* ── bottom input ───────────────────────────────────────── */
