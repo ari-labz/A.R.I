@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Linq;
 
@@ -73,7 +75,40 @@ internal sealed class WriteFile : Tool
         return null;
     }
 
-    internal override Task<ToolResult> Execute(string argsJson) => fs.Write(argsJson).AsMutationResult();
+    // The window the chat opens beside it for this write (a new file shows all its lines as added); see EditWindow.
+    private readonly ConcurrentDictionary<string, string> windows = new();
+
+    internal override async Task<ToolResult> Execute(string argsJson)
+    {
+        string? path = null; string before = "";
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            path = doc.RootElement.TryGetProperty("path", out JsonElement p) ? p.GetString() : null;
+            if (path is not null)
+                try { before = Encoding.UTF8.GetString(await fs.ReadBytes(path)); } catch { /* a new file has nothing before */ }
+        }
+        catch { }
+
+        ToolResult result = await fs.Write(argsJson).AsMutationResult();
+
+        if (path is not null)
+        {
+            try { windows[argsJson] = EditWindow.Marker(path, before, Encoding.UTF8.GetString(await fs.ReadBytes(path))); }
+            catch { }
+            // A page is run, not just written: an error that only shows once it plays (a script that throws mid-animation) comes back now.
+            if (result.Text.StartsWith("Successfully", StringComparison.Ordinal) && Path.GetExtension(path).ToLowerInvariant() is ".html" or ".htm")
+            {
+                List<string> problems = new();
+                try { problems = await BrowserHost.CheckHtml(Encoding.UTF8.GetString(await fs.ReadBytes(path))); } catch { /* no browser available: unchecked */ }
+                if (problems.Count > 0)
+                    return result.Text + $"\nWhen run, the page has errors: {string.Join("; ", problems)}. Fix them before showing it.";
+            }
+        }
+        return result;
+    }
+
+    internal override Func<string, string>? DisplayAfter => args => windows.TryRemove(args, out string? m) ? m : "";
 
     // Remember files created here so PreCheck lets ARI rewrite her own drafts later in the conversation.
     internal override ToolResult PostRun(Thread thread, string argsJson, ToolResult result)

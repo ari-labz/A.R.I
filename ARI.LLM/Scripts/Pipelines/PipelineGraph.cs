@@ -17,7 +17,14 @@ internal sealed class PipelineGraph
     /// <summary>How the validator looks things up: an agent's input ports, or another pipeline.</summary>
     internal sealed record Env(Func<string, string[]?> PortsOf, Func<string, PipelineGraph?> PipelineById);
     /// <param name="FromPort">Which output of the source the wire leaves from. Only START has more than one: "history" and "message".</param>
-    internal sealed record Edge(string From, string To, string Port, bool Stream, string FromPort = StartHistory);
+    /// <param name="MaxRounds">On a pathway wire (one leaving an agent's pathway tool, such as Fail): how many times it may be taken in one turn.</param>
+    internal sealed record Edge(string From, string To, string Port, bool Stream, string FromPort = StartHistory, int MaxRounds = 2);
+
+    /// <summary>A wire leaving one of an agent's pathway tools (Pass, Fail…) rather than its plain output. These may point back
+    /// to an earlier agent, so they are not part of the run order: the review loop takes them inside the reply's turn.</summary>
+    internal bool IsPathway(Edge e) =>
+        Nodes.FirstOrDefault(n => n.Id == e.From)?.Type == "agent"
+        && !(e.FromPort is StartHistory or StartMessage or "output" or "");
 
     internal string       Id    { get; init; } = "";
     internal string       Name  { get; init; } = "";
@@ -35,7 +42,10 @@ internal sealed class PipelineGraph
     internal static readonly IReadOnlyDictionary<string, string[]> BuiltInPorts = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
     {
         ["Memory"]   = ["history"],
-        ["Dialogue"] = ["history", "memories"],
+        ["Dialogue"] = ["history", "memories", "critique"],
+        // Only in the Code and Talk pipelines, which are drawn as graphs too.
+        ["Coder"]    = ["history", "critique"],
+        ["Talking"]  = ["history", "memories"],
     };
 
     /// <summary>Input ports a graph may leave unwired: the agent then simply runs without that input. Lets a pipeline be
@@ -94,12 +104,24 @@ internal sealed class PipelineGraph
     /// <summary>Shipped pipelines other than Default, which can be edited but never deleted.</summary>
     /// <summary>Pipelines ARI ships besides Default: none. Memory is the Recall step inside Default.</summary>
     internal const string WalkId = "memory-walk", WalkChatId = "walker-chat";
-    internal static readonly string[] ShippedIds = [];
+    /// <summary>Code and Talk are graphs too, so they show in the editor like any pipeline. Their core agent (Coder, Talking) can't be
+    /// swapped; Code can take a reviewer (a code review loop), Talk can't (a spoken reply can't be revised once said).</summary>
+    internal const string CodeId = "code", TalkId = "talk";
+    internal static readonly string[] ShippedIds = [CodeId, TalkId];
     internal static readonly string[] StepOnlyIds = [];
-    internal const string ShippedJson = "{ \"pipelines\": [] }";
+    internal const string ShippedJson = """
+        { "pipelines": [
+          { "id": "code", "name": "Code", "hidden": true,
+            "nodes": [ { "id": "start", "type": "start", "x": 20, "y": 143 }, { "id": "coder", "type": "agent", "agent": "Coder", "x": 300, "y": 110 }, { "id": "end", "type": "end", "x": 700, "y": 143 } ],
+            "edges": [ { "from": "start", "to": "coder", "port": "history", "mode": "complete" }, { "from": "coder", "to": "end", "port": "stream", "mode": "stream" } ] },
+          { "id": "talk", "name": "Talk", "hidden": true,
+            "nodes": [ { "id": "start", "type": "start", "x": 20, "y": 143 }, { "id": "mem", "type": "agent", "agent": "Memory", "x": 260, "y": 20 }, { "id": "talk", "type": "agent", "agent": "Talking", "x": 520, "y": 110 }, { "id": "end", "type": "end", "x": 860, "y": 143 } ],
+            "edges": [ { "from": "start", "to": "mem", "port": "history", "mode": "complete" }, { "from": "start", "to": "talk", "port": "history", "mode": "complete" }, { "from": "mem", "to": "talk", "port": "memories", "mode": "complete" }, { "from": "talk", "to": "end", "port": "stream", "mode": "stream" } ] }
+        ] }
+        """;
 
     /// <summary>Tokens a custom agent's prompt can use without wiring: the user's latest message.</summary>
-    internal static readonly string[] ImplicitTokens = ["message", "since", "starting", "audience"];
+    internal static readonly string[] ImplicitTokens = ["message", "since", "starting", "audience", "attempt", "max_attempts", "attempt_log", "seconds_since_reply", "changes", "conventions"];
 
     private static readonly Regex TokenRx = new(@"\{(\w+)\}", RegexOptions.Compiled);
 
@@ -146,7 +168,8 @@ internal sealed class PipelineGraph
             if (p.TryGetProperty("edges", out JsonElement es))
                 foreach (JsonElement e in es.EnumerateArray())
                     edges.Add(new Edge(Str(e, "from"), Str(e, "to"), Str(e, "port"), e.TryGetProperty("mode", out JsonElement m) && m.GetString() == "stream",
-                        Str(e, "fromPort") is { Length: > 0 } fp ? fp : StartHistory));
+                        Str(e, "fromPort") is { Length: > 0 } fp ? fp : StartHistory,
+                        e.TryGetProperty("maxRounds", out JsonElement mr) && mr.TryGetInt32(out int mri) ? Math.Clamp(mri, 1, 10) : 2));
             result.Add(new PipelineGraph { Id = Str(p, "id"), Name = Str(p, "name"), Nodes = nodes, Edges = edges,
                 Hidden = p.TryGetProperty("hidden", out JsonElement hid) && hid.ValueKind == JsonValueKind.True });
         }
@@ -169,7 +192,7 @@ internal sealed class PipelineGraph
             if (!e.FromPort.Equals(StartHistory, StringComparison.OrdinalIgnoreCase) && !e.FromPort.Equals(StartMessage, StringComparison.OrdinalIgnoreCase))
                 problems.Add($"START has no '{e.FromPort}' output (it has {StartHistory} and {StartMessage}).");
 
-        IEnumerable<Edge> intoEnd = Edges.Where(e => e.To == end.Id);
+        IEnumerable<Edge> intoEnd = Edges.Where(e => e.To == end.Id && !IsPathway(e));
         if (intoEnd.Count() != 1) problems.Add(intoEnd.Any() ? "END can only take one source." : "Nothing is connected to END.");
 
         foreach (Node n in Nodes.Where(n => n.Type == "agent"))
@@ -218,7 +241,22 @@ internal sealed class PipelineGraph
             if (owners.Length > 1) problems.Add($"The sub-thread code '{sharing.Key}' is used by {string.Join(" and ", owners)}; each agent needs its own.");
         }
 
-        if (Order() is null) problems.Add("The pipeline loops back on itself.");
+        foreach (Edge e in Edges.Where(IsPathway))
+        {
+            Node? from = Nodes.FirstOrDefault(n => n.Id == e.From), to = Nodes.FirstOrDefault(n => n.Id == e.To);
+            if (to?.Type != "agent") problems.Add($"{from?.Agent}: its {e.FromPort} pathway has to lead to an agent.");
+        }
+        // The Code and Talk pipelines keep their own core agent; Coder and Talking only work there.
+        bool isCode = Id.Equals(CodeId, StringComparison.OrdinalIgnoreCase), isTalk = Id.Equals(TalkId, StringComparison.OrdinalIgnoreCase);
+        foreach (Node n in Nodes.Where(n => n.Type == "agent"))
+        {
+            if (n.Agent!.Equals("Coder", StringComparison.OrdinalIgnoreCase) && !isCode) problems.Add("The Coder agent only works in the Code pipeline.");
+            if (n.Agent!.Equals("Talking", StringComparison.OrdinalIgnoreCase) && !isTalk) problems.Add("The Talking agent only works in the Talk pipeline.");
+        }
+        if (isCode && !Nodes.Any(n => n.Agent?.Equals("Coder", StringComparison.OrdinalIgnoreCase) == true)) problems.Add("The Code pipeline needs its Coder.");
+        if (isTalk && !Nodes.Any(n => n.Agent?.Equals("Talking", StringComparison.OrdinalIgnoreCase) == true)) problems.Add("The Talk pipeline needs its Talking agent.");
+        if (isTalk && Edges.Any(IsPathway)) problems.Add("Talk replies are spoken as they are written, so they can't loop back for review.");
+        if (Order() is null) problems.Add("The pipeline loops back on itself without going through a pathway tool (only a reviewer's pathway, such as Fail, may lead back).");
         return problems;
     }
 
@@ -232,7 +270,7 @@ internal sealed class PipelineGraph
         List<List<Node>> waves = new();
         while (left.Count > 0)
         {
-            List<Node> wave = left.Where(n => Edges.Where(e => e.To == n.Id).All(e => done.Contains(e.From))).ToList();
+            List<Node> wave = left.Where(n => Edges.Where(e => e.To == n.Id && !IsPathway(e)).All(e => done.Contains(e.From))).ToList();
             if (wave.Count == 0) return null;
             wave.ForEach(n => done.Add(n.Id));
             left.RemoveAll(wave.Contains);

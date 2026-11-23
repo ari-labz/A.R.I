@@ -45,14 +45,8 @@ internal sealed class CodePipeline : Pipeline
         string?              localPath,
         Func<string, Task>?  onTextDelta = null)
     {
-        // Same brain as a Dialogue thread: wait out an Engram sweep of this thread, then recall memories and carry
-        // the running context summary — so coding threads aren't a blank-slate Ari. Skipped on the approval turn
-        // ("[approve-plan]" is a button press, not a message with anything to recall against).
-        if (engram?.BlocksReply(threadKey) == true)
-        {
-            Shared.Logger.LogInformation("[Code] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
-            await engram.WaitForSweep(threadKey, cts.Token);
-        }
+        // Same brain as a Dialogue thread: recall memories and carry the running context summary — so coding threads aren't a
+        // blank-slate Ari. Skipped on the approval turn ("[approve-plan]" is a button press, not a message with anything to recall against).
 
         Shared.Logger.LogInformation("[Code] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
@@ -133,8 +127,23 @@ internal sealed class CodePipeline : Pipeline
 
         coder.RefreshConventions(threadKey, LLMModule.ConventionsProvider?.Invoke());
 
-        return await coder.RunLoop(thread, threadKey, effectivePrompt, username, resolvedRoot, snapshots, cts, onDelta, remote,
+        HashSet<string> touchedBefore = new(thread.TouchedFiles, StringComparer.OrdinalIgnoreCase);
+        string report = await coder.RunLoop(thread, threadKey, effectivePrompt, username, resolvedRoot, snapshots, cts, onDelta, remote,
             recallBlock, recallSeconds, contextSummary);
+
+        // A turn that changed files goes past the reviewer wired to the Coder in the Code graph, if there is one.
+        if (thread.TouchedFiles.Any(f => !touchedBefore.Contains(f)))
+        {
+            try
+            {
+                await CodeReview.Run(thread, effectivePrompt, report, remote ? null : resolvedRoot, () => thread.TouchedFiles.Where(f => !touchedBefore.Contains(f)).ToList(),
+                    again => coder.RunLoop(thread, threadKey, again, username, resolvedRoot, snapshots, cts, onDelta, remote, null, null, contextSummary),
+                    name => LLMModule.CustomAgentByName?.Invoke(name), cts.Token);
+            }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[CodeReview] ({Thread}) review failed: {Err}", threadKey, ex.Message); }
+        }
+        return report;
     }
 
     /// <summary>Root for a project on this server's disk: the path the client sent if it exists here, otherwise

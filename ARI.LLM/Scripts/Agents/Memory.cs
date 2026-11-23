@@ -11,6 +11,9 @@ namespace ARI.LLM;
 
 internal class Memory : Agent
 {
+    /// <summary>The loaded memory agent, for the ask_memory tool. Null when there is no brain or no Memory agent.</summary>
+    internal static Memory? Current { get; set; }
+
     [JsonPropertyName("hopLimit")] public int HopLimit { get; init; }
 
     private const int TRANSCRIPT_LIMIT  = 5;

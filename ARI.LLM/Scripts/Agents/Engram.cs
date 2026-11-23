@@ -58,12 +58,6 @@ internal class Engram : MemoryAgent, IDisposable
         return count >= TurnsBeforeSweep;
     }
 
-    // Sweeps (interval, compaction) that run beside the conversation: the reply does not wait for them.
-    private readonly ConcurrentDictionary<string, byte> backgroundSweeps = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>A sweep the next reply must wait for (dormant, closed, manual...). Interval and compaction sweeps run in parallel with replies.</summary>
-    internal bool BlocksReply(string threadKey) => IsSweeping(threadKey) && !backgroundSweeps.ContainsKey(threadKey);
-
     private ConcurrentDictionary<string, Thread> threads = new();
 
     internal event Action<string>? SweepCompleted;
@@ -72,25 +66,6 @@ internal class Engram : MemoryAgent, IDisposable
 
     /// <summary>Saving something right now, from a full sweep or from the chat's quick "remember" saves. Drives the "adding to memory" notice.</summary>
     internal bool IsSaving(string threadKey) => IsSweeping(threadKey) || reflexDraining.ContainsKey(threadKey);
-
-    internal async Task WaitForSweep(string threadKey, CancellationToken ct)
-    {
-        if (!IsSweeping(threadKey)) return;
-
-        TaskCompletionSource<bool> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        Action<string>? handler = null;
-        handler = key =>
-        {
-            if (!key.Equals(threadKey, StringComparison.OrdinalIgnoreCase)) return;
-            SweepCompleted -= handler;
-            tcs.TrySetResult(true);
-        };
-        SweepCompleted += handler;
-        if (!IsSweeping(threadKey)) { SweepCompleted -= handler; return; }
-
-        using CancellationTokenRegistration reg = ct.Register(() => { SweepCompleted -= handler; tcs.TrySetCanceled(ct); });
-        await tcs.Task;
-    }
 
     public Engram() { }
 
@@ -168,8 +143,11 @@ internal class Engram : MemoryAgent, IDisposable
         return new List<ThreadItem>();
     }
 
-    /// <param name="saved">A saved conversation that isn't live (Persistent Threads), swept in place of the live thread with this key.</param>
-    internal async Task RunEngram(string threadKey, string trigger, bool force = false, Thread? saved = null)
+    /// <param name="saved">A conversation that isn't live (a queued snapshot, or a Persistent Threads save), swept in place of the live thread with this key.</param>
+    /// <param name="from">For a queued snapshot: how many of its messages earlier snapshots already hold. Only the rest is swept, and the
+    /// sweep mark is left alone (taking the snapshot already moved it).</param>
+    /// <returns>True when the sweep finished (including "nothing to store"); false when it couldn't run or the model didn't answer.</returns>
+    internal async Task<bool> RunEngram(string threadKey, string trigger, bool force = false, Thread? saved = null, int? from = null)
     {
         // In DevMode Engram still runs in full: the brain it writes to is a throwaway copy (see LLMModule.PrepareDevSandbox), so nothing it does is kept.
 
@@ -185,7 +163,7 @@ internal class Engram : MemoryAgent, IDisposable
         {
             if (sweptThread is not null) sweptThread.EngramProcessed = true;
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — guild threads are never swept into the brain.", threadKey);
-            return;
+            return true;
         }
 
         // Same for a DM conversation ARI opened with someone other than the owner (discord_dm_user): what they say
@@ -194,18 +172,17 @@ internal class Engram : MemoryAgent, IDisposable
         {
             dmThread.EngramProcessed = true;
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — DMs with people other than the Master are never swept into the brain.", threadKey);
-            return;
+            return true;
         }
 
         if (!IsEnabled && !force)
         {
             lock (pendingQueue) pendingQueue.Add(threadKey);
-            return;
+            return false;
         }
         if (force) await engramLock.WaitAsync();
-        else if (!await engramLock.WaitAsync(0)) return;
+        else if (!await engramLock.WaitAsync(0)) return false;
         sweepingThreads[threadKey] = 0;
-        if (trigger is "interval" or "compaction") backgroundSweeps[threadKey] = 0;
         exchangeCounts[threadKey] = 0;
 
         // --- Session record: the sweep's non-LLM decisions. The placement thread's own LLM traffic is
@@ -216,19 +193,21 @@ internal class Engram : MemoryAgent, IDisposable
         int     committed      = 0;
         int     blockedCount   = 0;
         bool    processed      = false;
+        int     snapshotCount  = 0;
 
         try
         {
             Thread? dialogueThread = sweptThread;
             List<ThreadItem> allItems = dialogueThread is not null ? SnapshotHistory(dialogueThread) : new List<ThreadItem>();
             List<ThreadItem> conversationItems = allItems.Where(i => i is LLM.Prompt or Response).ToList();
+            snapshotCount = conversationItems.Count;
 
             // A code thread is swept with its own prompts: what was done and decided, filed on the project's note —
             // never the code itself (the repo and git already hold that).
             bool    code    = dialogueThread?.Pipeline == ThreadPipeline.Code;
             string? project = code ? ProjectNameFor(dialogueThread!) : null;
 
-            int lastCount = lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0;
+            int lastCount = from ?? (lastHistoryCount.TryGetValue(threadKey, out int c) ? c : 0);
             List<ThreadItem> recentItems = conversationItems.Skip(lastCount).ToList();
 
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] sweep triggered (trigger: {Trigger})", threadKey, trigger);
@@ -239,8 +218,8 @@ internal class Engram : MemoryAgent, IDisposable
             {
                 outcome   = "skipped — no user messages (ARI-only thread)";
                 processed = true;
-                MarkSwept(threadKey, conversationItems.Count);
-                return;
+                if (from is null) MarkSwept(threadKey, conversationItems.Count);
+                return processed;
             }
 
             // --- Classify: is there anything worth remembering? ---
@@ -249,12 +228,13 @@ internal class Engram : MemoryAgent, IDisposable
             {
                 outcome   = "skipped — no new messages";
                 processed = true;
-                return;
+                return processed;
             }
 
             // recentItems is only what's new since lastHistoryCount — a 2nd+ sweep never re-reads the full transcript.
             string transcript = transcriptSeen.Length > 0 ? transcriptSeen : BuildTranscript(recentItems, code);
-            if (context is not null) await context.RebuildFromTranscript(threadKey, transcript);
+            // A queued snapshot is older than the live conversation, so it must not rebuild the live context summary.
+            if (context is not null && from is null) await context.RebuildFromTranscript(threadKey, transcript);
             string contextSummary = context?.GetContext(threadKey) ?? string.Empty;
             string speaker = conversationItems.OfType<Prompt>().Select(p => p.AuthorName)
                 .FirstOrDefault(a => !string.IsNullOrWhiteSpace(a))
@@ -274,7 +254,7 @@ internal class Engram : MemoryAgent, IDisposable
             {
                 outcome = "failed — the model server didn't answer; the messages stay unswept for the next try";
                 Shared.Logger.LogWarning("[Engram] [{ThreadKey}] sweep failed — extraction got no answer; will try again.", threadKey);
-                return;
+                return processed;
             }
             List<ExtractedEntity> entities = extracted;
 
@@ -311,9 +291,12 @@ internal class Engram : MemoryAgent, IDisposable
             // After the day-log entry, so the links it adds are checked too.
             if (!code && entities.Count > 0) CleanLinks();
 
-            MarkSwept(threadKey, conversationItems.Count);
-            // The saved copy (Persistent Threads) records it too, so the next start doesn't sweep these messages again.
-            PersistedThreads.SetEngramSwept(threadKey, conversationItems.Count);
+            if (from is null)
+            {
+                MarkSwept(threadKey, conversationItems.Count);
+                // The saved copy (Persistent Threads) records it too, so the next start doesn't sweep these messages again.
+                PersistedThreads.SetEngramSwept(threadKey, conversationItems.Count);
+            }
             committed    = commits;
             blockedCount = blocked;
             outcome      = entities.Count == 0
@@ -336,15 +319,99 @@ internal class Engram : MemoryAgent, IDisposable
                 ["processed"]           = processed,
             });
 
-            // The invariant latch: a completed sweep (or a "nothing to store") releases the thread for deletion.
-            if (processed && sweptThread is not null)
+            // The invariant latch: a completed sweep (or a "nothing to store") releases the thread for deletion — unless the conversation
+            // carried on while the sweep read its snapshot, in which case the newer messages still need a sweep of their own.
+            if (processed && sweptThread is not null && ConversationCount(SnapshotHistory(sweptThread)) <= snapshotCount)
                 sweptThread.EngramProcessed = true;
 
             sweepingThreads.TryRemove(threadKey, out _);
-            backgroundSweeps.TryRemove(threadKey, out _);
             engramLock.Release();
             SweepCompleted?.Invoke(threadKey);
         }
+        return processed;
+    }
+
+    // ── The memory queue ─────────────────────────────────────────────────────────────
+    // A sweep never runs while she's talking. Every trigger (every few exchanges, near compaction, dormant, closed) writes a snapshot of
+    // the conversation into the queue at once and the conversation carries on; LLMModule works through the queue, oldest first, only
+    // once she is idle. A snapshot holds the conversation so far and how many of its messages earlier snapshots already hold, so each
+    // is swept only for what is new. The queue is on disk: a restart keeps it, and a closed thread can go once its last snapshot is taken.
+
+    private static string QueueDir => Paths.ServerDir(Shared.DevMode ? "MemoryQueue.devrun" : "MemoryQueue");
+
+    /// <summary>Why this conversation must never reach the brain, or null when it may.</summary>
+    private static string? NeverSwept(Thread thread)
+    {
+        if (EngramOthersSetting.Enabled) return null;
+        if (thread.IsSharedChannel) return "guild threads are never swept into the brain";
+        if (thread is { Medium: ThreadMedium.Channel, InSharedChannel: false, OwnerId: null }) return "DMs with people other than the Master are never swept into the brain";
+        return null;
+    }
+
+    /// <summary>Queues a snapshot of everything said since the last one. Once the snapshot holds the whole conversation the thread is
+    /// released for deletion. Returns false when there was nothing new to queue.</summary>
+    internal bool TakeSnapshot(Thread thread, string trigger)
+    {
+        string? never = NeverSwept(thread);
+        if (never is not null) Shared.Logger.LogInformation("[Engram] [{ThreadKey}] skipped — {Why}.", thread.Key, never);
+        if (never is not null || !MaySweep(thread)) { thread.EngramProcessed = true; return false; }
+        lock (lastRun)
+        {
+            List<ThreadItem> items = SnapshotHistory(thread);
+            int messages = ConversationCount(items.Where(i => i is not Response { State: State.Streaming }));
+            int from = lastHistoryCount.TryGetValue(thread.Key, out int c) ? c : 0;
+            exchangeCounts[thread.Key] = 0;
+            if (messages <= from)
+            {
+                if (ConversationCount(items) <= from) thread.EngramProcessed = true;
+                return false;
+            }
+
+            string safe = string.Concat(thread.Key.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' ? ch : '_'));
+            string file = Path.Combine(QueueDir, $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fffffff}_{trigger}_{safe}.jsonl");
+            PersistedThreads.WriteSnapshot(thread, file, from);
+            lastRun[thread.Key]          = DateTime.UtcNow;
+            lastHistoryCount[thread.Key] = messages;
+            PersistedThreads.SetEngramSwept(thread.Key, messages);
+            if (ConversationCount(SnapshotHistory(thread)) <= messages) thread.EngramProcessed = true;
+            Shared.Logger.LogInformation("[Engram] [{ThreadKey}] queued a snapshot ({Trigger}): {New} new message(s), {Queued} snapshot(s) waiting.",
+                thread.Key, trigger, messages - from, QueuedSnapshots().Count);
+            return true;
+        }
+    }
+
+    /// <summary>The queued snapshots, oldest first.</summary>
+    internal static List<string> QueuedSnapshots() =>
+        Directory.EnumerateFiles(QueueDir, "*.jsonl").Order(StringComparer.Ordinal).ToList();
+
+    /// <summary>The conversation key and trigger a queued snapshot was taken for.</summary>
+    internal static (string Key, string Trigger) SnapshotInfo(string file)
+    {
+        string[] parts = Path.GetFileNameWithoutExtension(file).Split('_', 3);
+        string trigger = parts.Length > 1 ? parts[1] : "queued";
+        return (PersistedThreads.ReadSnapshotMeta(file)?.Key ?? (parts.Length > 2 ? parts[2] : file), trigger);
+    }
+
+    /// <summary>Sweeps one queued snapshot and removes it once done. One that fails (the model didn't answer) stays for the next try.</summary>
+    internal async Task<bool> SweepSnapshot(string file)
+    {
+        PersistedThreads.Meta? meta = PersistedThreads.ReadSnapshotMeta(file);
+        ThreadPipeline pipeline = Enum.TryParse(meta?.Pipeline, out ThreadPipeline p) ? p : ThreadPipeline.Dialogue;
+        Thread snapshot = new(pipeline, meta?.Key ?? "");
+        if (meta is null || !PersistedThreads.RestoreFile(meta.Key, file, snapshot))
+        {
+            Shared.Logger.LogWarning("[Engram] unreadable snapshot {File} — dropped.", Path.GetFileName(file));
+            DropSnapshot(file);
+            return true;
+        }
+        bool done = await RunEngram(meta.Key, SnapshotInfo(file).Trigger, force: true, saved: snapshot, from: meta.EngramSwept ?? 0);
+        if (done) DropSnapshot(file);
+        return done;
+    }
+
+    internal static void DropSnapshot(string file)
+    {
+        try { File.Delete(file); } catch (Exception ex) { Shared.Logger.LogWarning("[Engram] could not remove snapshot {File}: {Err}", Path.GetFileName(file), ex.Message); }
     }
 
     /// <summary>Moves the sweep mark forward. Only a sweep that got its extraction back calls this, so a failed one is tried again.</summary>
@@ -762,11 +829,11 @@ internal class Engram : MemoryAgent, IDisposable
 
     private int sweepingSaved;
 
-    /// <summary>Sweeps the saved conversations (Persistent Threads) that still hold messages Engram never reached. Nothing is swept
-    /// at shutdown: a sweep takes minutes and ARI.Console ends the process seconds after asking it to close. Runs once the model is up.</summary>
-    internal async Task SweepSavedAsync()
+    /// <summary>Queues the saved conversations (Persistent Threads) that still hold messages no snapshot reached — saved by an older
+    /// ARI, before the memory queue. Runs once the model is up.</summary>
+    internal void QueueUnsweptSaved()
     {
-        if (!IsEnabled || Interlocked.Exchange(ref sweepingSaved, 1) == 1) return;
+        if (Interlocked.Exchange(ref sweepingSaved, 1) == 1) return;
         try
         {
             foreach (PersistedThreads.Meta meta in PersistedThreads.ListMeta())
@@ -776,9 +843,9 @@ internal class Engram : MemoryAgent, IDisposable
                 Thread saved = new(ThreadPipeline.Dialogue, meta.Key);
                 if (!PersistedThreads.Restore(meta.Key, saved) || !MaySweep(saved)) continue;
                 MarkHistoryRestored(meta.Key, swept);
-                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] {Count} message(s) were never swept before ARI closed — sweeping them now.", meta.Key, messages - swept);
-                try { await RunEngram(meta.Key, "start-up", force: true, saved: saved); }
-                catch (Exception ex) { Shared.Logger.LogWarning("[Engram] start-up sweep failed for {Key}: {Error}", meta.Key, ex.Message); }
+                Shared.Logger.LogInformation("[Engram] [{ThreadKey}] {Count} message(s) were never swept before ARI closed — queuing them.", meta.Key, messages - swept);
+                try { TakeSnapshot(saved, "start-up"); }
+                catch (Exception ex) { Shared.Logger.LogWarning("[Engram] start-up snapshot failed for {Key}: {Error}", meta.Key, ex.Message); }
             }
         }
         finally { Interlocked.Exchange(ref sweepingSaved, 0); }

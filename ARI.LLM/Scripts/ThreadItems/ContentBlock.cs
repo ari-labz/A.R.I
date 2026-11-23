@@ -202,6 +202,7 @@ public abstract class ContentBlock
         "search_web"     => new WebSearching(),
         "fetch_page"     => new Browsing(),
         "edit_file"      => new Editing(),
+        "edit_files"     => new Editing(),
         "write_file"     => new Writing(),
         "run_command"    => new Running(),
         "git"            => new RunningGit(),

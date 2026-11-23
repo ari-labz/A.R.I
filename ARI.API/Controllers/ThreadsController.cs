@@ -181,7 +181,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                     IsCodeMode: kvp.Value.Pipeline == ARI.LLM.ThreadPipeline.Code,
                     ProjectName: projectName, ProjectId: projectId,
                     Pipeline: kvp.Value.Pipeline.ToString().ToLowerInvariant(),
-                    Title: kvp.Value.CustomTitle ?? kvp.Value.Title, OwnerName: OwnerNameFor(kvp.Value.OwnerId));
+                    Title: kvp.Value.CustomTitle ?? kvp.Value.Title, OwnerName: OwnerNameFor(kvp.Value.OwnerId),
+                    Status: ThreadStatusFor(kvp.Key), PersonaId: kvp.Value.PersonaId ?? PersonaStore.DefaultId);
             })
             .ToList();
 
@@ -672,11 +673,9 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         }
     }
 
-    private async Task SendWatchEvent([FromRoute(Name = "id")] string threadKey, CancellationToken ct)
+    /// <summary>What a thread is doing right now, as the app shows it: a held-back reply is "queued", then the reply's own phase, then "remembering" if only Engram is working.</summary>
+    private string ThreadStatusFor(string threadKey)
     {
-        // The reply's own state comes first: a held-back reply is "queued", then whatever phase she is really in. Remembering is reported
-        // separately, so a reply can be reading or typing while Engram saves; "remembering" is only the status when nothing else is going on.
-        bool remembering = Llm?.IsEngramSweeping(threadKey) ?? false;
         string phase = Llm?.GetThreadPhase(threadKey) switch
         {
             ARI.LLM.ThreadPhase.Prefilling  => "prefilling",
@@ -688,16 +687,23 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
             ARI.LLM.ThreadPhase.Working     => "working",
             _                               => (Llm?.IsThreadProcessing(threadKey) ?? false) ? "prefilling" : "idle",
         };
-        string status = (Llm?.IsWaitingOnMemory(threadKey) ?? false) ? "queued"
-                      : phase != "idle" ? phase
-                      : remembering ? "remembering"
-                      : "idle";
+        return phase != "idle" ? phase
+             : (Llm?.IsEngramSweeping(threadKey) ?? false) ? "remembering"
+             : "idle";
+    }
+
+    private async Task SendWatchEvent([FromRoute(Name = "id")] string threadKey, CancellationToken ct)
+    {
+        // The reply's own state comes first: a held-back reply is "queued", then whatever phase she is really in. Remembering is reported
+        // separately, so a reply can be reading or typing while Engram saves; "remembering" is only the status when nothing else is going on.
+        bool remembering = Llm?.IsEngramSweeping(threadKey) ?? false;
+        string status = ThreadStatusFor(threadKey);
         bool isCodeMode = Llm?.Threads.TryGetValue(threadKey, out ARI.LLM.Thread? wt) == true && wt?.Pipeline == ARI.LLM.ThreadPipeline.Code;
         // A tool waiting on the user's OK (a shell command, a destructive git/gh command) — the app shows its prompt. A
         // shell command carries the one being asked about, so the app can offer "Allow … every time" for an allowable one.
         object? approval = ARI.LLM.ToolApprovals.Get(threadKey) is { } pending
             ? new { id = pending.Id, title = pending.Title, command = pending.Command,
-                    segment = pending.Segment is { } seg ? new { text = seg.Text, key = seg.Key, tier = seg.Tier.ToString().ToLowerInvariant(), reason = seg.Reason } : null }
+                    segment = pending.Segment is { } seg ? new { text = seg.Text, key = seg.Key, tier = seg.Tier.ToString().ToLowerInvariant(), reason = seg.Reason, threadScoped = seg.ThreadScoped } : null }
             : null;
         string payload  = JsonSerializer.Serialize(new { status, remembering, isCodeMode, approval });
         await Response.WriteAsync($"data: {payload}\n\n", ct);
@@ -1191,9 +1197,18 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
     {
         if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
         pendingMessageAttachments.TryGetValue(threadKey, out List<Attachment>? staged);
-        bool folded = Llm.Interject(threadKey, GetUsername(), body?.Text ?? "", staged?.ToList() ?? new());
+        bool folded = Llm.Interject(threadKey, GetUsername(), body?.Text ?? "", staged?.ToList() ?? new(), body?.ClientId);
         if (folded) pendingMessageAttachments.TryRemove(threadKey, out _);
         return folded ? Ok() : Conflict("Thread is not streaming.");
+    }
+
+    /// <summary>The persona a conversation speaks in. It changes from the next reply; earlier replies stay as they were.</summary>
+    [HttpPut("{id}/persona")]
+    public IActionResult ChoosePersona([FromRoute(Name = "id")] string threadKey, [FromBody] PersonaChoice body)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (!PersonaStore.Exists(body?.PersonaId)) return NotFound(new { error = "No such persona." });
+        return Llm.SetThreadPersona(threadKey, body!.PersonaId!) ? Ok() : NotFound();
     }
 
     /// <summary>Close a thread: runs Engram to save it to memory, then deletes it. Fires a threadDeleted event.</summary>
@@ -1503,11 +1518,12 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
 }
 
 public record StreamRequest(string Prompt, string? LocalPath = null, bool SafeMode = false);
-public record InterjectRequest(string? Text);
+public record InterjectRequest(string? Text, string? ClientId = null);
+public record PersonaChoice(string? PersonaId);
 public record ApprovalAnswer(bool Allow, string? Decision = null);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null, string? Context = null);
 public record ApiContextRequest(string? Context);
 public record InjectContextRequest(string Name, string Content);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null, string Status = "idle", string? PersonaId = null);

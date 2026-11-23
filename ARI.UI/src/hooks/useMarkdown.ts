@@ -50,11 +50,17 @@ function renderBrowserMarkers(s: string): string {
     })
 }
 
-// A visual Ari drew (show_visual): an empty frame the page mounts a sandboxed iframe into (see visuals.ts).
+// A visual Ari drew (show_visual): a card in the message; the page itself opens in a window beside the chat (see EditWindows).
+// An edit window's data rides in the text as a marker; the window is drawn beside the chat, so the text shows nothing.
+const EDIT_WINDOW_RE = /<!--ari-(?:edit|review):[^>]*?-->/g
+function hideEditMarkers(s: string): string { return s.replace(EDIT_WINDOW_RE, "") }
+
 function renderVisualMarkers(s: string): string {
     return s.replace(VISUAL_RE, (_, threadKey, filename) => {
         const src = `/api/v1/threads/${encodeURIComponent(threadKey)}/files/content?path=${encodeURIComponent(filename)}`
-        return `\n\n<div class="ari-visual" data-visual-src="${escHtml(src)}" data-visual-name="${escHtml(filename)}"><span class="ari-visual-loading">Drawing…</span></div>\n\n`
+        const title = filename.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ")
+        return `\n\n<div class="ari-visual-card" role="button" tabindex="0" data-visual-src="${escHtml(src)}" data-visual-name="${escHtml(filename)}" title="Open beside the chat">`
+             + `<span class="ari-visual-card-icon">▣</span><span class="ari-visual-card-name">${escHtml(title)}</span><span class="ari-visual-card-open">open</span></div>\n\n`
     })
 }
 
@@ -222,7 +228,7 @@ function preprocessToolCards(content: string, msgIndex = 0): string {
     // Delivered file: a download card ARI emitted with deliver_file. Also applied in the finished-blocks
     // path (renderBlockHtml) so the card survives after streaming — the marker rides in a text block there.
     out = renderFileMarkers(out)
-    out = renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(out)))
+    out = renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(hideEditMarkers(out))))
 
     // Mode switch (replan): a light-blue info card, NOT an error.
     out = out.replace(TOOL_MODE_RE, (_, _name, rawLabel) => {
@@ -527,7 +533,7 @@ export function renderBlockHtml(block: BlockLike): string {
     const done = (block.state ?? 0) === 1
     const err  = (block.state ?? 0) === 2
 
-    if (block.type === "text")     return marked.parse(renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(renderFileMarkers(block.text ?? "")))), { async: false }) as string
+    if (block.type === "text")     return marked.parse(renderBrowserMarkers(renderVisualMarkers(renderImageMarkers(renderFileMarkers(hideEditMarkers(block.text ?? ""))))), { async: false }) as string
     if (block.type === "thinking") return ""   // reasoning is shown via the thought-block, not inline
 
     // Plan proposed: a subtle non-interactive chip in the transcript — the Accept/Amend actions live in the

@@ -77,13 +77,13 @@ public record RecurrenceInfo(
     DateTime? Until = null,
     int? Count = null);
 
-public record CalendarEventInfo(long Id, string Title, string? Notes, DateTime Start, DateTime End, bool IsWholeDay, RecurrenceInfo? Recurrence);
+public record CalendarEventInfo(long Id, string Title, string? Notes, DateTime Start, DateTime End, bool IsWholeDay, RecurrenceInfo? Recurrence, int? RemindBeforeMinutes = null);
 
 public record ReminderInfo(long Id, string Title, string? Notes, DateTime TriggerTime, string Prompt, string? Context, RecurrenceInfo? Recurrence);
 
 public interface ICalendarModule
 {
-    long CreateEvent(string title, DateTime start, DateTime end, bool isWholeDay, string? notes, RecurrenceInfo? recurrence);
+    long CreateEvent(string title, DateTime start, DateTime end, bool isWholeDay, string? notes, RecurrenceInfo? recurrence, int? remindBeforeMinutes = null);
 
     long CreateReminder(string title, DateTime triggerTime, string prompt, string? context, string? notes, RecurrenceInfo? recurrence);
 
@@ -105,7 +105,7 @@ public interface ICalendarModule
 
     ReminderInfo? GetReminder(long id);
 
-    bool UpdateEvent(long id, string title, DateTime start, DateTime end, bool isWholeDay, string? notes, RecurrenceInfo? recurrence);
+    bool UpdateEvent(long id, string title, DateTime start, DateTime end, bool isWholeDay, string? notes, RecurrenceInfo? recurrence, int? remindBeforeMinutes = null);
 
     bool UpdateReminder(long id, string title, DateTime triggerTime, string prompt, string? context, string? notes, RecurrenceInfo? recurrence);
 

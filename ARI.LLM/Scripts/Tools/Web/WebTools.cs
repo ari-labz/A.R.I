@@ -24,15 +24,7 @@ internal sealed class SearchWeb : Tool
         function = new
         {
             name        = "search_web",
-            description = "Search the web and return ranked results with titles, URLs, and snippets. " +
-                          "Results are current — use this for anything time-sensitive or that you're unsure about. " +
-                          "Search the name of a thing exactly as it is written, and prefer its canonical identifier: " +
-                          "'Qwen3.6-35B-A3B' finds the model, 'Qwen 3.6 35B A3B model' finds nothing. " +
-                          "Keep queries short, one subject at a time, and leave out filler words like 'model', " +
-                          "'vs' or 'comparison' — they make a working query fail. " +
-                          "Append site:reddit.com for community discussion and opinion. " +
-                          "Search once or twice to find the right pages, then read them properly with fetch_page — " +
-                          "rewording a query that found nothing returns the same nothing.",
+            description = "Search the web for current results (titles, URLs, snippets). Search a thing by its exact name ('Qwen3.6-35B-A3B'), short and one subject at a time, without filler like 'model' or 'vs'. Add site:reddit.com for opinions. Then read the best pages with fetch_page rather than searching again.",
             parameters = new
             {
                 type       = "object",
@@ -83,12 +75,13 @@ internal sealed class SearchWeb : Tool
             : 5;
 
         string? searXngStatus = Dependency.SearXngStatus;
-        if (searXngStatus is null)
+        string? external = WebSearchEndpoint.Url;
+        if (external is null && searXngStatus is null)
             return "Web search is not available yet — SearXNG is still starting. Try again in a moment.";
-        if (searXngStatus.Length > 0)
+        if (external is null && searXngStatus!.Length > 0)
             return $"Web search is not available: {searXngStatus}";
 
-        string searchUrl = $"http://localhost:{Dependency.SEARXNG_PORT}/search" +
+        string searchUrl = (external ?? $"http://localhost:{Dependency.SEARXNG_PORT}") + "/search" +
                            $"?q={Uri.EscapeDataString(query)}&format=json&pageno=1";
 
         string json;
@@ -377,4 +370,10 @@ internal sealed class FetchPage : Tool
         return url;
     }
 
+}
+
+/// <summary>Where web search goes. Null is the SearXNG that ARI runs itself; the SearXNG plugin points it at an instance the owner runs elsewhere.</summary>
+public static class WebSearchEndpoint
+{
+    public static string? Url { get; set; }
 }

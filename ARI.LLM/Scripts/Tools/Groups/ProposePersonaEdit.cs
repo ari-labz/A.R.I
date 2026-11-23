@@ -22,16 +22,7 @@ internal sealed class ProposePersonaEdit : Tool
         function = new
         {
             name        = "propose_persona_edit",
-            description =
-                "Propose a change to your own persona — the file that defines how you speak and carry yourself in every "
-              + "conversation. Use this when the user criticises HOW you replied (your tone, a verbal tic, a habit they "
-              + "find annoying or hurtful) rather than what you said. Saying you will change is not enough: your persona "
-              + "is what actually drives your behaviour, and it is unchanged until this is approved. "
-              + "Write the change as a BEHAVIOURAL RULE in the persona's existing voice and structure — amend the rule "
-              + "that is wrong. Never append an incident log or a growing list of banned phrases; a persona that "
-              + "accumulates grievances gets worse, not better. Keep it to one focused change. "
-              + "This only PROPOSES: the user sees a diff and approves or rejects it. Tell them you have proposed it and "
-              + "wait — never say your persona is updated until they approve.",
+            description = "Propose one change to your persona when the user objects to HOW you replied (tone, a tic, a habit). Write it as a rule in the persona's own style, amending the rule that is wrong; never add incident logs or lists of banned phrases. The user approves or rejects the diff, so say you have proposed it, never that it is done.",
             parameters  = new
             {
                 type       = "object",
@@ -68,7 +59,11 @@ internal sealed class ProposePersonaEdit : Tool
         if (oldText.Length == 0 && newText.Trim().Length == 0)
             return Task.FromResult<ToolResult>("[Error: nothing to change — give old_text, new_text, or both.]");
 
-        string persona = PersonaStore.Get();
+        // Proposals edit the main persona only. A conversation speaking as another persona doesn't rewrite Ari's.
+        if ((thread.PersonaId ?? PersonaStore.DefaultId) != PersonaStore.MainId)
+            return Task.FromResult<ToolResult>("[Error: this conversation is speaking as a different persona, and persona edits only apply to the main one.]");
+
+        string persona = PersonaStore.Get(PersonaStore.MainId);
 
         if (oldText.Length > 0 && !persona.Contains(oldText, StringComparison.Ordinal))
             return Task.FromResult<ToolResult>(

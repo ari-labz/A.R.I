@@ -8,7 +8,7 @@ public class ImageGenConfig
     public bool   Enabled     { get; set; }
     public string ComfyUiPath { get; set; } = "";
     public int    Port        { get; set; } = 8188;
-    public int    IdleSeconds { get; set; } = 300;
+    public int    IdleSeconds { get; set; } = 600;
 
     // Set to use a ComfyUI that is already running (another machine, say) instead of the one ARI installs and
     // starts itself. Empty means ARI manages its own.

@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Collections.Concurrent;
 using System.Linq;
+using System.Text;
 
 namespace ARI.LLM;
 
@@ -24,7 +26,7 @@ internal sealed class EditFile : Tool
         function = new
         {
             name        = "edit_file",
-            description = "Edit a file by line number. Two distinct operations — pick the right one:\n• REPLACE existing lines: set start_line and end_line (1-based inclusive) and new_string. For one line, start_line == end_line. An empty new_string deletes the range.\n• INSERT brand-new lines (a new method, field, using, etc.) WITHOUT changing any existing line: set insert_after to the line the new code should follow, and new_string to the new line(s). The text is added on its own line(s) right after that line; NOTHING is replaced (insert_after:0 inserts at the very top of the file). This is the correct way to add code between existing blocks — do NOT 'replace' an adjacent line (like a closing brace or a blank line) just to squeeze new code in: that drops the line you replaced and is the #1 cause of broken edits.\nMake the SMALLEST edit that does the job: change ONLY the lines that actually differ, and never re-type surrounding code that isn't changing (that is how lines get dropped or duplicated). To rename a symbol on lines 8, 10 and 13, edit those three lines individually. REQUIREMENT: call read_file first; you edit by the 1-based line numbers it shows. To do several changes at once, pass an 'edits' array of items — each item is either a replace ({start_line,end_line,new_string}) or an insert ({insert_after,new_string}); they resolve against the file as you last read it and apply together, so line numbers don't shift between them. Use write_file only for a brand-new file or a genuine whole-file rewrite — never to change a few lines.",
+            description = "Change lines of a file you have read, by the line numbers read_file shows. Replace: start_line, end_line, new_string (empty deletes). Insert without replacing anything: insert_after (0 = top) and new_string; use this to add code between lines, never replace a neighbouring line to squeeze code in. Change only the lines that differ and never retype unchanged code. Several changes at once: an edits array of those items, all against the file as you last read it. write_file is only for new files or whole rewrites.",
             parameters  = new
             {
                 type       = "object",
@@ -59,7 +61,32 @@ internal sealed class EditFile : Tool
         return null;
     }
 
-    internal override Task<ToolResult> Execute(string argsJson) => fs.Edit(argsJson).AsMutationResult();
+    // The edit window the chat opens beside it: built from the file before and after, handed to DisplayAfter
+    // (keyed by the call's args) once the edit has run. The tool card itself is unchanged.
+    private readonly ConcurrentDictionary<string, string> windows = new();
+
+    internal override async Task<ToolResult> Execute(string argsJson)
+    {
+        string? path = null; string? before = null;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(argsJson);
+            path   = doc.RootElement.TryGetProperty("path", out JsonElement p) ? p.GetString() : null;
+            before = path is null ? null : Encoding.UTF8.GetString(await fs.ReadBytes(path));
+        }
+        catch { /* a file we can't read ahead just gets no window */ }
+
+        ToolResult result = await fs.Edit(argsJson).AsMutationResult();
+
+        if (path is not null && before is not null)
+        {
+            try { windows[argsJson] = EditWindow.Marker(path, before, Encoding.UTF8.GetString(await fs.ReadBytes(path))); }
+            catch { }
+        }
+        return result;
+    }
+
+    internal override Func<string, string>? DisplayAfter => args => windows.TryRemove(args, out string? m) ? m : "";
 
     // Emit the enriched tool-start marker (with the +A/-R diff computed from args), not a plain label — so the
     // committed card keeps its diff badges and the client flips it Editing→Edited via the trailing batch-end.
@@ -125,5 +152,35 @@ internal static class DiffCounts
         if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int n)) return n;
         if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out int m)) return m;
         return 0;
+    }
+}
+
+/// <summary>Builds the marker that opens an edit window in the chat: the changed lines of a file with two lines of
+/// context either side, as base64 JSON so it survives the marker and transport. Empty when nothing changed.</summary>
+internal static class EditWindow
+{
+    private const int MaxLines = 16, MaxLineChars = 200;
+
+    internal static string Marker(string path, string before, string after)
+    {
+        string[] a = before.Length == 0 ? Array.Empty<string>() : before.Replace("\r\n", "\n").Split('\n'), b = after.Replace("\r\n", "\n").Split('\n');
+        int p = 0;
+        while (p < a.Length && p < b.Length && a[p] == b[p]) p++;
+        int s = 0;
+        while (s < a.Length - p && s < b.Length - p && a[a.Length - 1 - s] == b[b.Length - 1 - s]) s++;
+        if (p == a.Length && p == b.Length) return "";
+
+        string[] Cut(IEnumerable<string> lines) => lines.Take(MaxLines).Select(l => l.Length > MaxLineChars ? l[..MaxLineChars] + "…" : l).ToArray();
+        var payload = new
+        {
+            f = Path.GetFileName(path.Replace('\\', '/')),
+            p = path,
+            l = p + 1,
+            b = Cut(a[Math.Max(0, p - 2)..p]),
+            o = Cut(a[p..(a.Length - s)]),
+            n = Cut(b[p..(b.Length - s)]),
+            a = Cut(a[(a.Length - s)..Math.Min(a.Length, a.Length - s + 2)]),
+        };
+        return "\n<!--ari-edit:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload))) + "-->";
     }
 }

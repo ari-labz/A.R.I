@@ -73,7 +73,7 @@ internal sealed class Neighbours : Tool
 // literal text (search_files), this resolves by note title, alias, AND content — so an entity referred to
 // by an alias (e.g. "[Nickname]" → the "Person A" note) is still found. Reindexes first so results reflect edits
 // the agent just made. Ranked: exact title, then alias, then content.
-internal sealed class SearchBrain : Tool
+internal sealed class SearchBrain(Thread? thread = null) : Tool
 {
     private const int DEFAULT_LIMIT = 15;
 
@@ -114,6 +114,7 @@ internal sealed class SearchBrain : Tool
             .ToList();
         List<SearchResult> hits = Brain.Search(terms, limit);
         if (hits.Count == 0) return Task.FromResult<ToolResult>($"No notes found for '{query}'. It likely has no note yet.");
+        if (thread is not null) hits = MoodAnchors.Rank(thread.Key, hits);
 
         return Task.FromResult<ToolResult>(string.Join('\n', hits.Select(h => $"{h.Note.Title} — {h.Note.Name}")));
     }
@@ -201,7 +202,36 @@ internal sealed class RecallMemory(Thread? thread = null) : Tool
 
         string content = note.Content;
         if (content.Trim().Length == 0) return Task.FromResult<ToolResult>($"'{note.Title}' exists but has no content yet.");
+        if (thread is not null) MoodAnchors.Light(thread.Key, note);
         if (thread?.HasInView(content) == true) return Task.FromResult<ToolResult>($"{note.Title} is already open above, unchanged.");
         return Task.FromResult<ToolResult>($"# {note.Title}\n\n{note.SensitivityNotice}{content}");
+    }
+}
+
+/// <summary>A second look at memory, whenever she wants one: a plain question goes to the memory agent, which searches the brain and answers
+/// with what it found, or that there is nothing. The first recall happens before every reply; this is for a topic that comes up later.</summary>
+internal sealed class AskMemory(Thread thread) : Tool
+{
+    internal override string     Name   => "ask_memory";
+    internal override ToolAccess Access => ToolAccess.Read;
+    internal override object Schema => new
+    {
+        type = "function",
+        function = new
+        {
+            name        = "ask_memory",
+            description = "Ask your memory a question in plain words, e.g. \"do we know anything about Person B's workplace?\". A memory agent searches the brain and answers with what it finds, or says there is nothing. Use it when a topic comes up that the recall at the start of this reply didn't cover, or to check before saying you don't know.",
+            parameters  = new { type = "object", properties = new { question = new { type = "string", description = "What you want to know, as a question." } }, required = new[] { "question" } },
+        },
+    };
+
+    internal override async Task<ToolResult> Execute(string argsJson)
+    {
+        string question = Args.Parse(argsJson).Str("question").Trim();
+        if (question.Length == 0) return "Error: 'question' is required.";
+        if (!thread.HasMemoryAccess) return "Memory is not available in this conversation.";
+        if (Memory.Current is not { } memory) return "Memory is not running right now.";
+        string? notes = await memory.GetNotes(new List<ThreadMessage>(), question, null, thread.Ct, thread.IsGuarded ? PrivacyMode.Guarded : PrivacyMode.Unrestricted);
+        return string.IsNullOrWhiteSpace(notes) || Agent.IsNothingNew(notes) ? "No relevant memories." : notes.Trim();
     }
 }

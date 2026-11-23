@@ -48,9 +48,12 @@ public class ARI : BackgroundService, IModuleLifecycle
     private string modelsPath = "";
     private string ariPersistentDir = "";
 
-    public ARI(ILoggerFactory loggerFactory)
+    private readonly IHostApplicationLifetime lifetime;
+
+    public ARI(ILoggerFactory loggerFactory, IHostApplicationLifetime lifetime)
     {
         this.loggerFactory = loggerFactory;
+        this.lifetime      = lifetime;
         _logger = loggerFactory.CreateLogger("ARI.Core");
         Shared.InitialiseLogger(loggerFactory, "ARI.Core");
     }
@@ -176,6 +179,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         // Plugins (Discord, GitHub and the rest) are installed from .ari files; the host gives each one what it needs when it is created.
         CompiledPlugins.Host = new PluginHost(loggerFactory, () => llmModule, () => appStoppingToken, moduleTasks.Add);
         await ScriptPlugins.StartAsync();       // plugins written as source (the owner's, and Ari's) and plugins installed from built .ari files
+        _ = LLMModule.StartMcpServersAsync();   // MCP servers from McpServers.json; their tools appear as each one comes up
 
         // ── Calendar ──────────────────────────────────────────────────────────────
         // Refactor's daily walk (see DreamOrchestrator for why Curiosity/ProactiveMessage were retired
@@ -183,6 +187,8 @@ public class ARI : BackgroundService, IModuleLifecycle
         // schedule themselves the same way inside CalendarModule. Neither needs a shared scheduler.
         if (config.modules.Calendar.Enabled)
             StartCalendar();
+
+        AutoUpdate.Start(() => llmModule, lifetime, _logger, stoppingToken);
 
         _logger.LogInformation("ARI is ready.");
 

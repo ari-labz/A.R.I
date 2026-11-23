@@ -12,6 +12,10 @@ public class Prompt : ThreadItem
     [JsonPropertyName("username")]
     public string Username => AuthorName;
 
+    /// <summary>An id the sending client made up for this message, so it can tell its own optimistic copy from the one the server stores.</summary>
+    [JsonPropertyName("clientId")]
+    public string? ClientId { get; init; }
+
     /// <summary>Files attached to this specific message. Null when no attachments were sent.</summary>
     public List<Attachment>? Attachments { get; init; }
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 
 namespace ARI.LLM;
 
@@ -37,16 +38,25 @@ internal sealed class UnreadNotifier
             if (!unreadSince.TryGetValue(threadKey, out DateTime since) || since != started) return;   // read in the meantime
             unreadSince.TryRemove(threadKey, out _);
             if (hasWatchers(threadKey) || latest(threadKey) is not { } now || string.IsNullOrWhiteSpace(now.Text)) return;
-            await send(threadKey, Snippet(now.Text), now.OwnerId);
+            string snippet = Snippet(now.Text);
+            if (snippet.Length > 0) await send(threadKey, snippet, now.OwnerId);   // a reply that was only tool use has nothing to say
         });
     }
 
     /// <summary>The owner has opened the thread, or written in it: whatever was unread isn't any more.</summary>
     internal void Read(string threadKey) => unreadSince.TryRemove(threadKey, out _);
 
+    /// <summary>What the notification says: her words only, as plain text. Tool cards, edit windows and other display markers are
+    /// dropped, and markdown is reduced to its text, so a push never shows "<!--ari-tool-done:…-->" or "**".</summary>
     internal static string Snippet(string text)
     {
-        string flat = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+        string plain = Regex.Replace(text, @"<!--.*?-->", " ", RegexOptions.Singleline);
+        plain = Regex.Replace(plain, @"```[^\n]*\n?", " ");                              // code fences
+        plain = Regex.Replace(plain, @"!?\[([^\]]*)\]\([^)]*\)", "$1");                    // links and pictures: keep the words
+        plain = Regex.Replace(plain, @"(?m)^\s*(#{1,6}|>|[-*+]|\d+\.)\s+", "");             // headings, quotes, list bullets
+        plain = Regex.Replace(plain, @"(\*\*|__|\*|`|~~)", "");                           // bold, italics, code, strikethrough
+        plain = Regex.Replace(plain, @"<[^>]+>", " ");                                       // any other tag
+        string flat = Regex.Replace(plain, @"\s+", " ").Trim();
         return flat.Length <= 160 ? flat : flat[..157].TrimEnd() + "…";
     }
 }

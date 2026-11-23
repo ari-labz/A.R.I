@@ -139,8 +139,12 @@ button.link:hover { color: var(--text); background: transparent; }
 /* Footer */
 #footer {
     flex-shrink: 0;
-    text-align: center;
+    display: flex;
+    justify-content: center;
+    gap: 16px;
     font-size: 11px;
     color: var(--muted);
     padding: 4px 0 10px;
 }
+#login-row { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+#login-row[hidden] { display: none; }

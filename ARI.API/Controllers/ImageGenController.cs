@@ -47,7 +47,7 @@ public class ImageGenController(APIConfig config) : ControllerBase
             Checkpoint  = Get("Checkpoint", ""),
             ComfyUiPath = Get("ComfyUiPath", ""),
             Port        = Get("Port", 8188),
-            IdleSeconds = Get("IdleSeconds", 300),
+            IdleSeconds = Get("IdleSeconds", 600),
             RemoteUrl   = Get("RemoteUrl", ""),
             Sampler     = Get("Sampler", "euler"),
             Scheduler   = Get("Scheduler", "normal"),

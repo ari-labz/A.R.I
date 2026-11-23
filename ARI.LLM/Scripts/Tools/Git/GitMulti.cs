@@ -73,7 +73,7 @@ internal sealed class GitMulti : Tool
         function = new
         {
             name        = "git",
-            description = $"Run git against one of the project's repositories. Repos: {string.Join(", ", repos.Keys)}"
+            description = $"Run git against one of the project's repositories. Repos: {string.Join(", ", repos.Keys)}. Read-only commands (status, log, diff, show) are always fine. Only add, commit, push, merge, tag or branch changes when the user asked for that in this conversation; if you think one is needed, stop and ask first (\"am I good to commit this before continuing?\"). If a command is refused or blocked, stop and ask. Never get round it with another tool."
                         + (DefaultRepo is { } d ? $" (default: {d})" : "") + ". "
                         + "Works with any host (GitHub, GitLab, a company server). "
                         + "fetch before pull to preview incoming changes; diff to review before committing. "

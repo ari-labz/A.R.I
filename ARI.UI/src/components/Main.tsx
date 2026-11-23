@@ -1,3 +1,4 @@
+import type { PersonaOption } from "./PersonaPicker"
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import type { PipelineOption } from "../hooks/usePipelines"
 import Messages from "./Messages"
@@ -7,6 +8,7 @@ import DropOverlay from "./DropOverlay"
 import BrowserPane, { BrowserButton, BrowserNeedsYou } from "./BrowserPane"
 import { useBrowserSession } from "../hooks/useBrowserSession"
 import Hud, { type HudWindow } from "./Hud"
+import EditWindows, { editWindowsFrom, pageWindow, type EditWin } from "./EditWindows"
 import type { AppMode, PendingAttachment } from "../App"
 import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
 import { apiFetch } from "../auth"
@@ -21,12 +23,13 @@ interface Props {
     items:         ThreadItem[]
     isRemembering: boolean
     isStreaming:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "queued" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
     activeThread:  string | null
     isInternal:    boolean
     agentName:     string | null
     sidebarCollapsed: boolean
     onOpenSidebar: () => void
+    onSetSidebarCollapsed: (collapsed: boolean) => void
     pendingAttach: PendingAttachment[]
     threadAttach:  Attachment[]
     onSend:        (text: string) => void
@@ -57,12 +60,16 @@ interface Props {
     speechLevels:     { current: number[] }
     speechMic:        { current: number }
     serverReady:      boolean
+    devMode:          boolean
+    personas:         PersonaOption[]
+    personaId:        string
+    onChoosePersona:  (id: string) => void
 }
 
 export default function Main({
     mode, codeMode, shieldMode, planProposed, items, isRemembering, isStreaming, threadStatus,
     activeThread, isInternal, agentName,
-    sidebarCollapsed, onOpenSidebar,
+    sidebarCollapsed, onOpenSidebar, onSetSidebarCollapsed,
     pendingAttach, threadAttach,
     onSend, onUploadThreadFiles, onUploadMessageFiles,
     onRemoveThreadAttach, onRemoveMessageAttach,
@@ -71,7 +78,7 @@ export default function Main({
     pipelines, selectedPipeline, onPipelineChange,
     speechMode, onBeginSpeech, speechCaption, speechState,
     speechInCall, speechMuted, speechCallStart, onSpeechMute, onHangUp, speechLevels, speechMic,
-    safetyMode, onToggleSafety, serverReady,
+    safetyMode, onToggleSafety, serverReady, devMode, personas, personaId, onChoosePersona,
 }: Props) {
     const [threadPanelOpen, setThreadPanelOpen] = useState(false)
     const [closedWindows,   setClosedWindows]   = useState<Set<string>>(new Set())
@@ -79,6 +86,62 @@ export default function Main({
     const hudWindows = useMemo(
         () => speechInCall ? hudWindowsFrom(items, speechCallStart).filter(w => !closedWindows.has(w.id)) : [],
         [items, speechInCall, speechCallStart, closedWindows])
+    // Files Ari edits open as windows beside the chat: the chat slides left and the sidebar folds away, then both
+    // come back when the next message clears them.
+    // A page Ari showed opens here rather than in the chat; its card in the message reopens it, and a page window can be closed.
+    // Both are forgotten at the next message, when the windows clear.
+    const [reopened,    setReopened]    = useState<EditWin | null>(null)
+    const [closedPages, setClosedPages] = useState<Set<string>>(new Set())
+    const userTurns = useMemo(() => items.filter(i => i.type === "userMessage").length, [items])
+    useEffect(() => { setReopened(null); setClosedPages(new Set()) }, [userTurns, activeThread])
+    useEffect(() => {
+        const open = (e: Event) => {
+            const card = (e.target as HTMLElement | null)?.closest?.<HTMLElement>(".ari-visual-card")
+            if (!card || (e instanceof KeyboardEvent && e.key !== "Enter")) return
+            const w = pageWindow(card.dataset.visualSrc ?? "", card.dataset.visualName ?? "page")
+            setClosedPages(c => { const n = new Set(c); n.delete(w.id); return n })
+            setReopened(w)
+        }
+        document.addEventListener("click", open); document.addEventListener("keydown", open)
+        return () => { document.removeEventListener("click", open); document.removeEventListener("keydown", open) }
+    }, [])
+    const liveEdits = useMemo(() => {
+        if (speechMode) return []
+        const wins = editWindowsFrom(items).filter(w => !closedPages.has(w.id))
+        return reopened && !closedPages.has(reopened.id) && !wins.some(w => w.id === reopened.id) ? [...wins, reopened] : wins
+    }, [items, speechMode, reopened, closedPages])
+    const [shownEdits, setShownEdits] = useState(liveEdits)
+    const [leaving, setLeaving] = useState(false)
+    useEffect(() => {
+        if (liveEdits.length) { setShownEdits(liveEdits); setLeaving(false); return }
+        if (!shownEdits.length) return
+        setLeaving(true)
+        const t = window.setTimeout(() => { setShownEdits([]); setLeaving(false) }, 900)
+        return () => clearTimeout(t)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [liveEdits])
+    const editsOpen = shownEdits.length > 0 && !leaving
+    // The chat column narrows to its content width as windows open; the header logo is shifted by half the difference so it stays put.
+    const mainRef = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+        const el = mainRef.current
+        if (!el) return
+        const measure = () => {
+            const colMax = parseFloat(getComputedStyle(el).getPropertyValue("--col-max")) || 760
+            const target = Math.min(el.clientWidth * 0.6, colMax + 48)
+            el.style.setProperty("--header-shift", `${(el.clientWidth - target) / 2}px`)
+        }
+        measure()
+        const ro = new ResizeObserver(measure)
+        ro.observe(el)
+        return () => ro.disconnect()
+    }, [])
+    const sidebarFoldedForEdits = useRef(false)
+    useEffect(() => {
+        if (editsOpen && !sidebarCollapsed) { sidebarFoldedForEdits.current = true; onSetSidebarCollapsed(true) }
+        else if (!editsOpen && !shownEdits.length && sidebarFoldedForEdits.current) { sidebarFoldedForEdits.current = false; onSetSidebarCollapsed(false) }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [editsOpen, shownEdits.length])
     const [dropVisible,     setDropVisible]     = useState(false)
     const [dropHovering,    setDropHovering]    = useState(false)
     const dragCounterRef = useRef(0)
@@ -160,10 +223,12 @@ export default function Main({
         mode === "active" ? "active" : "",
         codeMode ? "code-mode" : "",
         speechMode ? "speech-mode" : "",
+        editsOpen ? "with-windows" : "",
+        editsOpen && shownEdits.some(w => w.visual) ? "with-page" : "",
     ].filter(Boolean).join(" ")
 
     return (
-        <div id="main" className={mainClasses}>
+        <div id="main" ref={mainRef} className={mainClasses}>
             {/* floating toggle when sidebar collapsed */}
             <button
                 id="topbar-toggle"
@@ -176,6 +241,12 @@ export default function Main({
                 </svg>
             </button>
 
+            {devMode && (
+                <span id="dev-chip" tabIndex={0} aria-label="Dev mode is on">
+                    <i aria-hidden="true" />DEV MODE
+                    <span className="dev-chip-tip" role="tooltip">Dev mode is on. Conversations in dev mode are not saved and are lost when ARI restarts.</span>
+                </span>
+            )}
             <div id="chat-col">
                 {/* animated logo header */}
                 <div id="main-header">
@@ -274,9 +345,15 @@ export default function Main({
                         codeMode={shieldMode}
                         safetyMode={safetyMode}
                         onToggleSafety={onToggleSafety}
+                        personas={personas}
+                        personaId={personaId}
+                        onChoosePersona={onChoosePersona}
                     />
                 )}
             </div>
+
+            {shownEdits.length > 0 && <EditWindows windows={shownEdits} leaving={leaving}
+                onClose={id => setClosedPages(c => new Set([...c, id]))} />}
 
             <BrowserPane session={browser} />
         </div>

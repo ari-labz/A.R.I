@@ -18,14 +18,12 @@
         "archive",
         "edit_file",
         "write_file",
-        "deliver_file"
-      ]
+        "deliver_file", "edit_files"]
     },
     "coding_tools": {
-      "Description": "Build the current project to verify edits compile.",
+      "Description": "Build the current project to verify edits compile; code_rule saves a coding rule the owner taught you so every future review checks it.",
       "Tools": [
-        "build_project"
-      ]
+        "build_project", "code_rule"]
     },
     "memory_tools": {
       "Description": "Read and write Ari's personal brain (memory graph) \u2014 never through the generic filesystem tools. search_brain finds notes by title/alias/content \u2014 returns 'title \u2014 name' pairs. recall_memory reads the full content of a note by that name. create_memory adds a new note (fails if the name already exists); edit_memory replaces an existing note's content (fails if the name does NOT exist \u2014 and optionally renames/retypes it); delete_memory removes one. All three take a commit_message explaining what changed and why, and commit to the brain git repo immediately, one commit per note. neighbours shows graph connections around a note. memories_on gives everything stored for one calendar day. These tools access Ari's own stored memories, not a project filesystem.",
@@ -158,10 +156,9 @@
       ]
     },
     "visual_tools": {
-      "Description": "Show a visual in the chat itself: show_visual displays HTML you write (a chart, diagram, table, timeline, calculator or small interactive page) under your message. Use it when a picture or something interactive explains better than words.",
+      "Description": "See 3D models (preview_model: .glb .obj .stl .fbx), animation frames (preview_animation), and show HTML visuals in the chat (show_visual: charts, diagrams, tables, small interactive pages).",
       "Tools": [
-        "show_visual"
-      ]
+        "show_visual", "preview_animation", "preview_model"]
     },
     "image_tools": {
       "Description": "Pictures: ocr reads the text out of an image or a scanned PDF, edit_image resizes, crops, rotates, adds text, adjusts or converts a picture. To look at a picture and understand it, open it with read_file; to generate one use generate_image.",

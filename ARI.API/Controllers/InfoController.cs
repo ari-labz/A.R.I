@@ -45,6 +45,7 @@ public class InfoController : ControllerBase
             starting      = servers.Any(s => s.Status == ServerStatus.Starting),
             serverCount   = servers.Count,
             protocol      = ReadProtocol(),
+            devMode       = Shared.DevMode,   // the chat shows a red chip while this is on
         });
     }
 

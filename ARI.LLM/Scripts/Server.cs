@@ -19,6 +19,11 @@ public class NamedSlot
     [JsonPropertyName("id")]           public Guid   Id           { get; init; } = Guid.NewGuid();
     [JsonPropertyName("name")]         public string Name         { get; set; } = "";
     [JsonPropertyName("contextLimit")] public int    ContextLimit { get; set; } = 8192;
+
+    /// <summary>Slots that share a pool are interchangeable lanes: a conversation bound to one of them is given the least
+    /// busy lane in the pool when it starts, keeps that lane, and so can run alongside conversations on the others. Give
+    /// the lanes of a pool the same context limit. Empty = a lane of its own (an agent always uses this exact slot).</summary>
+    [JsonPropertyName("pool")]        public string? Pool         { get; set; }
 }
 
 /// <summary>
@@ -64,6 +69,68 @@ public class Server : IDisposable
 
     [JsonIgnore]
     public int ParallelSlots => Math.Max(1, Slots.Count);
+
+    // ── Lanes ────────────────────────────────────────────────────────────────────
+    // A pooled slot is a lane of its own: one request at a time per lane, but lanes run side by side (llama-server
+    // batches them). Slots without a pool keep the old behaviour, sharing the server's single queue.
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, LLMQueue> laneQueues = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, int>      laneLoad   = new();
+    private int laneTurn;
+
+    internal LLMQueue QueueForLane(NamedSlot lane) => laneQueues.GetOrAdd(lane.Id, _ => new LLMQueue());
+
+    /// <summary>Requests currently running or queued on a lane.</summary>
+    internal int LaneLoad(NamedSlot lane) => laneLoad.TryGetValue(lane.Id, out int n) ? n : 0;
+    internal void LaneBusy(NamedSlot lane, int delta) => laneLoad.AddOrUpdate(lane.Id, Math.Max(0, delta), (_, n) => Math.Max(0, n + delta));
+
+    /// <summary>The lane a conversation uses for a slot's pool: the one it already has, else the least busy lane in the
+    /// pool (round robin on a tie), kept for the rest of the conversation. A slot with no pool is its own lane.</summary>
+    internal NamedSlot LaneFor(NamedSlot basis, System.Collections.Concurrent.ConcurrentDictionary<string, Guid> assigned)
+    {
+        if (string.IsNullOrWhiteSpace(basis.Pool)) return basis;
+        string pool = basis.Pool.Trim();
+        List<NamedSlot> lanes = Slots.Where(s => string.Equals(s.Pool?.Trim(), pool, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (lanes.Count <= 1) return basis;
+        if (assigned.TryGetValue(pool, out Guid id) && lanes.FirstOrDefault(s => s.Id == id) is { } kept) return kept;
+        int start = Interlocked.Increment(ref laneTurn);
+        NamedSlot pick = Enumerable.Range(0, lanes.Count).Select(i => lanes[(start + i) % lanes.Count]).MinBy(LaneLoad)!;
+        assigned[pool] = pick.Id;
+        return pick;
+    }
+
+    /// <summary>Slots an agent has named for itself (Voice, say). Agents bound only to the server never use these.</summary>
+    internal readonly HashSet<Guid> Held = new();
+
+    /// <summary>The slots an agent bound only to this server may take turns on: every slot nobody holds.</summary>
+    internal List<NamedSlot> FreeLanes() { lock (Held) return Slots.Where(s => !Held.Contains(s.Id)).ToList(); }
+
+    /// <summary>The slot for this turn of a conversation whose agent is bound to the server, not a slot. It keeps the slot it had
+    /// (its prompt is cached there) while that slot is idle and big enough; otherwise it takes the smallest idle slot it fits in;
+    /// with none idle, it waits on the least busy slot it fits in. <paramref name="needed"/> is the turn's size in tokens.</summary>
+    internal NamedSlot? PickLane(System.Collections.Concurrent.ConcurrentDictionary<string, Guid> assigned, int needed)
+    {
+        List<NamedSlot> lanes = FreeLanes();
+        if (lanes.Count == 0) return null;
+        string key = "server:" + Id;
+        List<NamedSlot> fits = lanes.Where(l => l.ContextLimit >= needed).ToList();
+        if (fits.Count == 0) fits = [lanes.MaxBy(l => l.ContextLimit)!];   // too big for any: the biggest, and compaction trims it
+        NamedSlot? current = assigned.TryGetValue(key, out Guid id) ? fits.FirstOrDefault(l => l.Id == id) : null;
+        NamedSlot pick = current is not null && LaneLoad(current) == 0 ? current
+            : fits.Where(l => LaneLoad(l) == 0).OrderBy(l => l.ContextLimit).FirstOrDefault()
+              ?? current
+              ?? fits.OrderBy(LaneLoad).ThenBy(l => l.ContextLimit).First();
+        assigned[key] = pick.Id;
+        return pick;
+    }
+
+    /// <summary>The slot this conversation last used on this server, if its agent floats across slots.</summary>
+    internal NamedSlot? AssignedLane(System.Collections.Concurrent.ConcurrentDictionary<string, Guid> assigned) =>
+        assigned.TryGetValue("server:" + Id, out Guid id) ? Slots.FirstOrDefault(s => s.Id == id) : null;
+
+    /// <summary>True when this slot shares a pool with at least one other slot, so its requests queue per lane.</summary>
+    internal bool IsPooled(NamedSlot slot) =>
+        !string.IsNullOrWhiteSpace(slot.Pool) && Slots.Count(s => string.Equals(s.Pool?.Trim(), slot.Pool.Trim(), StringComparison.OrdinalIgnoreCase)) > 1;
 
     /// <summary>Sum of every slot's ContextLimit — may legitimately exceed ContextSize (not all slots
     /// peak at once under kv-unified's shared pool), but the UI should warn when it does.</summary>

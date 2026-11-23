@@ -149,19 +149,7 @@ internal static class PersistedThreads
                 SavedAt = DateTime.UtcNow,
             };
 
-            StringBuilder sb = new();
-            sb.AppendLine(JsonSerializer.Serialize(meta, Json));
-            foreach (ThreadItem item in items)
-                if (ToRecord(thread.Key, item) is { } rec)
-                    sb.AppendLine(JsonSerializer.Serialize(rec, Json));
-
-            lock (WriteGate)
-            {
-                string file = FileFor(thread.Key);
-                string tmp  = file + ".tmp";
-                File.WriteAllText(tmp, sb.ToString());
-                File.Move(tmp, file, overwrite: true);
-            }
+            WriteFile(FileFor(thread.Key), meta, items, thread.Key, attachments: true);
         }
         catch (Exception ex)
         {
@@ -169,13 +157,46 @@ internal static class PersistedThreads
         }
     }
 
-    private static ItemRec? ToRecord(string key, ThreadItem item)
+    /// <summary>Writes the conversation as it stands to <paramref name="file"/> in the same format, whether or not it is ever saved
+    /// as a thread; Engram's memory queue keeps its snapshots this way. <paramref name="swept"/> is how many of its messages earlier
+    /// snapshots already hold. Attachments are left out: memory reads only the words.</summary>
+    internal static void WriteSnapshot(Thread thread, string file, int swept)
+    {
+        List<ThreadItem> items = thread.History.ToList().Where(i => i is not Response { State: State.Streaming }).ToList();
+        Meta meta = new()
+        {
+            Key = thread.Key, Pipeline = thread.Pipeline.ToString(), OwnerId = thread.OwnerId, Title = thread.Title,
+            Medium = thread.Medium.ToString(), ChannelService = thread.ChannelService, ChannelTarget = thread.ChannelTarget,
+            FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault, IsRemoteProject = thread.IsRemoteProject,
+            IsAdminChat = thread.IsAdminChat, HasMemoryAccess = thread.HasMemoryAccess, LastMessageAt = thread.LastMessageAt,
+            ItemCount = items.Count, EngramSwept = swept, Messages = Engram.ConversationCount(items), SavedAt = DateTime.UtcNow,
+        };
+        WriteFile(file, meta, items, thread.Key, attachments: false);
+    }
+
+    private static void WriteFile(string file, Meta meta, List<ThreadItem> items, string key, bool attachments)
+    {
+        StringBuilder sb = new();
+        sb.AppendLine(JsonSerializer.Serialize(meta, Json));
+        foreach (ThreadItem item in items)
+            if (ToRecord(key, item, attachments) is { } rec)
+                sb.AppendLine(JsonSerializer.Serialize(rec, Json));
+
+        lock (WriteGate)
+        {
+            string tmp = file + ".tmp";
+            File.WriteAllText(tmp, sb.ToString());
+            File.Move(tmp, file, overwrite: true);
+        }
+    }
+
+    private static ItemRec? ToRecord(string key, ThreadItem item, bool attachments = true)
     {
         switch (item)
         {
             case Prompt p:
                 return new ItemRec { T = "prompt", Ts = p.Timestamp, Visible = p.IsVisible, Author = p.AuthorName, Text = p.Text,
-                                     Attachments = SaveAttachments(key, p.Attachments) };
+                                     Attachments = attachments ? SaveAttachments(key, p.Attachments) : null };
             case InternalPrompt ip:
                 return new ItemRec { T = "internalPrompt", Ts = ip.Timestamp, Visible = ip.IsVisible, Text = ip.Text };
             case Response r:
@@ -297,10 +318,15 @@ internal static class PersistedThreads
         catch { return null; }
     }
 
+    /// <summary>The metadata line of a file written by <see cref="WriteSnapshot"/>.</summary>
+    internal static Meta? ReadSnapshotMeta(string file) => ReadMetaFile(file);
+
     /// <summary>Fills <paramref name="thread"/> (a freshly created, empty Dialogue thread) from its saved snapshot.</summary>
-    internal static bool Restore(string key, Thread thread)
+    internal static bool Restore(string key, Thread thread) => RestoreFile(key, FileFor(key), thread);
+
+    /// <summary>Fills <paramref name="thread"/> from any file in the saved-thread format, such as one of Engram's queued snapshots.</summary>
+    internal static bool RestoreFile(string key, string file, Thread thread)
     {
-        string file = FileFor(key);
         if (!File.Exists(file)) return false;
         try
         {

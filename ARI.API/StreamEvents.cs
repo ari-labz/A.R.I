@@ -31,11 +31,21 @@ public sealed class StreamEvents(JsonSerializerOptions json)
     /// <summary>The events for one update of the reply-so-far (what the older format sends as a whole).</summary>
     public IEnumerable<string> FromAccumulated(string accumulated)
     {
+        if (accumulated.StartsWith("[REWRITE]", StringComparison.Ordinal))
+        {
+            // The reflector is changing part of the reply: this text out, that text in. Nothing in the reply so far moves until it lands.
+            string[] parts = accumulated["[REWRITE]".Length..].Split('\u0001');
+            yield return Format("message.rewrite", new { oldText = parts.ElementAtOrDefault(0), newText = parts.ElementAtOrDefault(1), style = parts.ElementAtOrDefault(2) ?? "cursor" });
+            yield break;
+        }
+
         if (accumulated.StartsWith("[SPLIT]", StringComparison.Ordinal))
         {
             string[] parts = accumulated["[SPLIT]".Length..].Split('\u0001');
             previous = [];   // what follows is a new message
-            yield return Format("message.split", new { kind = parts.ElementAtOrDefault(0), user = parts.ElementAtOrDefault(1), text = parts.ElementAtOrDefault(2) });
+            // kind, user, the sender's client id, then the text (the id is missing in notices from older servers)
+            bool hasId = parts.Length >= 4;
+            yield return Format("message.split", new { kind = parts.ElementAtOrDefault(0), user = parts.ElementAtOrDefault(1), clientId = hasId && parts[2].Length > 0 ? parts[2] : null, text = hasId ? string.Join('\u0001', parts.Skip(3)) : parts.ElementAtOrDefault(2) });
             yield break;
         }
 

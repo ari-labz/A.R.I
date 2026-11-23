@@ -1,3 +1,5 @@
+import ReviewTimeline, { reviewStepsOf } from "./ReviewTimeline"
+import { BrainIcon } from "./ThreadIcons"
 import { Fragment, useEffect, useRef, useState, useCallback } from "react"
 import type { ThreadItem, Attachment } from "../hooks/useThreads"
 import { setBubbleMd, setBubbleBlocks, ensureImageLightbox } from "../hooks/useMarkdown"
@@ -321,7 +323,7 @@ interface Props {
     isInternal:    boolean
     agentName:     string | null
     processing?:   boolean
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "queued" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
 }
 
 function fileExtLabel(name: string) {
@@ -413,7 +415,7 @@ function AriResponse({ item, isInternal, agentName, msgIndex, threadStatus, acti
     isInternal: boolean
     agentName: string | null
     msgIndex: number
-    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "queued" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
+    threadStatus?: "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
     activeThread: string | null
     feedback?: Feedback
     onFeedbackChange: (timestamp: string, feedback: Feedback | null) => void
@@ -776,19 +778,13 @@ function animateDiffBadges(root: HTMLElement) {
 }
 
 /// The "A·R·I will remember that" card. It is put in the chat at the point where she started remembering, so whatever happens after
-/// (a queued reply, new messages) stacks underneath it. It says "Adding to memory" with moving dots while she works, "Added to memory" after.
+/// (new messages) stacks underneath it. It says "Adding to memory" with moving dots while she works, "Added to memory" after.
 function MemoryMarker({ done }: { done: boolean }) {
     const aiName = useAssistantName()
     return (
         <div className="memory-marker" role="status" aria-live="polite">
             <div className="memory-marker-icon" aria-hidden="true">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M15.5 13a3.5 3.5 0 0 0 -3.5 3.5v1a3.5 3.5 0 0 0 7 0v-1.8" />
-                    <path d="M8.5 13a3.5 3.5 0 0 1 3.5 3.5v1a3.5 3.5 0 0 1 -7 0v-1.8" />
-                    <path d="M17.5 16a3.5 3.5 0 0 0 0 -7h-.5" />
-                    <path d="M6.5 16a3.5 3.5 0 0 1 0 -7h.5" />
-                    <path d="M12 3v6" />
-                </svg>
+                <BrainIcon size={22} />
             </div>
             <div className="memory-marker-text">
                 <span className="memory-marker-title">{aiName} will remember that</span>
@@ -796,18 +792,6 @@ function MemoryMarker({ done }: { done: boolean }) {
                     {done ? "Added to memory" : <>Adding to memory<span className="memory-marker-dots"><b /><b /><b /></span></>}
                 </span>
             </div>
-        </div>
-    )
-}
-
-/// Shown under a message whose reply has not started because memory is still being saved.
-function ReplyQueued() {
-    return (
-        <div className="reply-queued" role="status">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
-            </svg>
-            <span>Reply queued. Waiting for memory to finish</span>
         </div>
     )
 }
@@ -959,17 +943,16 @@ export default function Messages({ items, isRemembering, activeThread, isInterna
                     data:            Object.keys(mergedData).length > 0 ? mergedData : undefined,
                 } as ThreadItem
                 const isLast = ui === units.length - 1
-                // Her reply hasn't begun because memory is still being saved: say so, instead of claiming she is reading.
-                const noOutput = !merged.content && !((last as { blocks?: unknown[] }).blocks?.length)
-                if (isLast && merged.isStreaming && noOutput && (threadStatus === "queued" || isRemembering)) return <ReplyQueued key={u.key} />
-                return <AriResponse key={u.key} item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key}
-                                    threadStatus={isLast ? threadStatus : undefined} activeThread={activeThread}
-                                    feedback={feedback[merged.timestamp]} onFeedbackChange={setFeedback} />
+                const review = reviewStepsOf(u.parts)
+                return <Fragment key={u.key}>
+                    <AriResponse item={merged} isInternal={isInternal} agentName={agentName} msgIndex={u.key}
+                                 threadStatus={isLast ? threadStatus : undefined} activeThread={activeThread}
+                                 feedback={feedback[merged.timestamp]} onFeedbackChange={setFeedback} />
+                    {review && <ReviewTimeline steps={review} />}
+                </Fragment>
             })()}</Fragment>)}
 
             {markers.filter(m => m.at === -1 || m.at >= items.length).map((m, i) => <MemoryMarker key={`mm-end-${i}`} done={m.done} />)}
-
-            {threadStatus === "queued" && units.length > 0 && units[units.length - 1].kind === "item" && <ReplyQueued />}
 
             {threadStatus === "syncing" && (
                 <div className="msg-row assistant" id="typing-indicator">

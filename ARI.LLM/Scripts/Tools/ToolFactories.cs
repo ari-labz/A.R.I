@@ -42,6 +42,8 @@ internal static class ToolFactories
         ["write_pdf"]      = t => With<WritePdf>(t),
         ["make_chart"]     = t => With<MakeChart>(t),
         ["show_visual"]    = t => t.Medium == ThreadMedium.Channel ? null : new ShowVisual(t),
+        ["preview_animation"] = t => new PreviewAnimation(t),
+        ["preview_model"]  = t => new PreviewModel(t),
         ["archive"]        = t => With<Archive>(t),
         ["ocr"]            = t => With<Ocr>(t),
         ["edit_image"]     = t => With<EditImage>(t),
@@ -52,9 +54,11 @@ internal static class ToolFactories
         ["search_files"]   = t => Fs(t) is { } fs ? new SearchFiles(fs)   : null,
         ["find_files"]     = t => Fs(t) is { } fs ? new FindFiles(fs)     : null,
         ["edit_file"]      = t => Fs(t) is { } fs ? new EditFile(fs)      : null,
+        ["edit_files"]     = t => Fs(t) is { } fs ? new EditFiles(fs)     : null,
         ["write_file"]     = t => Fs(t) is { } fs ? new WriteFile(fs)     : null,
 
         ["build_project"] = t => t is { FilesystemRoot: { } r, IsRemoteProject: false } ? new BuildProjectTool(t, r) : null,
+        ["code_rule"]     = t => t.Pipeline == ThreadPipeline.Code ? new CodeRuleTool() : null,
 
         // No index, no database, nothing shared with ARI.Brain — see SearchVault.cs.
         ["search_vault"] = t => Fs(t) is { } fs ? new SearchVault(fs) : null,
@@ -80,9 +84,10 @@ internal static class ToolFactories
         ["propose_persona_edit"] = t => new ProposePersonaEdit(t),
 
         // Brain tools — always available; use the global brain index and vault, no project binding needed.
-        ["search_brain"]   = _ => new SearchBrain(),
+        ["search_brain"]   = t => new SearchBrain(t),
         ["memories_on"]    = _ => new MemoriesOn(),
         ["recall_memory"]  = t => new RecallMemory(t),
+        ["ask_memory"]     = t => new AskMemory(t),
         ["create_memory"]  = _ => Brain.Ready ? new CreateMemory() : null,
         ["edit_memory"]    = _ => Brain.Ready ? new EditMemory() : null,
         ["delete_memory"]  = _ => Brain.Ready ? new DeleteMemory() : null,
@@ -176,7 +181,7 @@ internal static class ToolFactories
     // Filesystem tool names that unlock when a FilesystemRoot is set.
     // Read-only subset registered for dream/read-only agents; full set for normal agents.
     private static readonly string[] FilesystemReadToolNames  = ["preview_file", "read_file", "read_document", "read_docx", "read_xlsx", "read_pdf", "read_pptx", "list_directory", "search_files", "find_files", "search_vault"];
-    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "write_file", "write_xlsx", "edit_xlsx", "write_docx", "edit_docx", "write_pptx", "write_pdf", "make_chart", "ocr", "edit_image", "convert_document", "archive", "pdf_merge", "pdf_extract_pages", "deliver_file", "create_scratchpad", "build_project"];
+    private static readonly string[] FilesystemWriteToolNames = ["edit_file", "edit_files", "write_file", "write_xlsx", "edit_xlsx", "write_docx", "edit_docx", "write_pptx", "write_pdf", "make_chart", "ocr", "edit_image", "convert_document", "archive", "pdf_merge", "pdf_extract_pages", "deliver_file", "create_scratchpad", "build_project"];
 
     /// <summary>
     /// Registers all filesystem tools that now resolve for the thread. Call this immediately after
@@ -195,7 +200,7 @@ internal static class ToolFactories
                 tool.Register(thread);
     }
 
-    internal static IEnumerable<string> AllNames() => _factories.Keys.Concat(CustomTools.Names).Concat(PluginTools.Names).Distinct(StringComparer.OrdinalIgnoreCase);
+    internal static IEnumerable<string> AllNames() => _factories.Keys.Concat(CustomTools.Names).Concat(PluginTools.Names).Concat(McpTools.Names).Distinct(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True for a tool ARI itself ships, not one a plugin brought.</summary>
     internal static bool IsCoreBuiltIn(string name) => _factories.ContainsKey(name);
@@ -232,11 +237,12 @@ internal static class ToolFactories
     // Tools that reach the Master's own life, so anyone else she talks to never gets them.
     private static readonly HashSet<string> MASTER_ONLY_TOOLS = new(StringComparer.OrdinalIgnoreCase)
     {
-        "search_brain", "recall_memory", "memories_on", "create_memory", "edit_memory", "delete_memory", "neighbours",
+        "search_brain", "recall_memory", "ask_memory", "memories_on", "create_memory", "edit_memory", "delete_memory", "neighbours",
         "create_event", "create_reminder", "list_events", "delete_entry", "propose_persona_edit",
         "list_projects", "create_project", "rename_project", "bind_project", "set_project_path",
         "git", "git_clone",
         "build_project",   // runs the project's own build scripts on this machine
+        "code_rule",       // changes the rules every future code review holds the Coder to
         // Run code, read other people's conversations, or change what Ari can do: the owner only.
         "shell", "shell_job", "run_code", "http_request", "download_file", "ssh", "list_chats", "read_chat", "search_chats",
         "browser", "list_skills", "read_skill", "write_skill", "delete_skill",
@@ -254,6 +260,13 @@ internal static class ToolFactories
         {
             if (!PluginTools.IsAvailable(owned.Plugin) || owned.Tool.Create(thread) is not { } made) return false;
             tool = made;
+            return true;
+        }
+        // An MCP server's tools can do anything that server can, so they are the owner's only.
+        if (McpTools.IsMcp(toolName))
+        {
+            if (thread.IsGuarded || McpTools.Create(toolName) is not { } mcp) return false;
+            tool = mcp;
             return true;
         }
         // Custom tools are available to everyone Ari talks to. Only the admin can add or change one, in the control panel.

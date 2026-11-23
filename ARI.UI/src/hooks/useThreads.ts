@@ -9,6 +9,8 @@ export interface ThreadEntry {
     isCodeMode:   boolean
     pipeline:     string  // "dialogue" | "code" | "speech"
     state:        string
+    status?:      ThreadStatus
+    personaId?:   string
     lastMessageAt: string
     projectName?: string | null
     projectId?:   string | null
@@ -86,6 +88,8 @@ export interface ThreadItem {
     content:         string
     blocks?:         ContentBlock[]
     username?:       string
+    /** Made up by the sender, so its own optimistic copy of a message can be told from the stored one. */
+    clientId?:       string
     timestamp:       string
     thinkingSeconds?: number
     prefillSeconds?:  number
@@ -231,7 +235,7 @@ export function openWatchStream(
     return es
 }
 
-export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "queued" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
+export type ThreadStatus = "idle" | "prefilling" | "thinking" | "typing" | "remembering" | "researching" | "syncing" | "generating" | "waiting" | "working"
 
 export interface WatchEvent {
     deleted?:    boolean

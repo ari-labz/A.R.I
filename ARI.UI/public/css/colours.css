@@ -100,6 +100,8 @@
     --col-msg-row-assistant-bubble-colour: #1a1a1a;
     --col-code-msg-row-assistant-bubble-colour: #dde3e8;
     --col-code-bubble-h1-colour: #e8edf0;
+    --col-code-bubble-link-colour: #7fd0de;
+    --col-code-bubble-link-hover-colour: #cadde2;
     --col-bubble-code-colour: #f3f4f6;
     --col-bubble-code-colour-2: #e5e7eb;
     --col-code-bubble-code-colour: #1e2830;

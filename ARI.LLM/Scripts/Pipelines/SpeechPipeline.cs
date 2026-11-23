@@ -58,12 +58,6 @@ internal sealed class SpeechPipeline : Pipeline
         string?              localPath,
         Func<string, Task>?  onTextDelta = null)
     {
-        if (engram?.BlocksReply(threadKey) == true)
-        {
-            Shared.Logger.LogInformation("[Speech] ({Thread}) waiting for Engram sweep to finish before processing.", threadKey);
-            await engram.WaitForSweep(threadKey, cts.Token);
-        }
-
         Shared.Logger.LogInformation("[Speech] ({Thread}) prompt\n\"{Prompt}\"", threadKey, effectivePrompt);
 
         string? contextSummary = context?.GetContext(threadKey);

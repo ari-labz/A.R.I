@@ -20,8 +20,11 @@ public class SystemInfo
         this.modelsPath = modelsPath;
     }
 
+    /// <summary>Memory in use on the machine (on Linux in a container with a memory limit, the container's), in bytes.</summary>
     public long GetTotalRamBytes()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) && LinuxUsedBytes() is long linuxUsed) return linuxUsed;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && WindowsMemory() is { } win) return win.Total - win.Available;
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             return Process.GetCurrentProcess().WorkingSet64;
 
@@ -152,6 +155,11 @@ public class SystemInfo
 
     public double GetSwapMb()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            try { return MemInfoSwapMb(File.ReadAllText("/proc/meminfo")); }
+            catch { return 0; }
+        }
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return 0;
         try
         {
@@ -337,24 +345,99 @@ public class SystemInfo
             }
             catch { }
         }
-        else // Linux
+        else // Linux: the machine's memory, or the container's limit when it has one
         {
             try
             {
-                string meminfo = System.IO.File.ReadAllText("/proc/meminfo");
-                foreach (string line in meminfo.Split('\n'))
-                {
-                    if (line.StartsWith("MemTotal:"))
-                    {
-                        string val = line["MemTotal:".Length..].Trim().Replace("kB", "").Trim();
-                        if (long.TryParse(val, out long kb)) return kb * 1024;
-                    }
-                }
+                if (MemInfo(File.ReadAllText("/proc/meminfo")).TryGetValue("MemTotal", out long total))
+                    return CgroupLimit(CgroupDir) is long limit && limit < total ? limit : total;
             }
             catch { }
         }
         return 0;
     }
+
+    // ── Linux ─────────────────────────────────────────────────────────────────────────────────────────────────
+    // /proc/meminfo describes the whole machine (inside Docker too). On a machine whose GPU shares system memory, such as a
+    // DGX Spark, the models a server loads come out of this same pool, so "in use" includes them. A container started with a
+    // memory limit is measured against that limit instead, from its cgroup.
+
+    private const string CgroupDir = "/sys/fs/cgroup";
+
+    private static long? LinuxUsedBytes()
+    {
+        try
+        {
+            if (CgroupLimit(CgroupDir) is not null && CgroupUsage(CgroupDir) is long inContainer) return inContainer;
+            return MemInfoUsed(File.ReadAllText("/proc/meminfo"));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>/proc/meminfo's fields in bytes (it gives kB).</summary>
+    internal static Dictionary<string, long> MemInfo(string text)
+    {
+        Dictionary<string, long> fields = new(StringComparer.Ordinal);
+        foreach (string line in text.Split('\n'))
+        {
+            int colon = line.IndexOf(':');
+            if (colon <= 0) continue;
+            string value = line[(colon + 1)..].Trim();
+            if (value.EndsWith("kB", StringComparison.Ordinal)) value = value[..^2].Trim();
+            if (long.TryParse(value, out long kb)) fields[line[..colon]] = kb * 1024;
+        }
+        return fields;
+    }
+
+    internal static long? MemInfoUsed(string text)
+    {
+        Dictionary<string, long> m = MemInfo(text);
+        return m.TryGetValue("MemTotal", out long total) && m.TryGetValue("MemAvailable", out long available) ? total - available : null;
+    }
+
+    internal static double MemInfoSwapMb(string text)
+    {
+        Dictionary<string, long> m = MemInfo(text);
+        return m.TryGetValue("SwapTotal", out long total) && m.TryGetValue("SwapFree", out long free) ? Math.Max(0, total - free) / 1024.0 / 1024.0 : 0;
+    }
+
+    /// <summary>The container's memory limit in bytes, or null when there is none ("max" in cgroup v2, a huge number in v1).</summary>
+    internal static long? CgroupLimit(string dir)
+    {
+        string? v2 = ReadTrimmed(Path.Combine(dir, "memory.max"));
+        if (v2 is not null) return long.TryParse(v2, out long limit) ? limit : null;
+        string? v1 = ReadTrimmed(Path.Combine(dir, "memory", "memory.limit_in_bytes"));
+        return long.TryParse(v1, out long v1Limit) && v1Limit < (1L << 60) ? v1Limit : null;
+    }
+
+    internal static long? CgroupUsage(string dir) =>
+        long.TryParse(ReadTrimmed(Path.Combine(dir, "memory.current")) ?? ReadTrimmed(Path.Combine(dir, "memory", "memory.usage_in_bytes")), out long used) ? used : null;
+
+    private static string? ReadTrimmed(string path)
+    {
+        try { return File.Exists(path) ? File.ReadAllText(path).Trim() : null; }
+        catch { return null; }
+    }
+
+    // ── Windows ───────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static (long Total, long Available)? WindowsMemory()
+    {
+        MemoryStatusEx status = new() { dwLength = (uint)Marshal.SizeOf<MemoryStatusEx>() };
+        try { return GlobalMemoryStatusEx(ref status) ? ((long)status.ullTotalPhys, (long)status.ullAvailPhys) : null; }
+        catch { return null; }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryStatusEx
+    {
+        public uint  dwLength, dwMemoryLoad;
+        public ulong ullTotalPhys, ullAvailPhys, ullTotalPageFile, ullAvailPageFile, ullTotalVirtual, ullAvailVirtual, ullAvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
 
     private static long PhysFootprint(int pid)
     {

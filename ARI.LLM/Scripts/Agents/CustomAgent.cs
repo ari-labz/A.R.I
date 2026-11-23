@@ -12,6 +12,10 @@ internal sealed class CustomAgent : Agent
     /// <summary>Shipped with ARI and used by its own pipelines (the Memory steps): can be edited but not deleted.</summary>
     [System.Text.Json.Serialization.JsonPropertyName("system")] public bool IsSystem { get; init; }
 
+    /// <summary>Tools that do nothing but choose which way the pipeline goes next (Pass, Fail…). An agent with these is a reviewer: it ends its
+    /// run by calling one, and each one is an output port in the pipeline graph. See <see cref="ReviewLoop"/>.</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("pathways")] public List<PathwayTool>? Pathways { get; init; }
+
     private static readonly AsyncLocal<string?> resolved = new();
 
     /// <summary>Makes <paramref name="systemPrompt"/> this agent's system prompt for the calling async flow until disposed.</summary>

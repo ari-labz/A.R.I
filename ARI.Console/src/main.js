@@ -92,6 +92,7 @@ let child         = null
 let status        = "stopped"   // stopped | starting | running
 let serverVersion = null
 let quitting      = false
+const UPDATING_EXIT_CODE = 75   // matches AutoUpdate.ExitCode in ARI.Core
 
 function setStatus(s) {
     status = s
@@ -121,7 +122,11 @@ function startServer() {
             if (line.includes("ARI is ready")) setStatus("running")
         })
     }
-    child.on("exit", () => { child = null; emit("Server stopped."); setStatus("stopped") })
+    child.on("exit", code => {
+        child = null; emit("Server stopped."); setStatus("stopped")
+        // 75: the server handed over to the Installer to update itself. Close so the new version's Console can open.
+        if (code === UPDATING_EXIT_CODE) { emit("Updating…"); quitting = true; setTimeout(() => app.quit(), 500) }
+    })
     child.on("error", err => { emit(`[ERROR] Failed to start server: ${err.message}`); child = null; setStatus("stopped") })
 }
 
@@ -173,3 +178,8 @@ ipcMain.handle("open",    () => shell.openExternal(endpoint()))
 ipcMain.handle("copy",    () => clipboard.writeText(endpoint()))
 ipcMain.handle("logs",    () => shell.openPath(logsDir))
 ipcMain.handle("config",  () => shell.openPath(configFile))
+
+// Start at login, so a machine left on keeps ARI running after a restart. Not offered in a dev run: it would register Electron itself.
+const loginSupported = () => app.isPackaged && (process.platform === "darwin" || process.platform === "win32")
+ipcMain.handle("login-start",     () => ({ supported: loginSupported(), on: loginSupported() && app.getLoginItemSettings().openAtLogin }))
+ipcMain.handle("set-login-start", (_, on) => { if (loginSupported()) app.setLoginItemSettings({ openAtLogin: !!on }) })

@@ -30,10 +30,13 @@ public abstract class Agent
     /// <summary>When set, overrides the global ReasoningEffortStore level for this agent's requests.</summary>
     public string? ReasoningEffortOverride { get; init; }
     public int BudgetThinking { get; init; }
-    // Resolved to Slot (and id_slot) at bind time. Null = no slot pin.
+    // Resolved to Slot (and id_slot) at bind time. Empty = the agent belongs to its server and each turn takes a free slot there.
     public string? SlotName { get; set; }
     public SamplerSettings? SamplerSettings { get; set; }
-    [JsonIgnore] internal int BudgetContext => Slot?.ContextLimit ?? 0;
+    [JsonIgnore] internal int BudgetContext => Slot?.ContextLimit ?? (Floating ? Server?.FreeLanes().Select(l => l.ContextLimit).DefaultIfEmpty(0).Max() ?? 0 : 0);
+
+    /// <summary>Bound to a server rather than a slot: each turn runs on whichever of the server's free slots suits it (see Server.PickLane).</summary>
+    [JsonIgnore] internal bool Floating { get; set; }
 
     // Compaction: off by default. When on, stubs oldest tool outputs one at a time, once usage exceeds
     // CompactHighPct of the bound slot's context, until it drops under CompactLowPct — both percentages
@@ -53,6 +56,12 @@ public abstract class Agent
     [JsonIgnore] internal NamedSlot? Slot   { get; set; }
     [JsonIgnore] internal LLMQueue? Queue { get; set; }
 
+    /// <summary>The slot this agent runs the thread on: its own bound slot, or, when that slot is in a pool, the lane the
+    /// thread has been given in it (see <see cref="NamedSlot.Pool"/>).</summary>
+    private NamedSlot? LaneFor(Thread thread) =>
+        Floating && Server is not null ? Server.AssignedLane(thread.PoolLanes)
+        : Slot is null || Server is null ? Slot : Server.LaneFor(Slot, thread.PoolLanes);
+
     /// <summary>Called when the processing phase changes for a thread. Set by LLMModule to update the watch-stream status.</summary>
     [JsonIgnore] internal Action<string, ThreadPhase>? OnPhaseChange { get; set; }
 
@@ -65,6 +74,8 @@ public abstract class Agent
     private const double TOKEN_WARNING_RATIO = 0.8;
     private const int    COMPACT_KEEP_RECENT = 3;   // never stub the N most recent tool outputs
     private const int    MAX_DEGRADE_EVENTS  = 5;
+    private const int    MAX_BUDGET_CONTINUES = 3;   // a spent reply budget is continued this many times before the turn ends
+    private const double BUDGET_GRACE        = 1.25; // past this share of the budget it stops even mid-sentence
     private const int    AVERAGE_RESPONSE_WINDOW = 25;
     private const string ATTACHMENT_DIVIDER  = "-------------------";
     private const int    MAX_IMAGES_SHOWN    = 4;
@@ -274,6 +285,178 @@ public abstract class Agent
     /// prefills (Researching when it's reading web results), Thinking on reasoning or while writing a tool call,
     /// Typing only once real reply text reaches the user, and Researching / Generating / Waiting / Working while a
     /// tool runs. It moves in any direction; only an actual change is sent.</summary>
+    /// <summary>The reflect stage: a person-facing reply of any length that trips a banned phrase, or a long one, is read by the Reflector
+    /// (as a chat reply, or in a code thread as a report to check against the tool output). Each edit it returns is sent to the app first
+    /// as a [REWRITE] line, so the old text is seen being struck and the new typed, then made in the reply.</summary>
+    private async Task ReflectStage(Turn turn, Thread thread, string userPrompt, Func<string, Task>? userDelta)
+    {
+        Reflector? reflector = Reflector.Current;
+        if (reflector is null || !UsePersona || thread.Internal || turn.Ct.IsCancellationRequested) return;
+        if (thread.Pipeline is not (ThreadPipeline.Dialogue or ThreadPipeline.Code) || ReferenceEquals(this, reflector)) return;
+        ReflectSettings.Values settings = ReflectSettings.Load();
+        if (!settings.Enabled) return;
+
+        // Paragraphs already sent for review while she wrote: let those reviews finish and make their edits first.
+        try { await turn.ReflectChain; } catch { }
+        await ApplyPendingEdits(turn, thread, waitForAnimation: true);
+
+        const string AriPrefix = "ARI: ";
+        string toolFacts = ToolFacts(turn, out bool changedFiles);
+        // A code thread, or any chat in which she used tools, is a report on work: it is checked against what the tools showed.
+        bool work = thread.Pipeline == ThreadPipeline.Code || toolFacts.Length > 0;
+        string whole = turn.ResponseBuilder.ToString();
+        // In chat only the part not yet reviewed is read now; a report on work is checked whole, against the evidence.
+        string reply = work ? whole : whole[Math.Clamp(turn.ReflectedChars, 0, whole.Length)..];
+        if (reply.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase)) reply = reply[AriPrefix.Length..];
+        reply = reply.TrimEnd();
+        List<string> hits = settings.BannedPhrases.Where(b => reply.Contains(b, StringComparison.OrdinalIgnoreCase)).ToList();
+        // Changing files and then saying it works is the claim that most needs checking, so even a short report on that is read.
+        int minChars = work && changedFiles ? 40 : settings.MinChars;
+        if (reply.Length == 0 || (reply.Length < minChars && hits.Count == 0)) return;
+        if (work && !settings.VerifyWork) return;
+
+        SetPhase(turn, ThreadPhase.Thinking);
+        string evidence = work ? (toolFacts.Length > 0 ? toolFacts + "\n" : "") + ToolEvidence(turn) : "";
+        List<ReplyEdit> edits = await reflector.Review(work ? ReflectMode.Work : ReflectMode.Chat, AssistantName.Name, userPrompt, reply, evidence, hits, turn.Ct);
+        if (edits.Count == 0) return;
+
+        Reflector.Record(thread.Key, work ? ReflectMode.Work : ReflectMode.Chat, edits);
+        foreach (ReplyEdit edit in edits) turn.PendingEdits.Enqueue(edit);
+        await ApplyPendingEdits(turn, thread, waitForAnimation: true);
+    }
+
+    private static readonly HashSet<string> ChangeTools = new(StringComparer.OrdinalIgnoreCase) { "edit_file", "edit_files", "write_file", "edit_xlsx", "edit_docx", "write_xlsx", "write_docx", "write_pptx", "write_pdf", "delete_file", "move_file" };
+    private static readonly HashSet<string> RunTools    = new(StringComparer.OrdinalIgnoreCase) { "shell", "shell_session", "run_command", "build_project", "run_code" };
+
+    /// <summary>Hard facts about this turn that need no judgement, worked out from the order the tools ran in: whether files were changed,
+    /// and whether anything was built, tested or run after the last change. Empty when no tool ran at all.</summary>
+    private static string ToolFacts(Turn turn, out bool changedFiles)
+    {
+        int lastChange = -1, lastRun = -1, changes = 0, tools = 0, i = 0;
+        foreach (object m in turn.Messages)
+        {
+            i++;
+            try
+            {
+                JsonElement el = JsonSerializer.SerializeToElement(m);
+                if (!el.TryGetProperty("role", out JsonElement role) || role.GetString() != "tool") continue;
+                string name = el.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "" : "";
+                string content = el.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
+                tools++;
+                bool ok = !content.StartsWith("Error", StringComparison.OrdinalIgnoreCase) && !content.StartsWith("[Blocked", StringComparison.OrdinalIgnoreCase) && !content.StartsWith("[Error", StringComparison.OrdinalIgnoreCase);
+                if (ChangeTools.Contains(name) && ok) { lastChange = i; changes++; }
+                if (RunTools.Contains(name)) lastRun = i;
+            }
+            catch { }
+        }
+        changedFiles = changes > 0;
+        if (tools == 0) return "";
+        if (changes == 0) return "FACT: no file was changed this turn.";
+        return lastRun > lastChange
+            ? $"FACT: {changes} file change(s) were made, and a command (build, test or run) was run after the last one."
+            : $"FACT: {changes} file change(s) were made, and NO build, test or command was run after them. Nothing shows the changes compile, pass tests or work.";
+    }
+
+    /// <summary>Makes the edits the Reflector has asked for. Called only from the stream loop and the end of the turn, so nothing else is
+    /// changing the reply. Each is announced to the app first, so it can strike the old words, delete them and type the new ones.</summary>
+    private async Task ApplyPendingEdits(Turn turn, Thread thread, bool waitForAnimation)
+    {
+        const string AriPrefix = "ARI: ";
+        while (turn.PendingEdits.TryDequeue(out ReplyEdit? edit))
+        {
+            string current = turn.ResponseBuilder.ToString();
+            int at = current.IndexOf(edit.Old, StringComparison.Ordinal);
+            if (at < 0 || current.IndexOf(edit.Old, at + 1, StringComparison.Ordinal) >= 0) continue;   // gone or ambiguous by now
+            if (turn.Control is not null) await turn.Control($"[REWRITE]{edit.Old}\u0001{edit.New}\u0001{ReflectSettings.Load().EditStyle}");
+            if (waitForAnimation) await Task.Delay(Math.Min(4000, 700 + edit.Old.Length * 12 + edit.New.Length * 25), turn.Ct);
+            turn.ResponseBuilder.Remove(at, edit.Old.Length).Insert(at, edit.New);
+            if (at < turn.ReflectedChars) turn.ReflectedChars += edit.New.Length - edit.Old.Length;
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) reply edited by the reflector: \"{Old}\" -> \"{New}\"", Name, thread.Key, edit.Old, edit.New);
+            if (turn.Control is not null)
+            {
+                string visible = turn.ResponseBuilder.ToString();
+                if (visible.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase)) visible = visible[AriPrefix.Length..];
+                if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString() + visible);
+            }
+        }
+    }
+
+    /// <summary>While she is still writing, hands each finished paragraph (or a long run of sentences) to the Reflector in the background.
+    /// The edits come back through <see cref="Turn.PendingEdits"/> and are made on the next token, so the app sees her reply being
+    /// corrected as it is written, like a shared document with a second author.</summary>
+    private void StartLiveReflect(Turn turn, Thread thread)
+    {
+        Reflector? reflector = Reflector.Current;
+        if (reflector is null || !UsePersona || thread.Internal || thread.Pipeline != ThreadPipeline.Dialogue || ReferenceEquals(this, reflector)) return;
+        // A pipeline with its own reviewer on this reply does the reviewing; two reviewers editing one reply would fight.
+        if (ReviewLoop.Active.Value is { } loop && ReferenceEquals(loop.Chat, thread)) return;
+        ReflectSettings.Values settings = ReflectSettings.Load();
+        if (!settings.Enabled) return;
+
+        string text = turn.ResponseBuilder.ToString();
+        if (turn.ReflectedChars > text.Length) turn.ReflectedChars = 0;   // the reply was moved on (a tool call); this is a new stretch
+        string unread = text[turn.ReflectedChars..];
+        if (unread.Length < settings.LiveMinChars) return;
+
+        int cut = unread.LastIndexOf("\n\n", StringComparison.Ordinal);
+        if (cut >= 0) cut += 2;
+        else if (unread.Length >= settings.LiveMinChars * 3)
+        {
+            int s = new[] { unread.LastIndexOf(". ", StringComparison.Ordinal), unread.LastIndexOf("! ", StringComparison.Ordinal), unread.LastIndexOf("? ", StringComparison.Ordinal) }.Max();
+            if (s >= 0) cut = s + 2;
+        }
+        if (cut < settings.LiveMinChars) return;
+
+        string chunk = unread[..cut].Trim();
+        if (chunk.StartsWith("ARI: ", StringComparison.OrdinalIgnoreCase)) chunk = chunk[5..];
+        turn.ReflectedChars += cut;
+        string userMessage = turn.Messages.Count > 0 ? LastUserText(turn) : "";
+        List<string> hits = settings.BannedPhrases.Where(b => chunk.Contains(b, StringComparison.OrdinalIgnoreCase)).ToList();
+        turn.ReflectChain = turn.ReflectChain.ContinueWith(async _ =>
+        {
+            try
+            {
+                foreach (ReplyEdit edit in await reflector.Review(ReflectMode.Chat, AssistantName.Name, userMessage, chunk, "", hits, turn.Ct))
+                    turn.PendingEdits.Enqueue(edit);
+            }
+            catch (Exception) { /* a review that fails just leaves the paragraph as written */ }
+        }, TaskScheduler.Default).Unwrap();
+    }
+
+    private static string LastUserText(Turn turn)
+    {
+        foreach (object m in Enumerable.Reverse(turn.Messages))
+        {
+            try
+            {
+                JsonElement el = JsonSerializer.SerializeToElement(m);
+                if (el.TryGetProperty("role", out JsonElement r) && r.GetString() == "user" && el.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.String)
+                    return c.GetString() ?? "";
+            }
+            catch { }
+        }
+        return "";
+    }
+
+    /// <summary>What the tools returned this turn, shortened, for the reflector to check claims against.</summary>
+    private static string ToolEvidence(Turn turn)
+    {
+        StringBuilder sb = new();
+        foreach (object m in turn.Messages.TakeLast(40))
+        {
+            try
+            {
+                JsonElement el = JsonSerializer.SerializeToElement(m);
+                if (!el.TryGetProperty("role", out JsonElement role) || role.GetString() != "tool") continue;
+                string name = el.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "tool" : "tool";
+                string content = el.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
+                sb.AppendLine($"[{name}] {(content.Length > 500 ? content[..250] + " … " + content[^250..] : content)}");
+            }
+            catch { }
+        }
+        return sb.ToString().TrimEnd();
+    }
+
     private void SetPhase(Turn turn, ThreadPhase phase)
     {
         if (phase == turn.LastPhase) return;
@@ -310,6 +493,9 @@ public abstract class Agent
         internal int MaxTokens;       // == RespBudget — the reply's own ceiling, never a think+reply sum
         internal int ContentTokens;   // running estimate of reply tokens only (reasoning excluded)
         internal bool ReplyBudgetHit; // reply reached RespBudget — stop the step, keep what was written
+        internal int  VisibleChars;      // prose already committed to the reply this window; tool markers, diffs and reasoning never count
+        internal bool BudgetReached;     // the budget is spent — stop at the next sentence end instead of mid-thought
+        internal int  BudgetContinues;   // how many times a spent budget was answered with "keep going"
 
         // ── System block ─────────────────────────────────────────────────────
         internal string BaseSystem   = "";
@@ -367,6 +553,12 @@ public abstract class Agent
 
         // ── Output builders ──────────────────────────────────────────────────
         internal readonly StringBuilder ResponseBuilder  = new();
+        // Live reflect: paragraphs are read by the Reflector while she is still writing, and its edits wait here until the stream loop,
+        // the only thing that changes the reply, makes them.
+        internal int  ReflectedChars;                                       // how much of the reply has been handed to the Reflector
+        internal Task ReflectChain = Task.CompletedTask;                    // reviews run one after another
+        internal readonly System.Collections.Concurrent.ConcurrentQueue<ReplyEdit> PendingEdits = new();
+        internal Func<string, Task>? Control;                               // the app's own channel, for [REWRITE] lines
         internal readonly StringBuilder ContentBuilder   = new();
         internal readonly StringBuilder ReasoningBuilder = new();
 
@@ -505,6 +697,7 @@ public abstract class Agent
         };
 
         Turn turn = new(thread, opts, ariResponse, trace, NewTurnState(), onDelta);
+        turn.Control = userDelta;
 
         // ── Token budgets ─────────────────────────────────────────────────────
         // The global reasoning-effort dial scales the thinking cap universally: low ×1 (anchor), medium ×2.5,
@@ -562,9 +755,14 @@ public abstract class Agent
                 // step acquisition bounds the worst case to one step's generation time, and is released
                 // below before tool execution, which is file/network I/O, not GPU work, and shouldn't hold
                 // the inference slot while it runs.
-                LLMQueue.Slot? slot = Queue is not null
-                    ? await Queue.AcquireAsync((InferencePriority)Priority, turn.Ct)
-                    : null;
+                // A pooled slot has a queue per lane, so two conversations on different lanes generate at the same time.
+                NamedSlot? lane = Floating && Server is not null ? Server.PickLane(thread.PoolLanes, turn.EstimatedTextTokens + turn.MaxTokens) : LaneFor(thread);
+                bool pooled = lane is not null && Server is not null && (Floating || Server.IsPooled(lane));
+                if (pooled) Server!.LaneBusy(lane!, 1);
+                LLMQueue? stepQueue = pooled ? Server!.QueueForLane(lane!) : Queue;
+                LLMQueue.Slot? slot;
+                try { slot = stepQueue is not null ? await stepQueue.AcquireAsync((InferencePriority)Priority, turn.Ct) : null; }
+                catch { if (pooled) Server!.LaneBusy(lane!, -1); throw; }
                 using CancellationTokenSource stepCts = slot is null
                     ? CancellationTokenSource.CreateLinkedTokenSource(turn.Ct)
                     : CancellationTokenSource.CreateLinkedTokenSource(turn.Ct, slot.Preempted);
@@ -632,6 +830,7 @@ public abstract class Agent
                 finally
                 {
                     slot?.Dispose();
+                    if (pooled) Server!.LaneBusy(lane!, -1);
                 }
 
                 if (turn.IsStreaming && turn.PendingCalls.Count > 0)
@@ -639,6 +838,30 @@ public abstract class Agent
             }
 
             if (FlushPrefillFlips(turn) && turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
+
+            // A pipeline with a reviewer wired to this reply runs its loop here, inside the turn, so each fix is seen being made.
+            bool reviewed = false;
+            if (ReviewLoop.Active.Value is { } loop && ReferenceEquals(loop.Chat, thread) && !turn.Ct.IsCancellationRequested)
+            {
+                reviewed = true;
+                const string AriPrefix = "ARI: ";
+                string Visible() { string v = turn.ResponseBuilder.ToString(); return (v.StartsWith(AriPrefix, StringComparison.OrdinalIgnoreCase) ? v[AriPrefix.Length..] : v).Trim(); }
+                try
+                {
+                    SetPhase(turn, ThreadPhase.Thinking);
+                    await loop.Run(Visible,
+                        async edits => { foreach (ReplyEdit e in edits) turn.PendingEdits.Enqueue(e); await ApplyPendingEdits(turn, thread, waitForAnimation: true); },
+                        marker => turn.ContentBuilder.Append(marker), turn.Ct);
+                    if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString() + Visible());
+                }
+                catch (OperationCanceledException) when (turn.Ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) { Shared.Logger.LogWarning("[{Agent}] ({Thread}) review loop failed: {Err}", Name, thread.Key, ex.Message); }
+            }
+
+            // Before the reply is final, a separate agent reads it. If it finds something wrong, the app shows the fix being made.
+            if (!reviewed) try { await ReflectStage(turn, thread, prompt, userDelta); }
+            catch (OperationCanceledException) when (turn.Ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[{Agent}] ({Thread}) reflect stage failed: {Err}", Name, thread.Key, ex.Message); }
 
             turn.Stopwatch.Stop();
             responseText = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);
@@ -663,8 +886,8 @@ public abstract class Agent
         {
             // A message that arrived after the last step was never folded in. Keep it in the chat, so it isn't lost
             // and the next turn reads it.
-            while (turn.Thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments) late))
-                turn.Thread.History.Add(new Prompt { AuthorName = late.User, Text = late.Text, Attachments = late.Attachments.Count > 0 ? late.Attachments : null });
+            while (turn.Thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments, string? ClientId) late))
+                turn.Thread.History.Add(new Prompt { AuthorName = late.User, Text = late.Text, ClientId = late.ClientId, Attachments = late.Attachments.Count > 0 ? late.Attachments : null });
             OnPhaseChange?.Invoke(turn.Thread.Key, ThreadPhase.Idle);
         }
 
@@ -677,21 +900,22 @@ public abstract class Agent
     // than treating it as a brand-new request. Reused by both drain points (step boundary + mid-stream).
     /// <summary>Drains pending interjections into both the model-facing steer text and the raw user text +
     /// username for the visible split. Returns null when the queue is empty.</summary>
-    private (object Model, string Raw, string User, List<Attachment> Attachments)? TakeInterjections(Thread thread)
+    private (object Model, string Raw, string User, List<Attachment> Attachments, string? ClientId)? TakeInterjections(Thread thread)
     {
         if (thread.Interjections.IsEmpty) return null;
-        List<string> parts = new(); List<string> raw = new(); List<Attachment> attachments = new(); string user = "";
-        while (thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments) m))
+        List<string> parts = new(); List<string> raw = new(); List<Attachment> attachments = new(); string user = ""; string? clientId = null;
+        while (thread.Interjections.TryDequeue(out (string User, string Text, List<Attachment> Attachments, string? ClientId) m))
         {
             parts.Add(string.IsNullOrWhiteSpace(m.User) ? m.Text : $"{m.User}: {m.Text}");
             raw.Add(m.Text);
             attachments.AddRange(m.Attachments);
             if (user.Length == 0) user = m.User;
+            clientId ??= m.ClientId;
         }
         if (parts.Count == 0) return null;
         string model = "[The user jumped in mid-response — read this, then continue what you were doing, "
                      + "folding in the new information. Do not restart from scratch.]\n" + string.Join("\n", parts);
-        return (WithAttachments(thread, model, attachments), string.Join("\n", raw), user, attachments);
+        return (WithAttachments(thread, model, attachments), string.Join("\n", raw), user, attachments, clientId);
     }
 
     /// <summary>The content of a user message with its attachments: text files inline, and images shown to the model
@@ -737,10 +961,10 @@ public abstract class Agent
     /// response for the continuation to stream into — so the thread reads chronologically top to bottom.
     /// Skipped when the current segment has no visible content yet, which would leave an empty bubble; then
     /// the interjection just folds into the ongoing response.</summary>
-    private static void SplitResponse(Turn turn, string username, string rawText, List<Attachment> attachments)
+    private static void SplitResponse(Turn turn, string username, string rawText, List<Attachment> attachments, string? clientId)
     {
         Thread thread    = turn.Thread;
-        Prompt interject = new() { AuthorName = username, Text = rawText, Attachments = attachments.Count > 0 ? attachments : null };
+        Prompt interject = new() { AuthorName = username, Text = rawText, ClientId = clientId, Attachments = attachments.Count > 0 ? attachments : null };
         string safeText  = rawText.Replace("\n", " ").Replace("\r", " ");   // keep it one SSE line
         string segText   = CleanResponse(turn.ContentBuilder, turn.ResponseBuilder);
 
@@ -750,7 +974,7 @@ public abstract class Agent
             // response so it reads user → interjection → response, and let that same response stream below it.
             int idx = thread.History.IndexOf(turn.AriResponse);
             if (idx >= 0) thread.History.Insert(idx, interject); else thread.History.Add(interject);
-            thread.PendingSplitNotice = $"before\u0001{username}\u0001{safeText}";
+            thread.PendingSplitNotice = $"before\u0001{username}\u0001{clientId}\u0001{safeText}";
             thread.RaiseUpdated();
             return;
         }
@@ -772,7 +996,7 @@ public abstract class Agent
         turn.ContentBuilder.Clear();
         turn.ResponseBuilder.Clear();
         // \u0001 separates username from text; newlines stripped so it stays one SSE line.
-        thread.PendingSplitNotice = $"split\u0001{username}\u0001{safeText}";
+        thread.PendingSplitNotice = $"split\u0001{username}\u0001{clientId}\u0001{safeText}";
         thread.RaiseUpdated();
     }
 
@@ -784,7 +1008,7 @@ public abstract class Agent
         // user message before the next request. Mid-think interjections are handled in ProcessDelta instead.
         if (TakeInterjections(thread) is { } inj)
         {
-            SplitResponse(turn, inj.User, inj.Raw, inj.Attachments);
+            SplitResponse(turn, inj.User, inj.Raw, inj.Attachments, inj.ClientId);
             turn.Messages.Add(new { role = "user", content = inj.Model });
             Shared.Logger.LogInformation("[{Agent}] ({Thread}) folded in a user interjection at step boundary.", Name, thread.Key);
         }
@@ -941,6 +1165,7 @@ public abstract class Agent
         turn.RunawayCall      = null;
         turn.ContentRunaway   = false;
         turn.ReplyBudgetHit   = false;
+        turn.BudgetReached    = false;
         turn.SteeringRedirect = false;
         turn.ThinkingRedirect = false;
         turn.TextToolLeak     = false;
@@ -1062,7 +1287,7 @@ public abstract class Agent
                 if (turn.PendingThinkRedirect is null && thinkBoundary && thread.HasInterjections
                     && TakeInterjections(thread) is { } midInj)
                 {
-                    SplitResponse(turn, midInj.User, midInj.Raw, midInj.Attachments);
+                    SplitResponse(turn, midInj.User, midInj.Raw, midInj.Attachments, midInj.ClientId);
                     string capturedThink = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
                         ? "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n"
                         : "";
@@ -1141,6 +1366,7 @@ public abstract class Agent
                 if (!isLeakedToolCall && preText.Length > 0)
                 {
                     turn.ContentBuilder.Append(preText + "\n");
+                    turn.VisibleChars += preText.Length;
                     if (turn.OnTextDelta is not null) turn.TextOnlyBuilder.Append(preText + "\n");
                     if (turn.LiveText is not null) { turn.Trace.Remove(turn.LiveText); turn.LiveText = null; }
                     turn.Trace.Add(new TraceStep { Kind = "text", Text = preText });
@@ -1250,7 +1476,7 @@ public abstract class Agent
             // it into the same chain of thought she was mid-way through.
             if (TakeInterjections(thread) is { } inj)
             {
-                SplitResponse(turn, inj.User, inj.Raw, inj.Attachments);
+                SplitResponse(turn, inj.User, inj.Raw, inj.Attachments, inj.ClientId);
                 string capturedThink = turn.ReasoningBuilder.Length > turn.ReasoningStartLen
                     ? "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n"
                     : "";
@@ -1293,18 +1519,26 @@ public abstract class Agent
         if (string.IsNullOrEmpty(deltaText)) return;
 
         turn.ResponseBuilder.Append(deltaText);
+        await ApplyPendingEdits(turn, thread, waitForAnimation: false);
+        StartLiveReflect(turn, thread);
         if (thread.LiveCall is { } lc) lc.EstimatedOutputTokens = turn.ResponseBuilder.Length / CHARS_PER_TOKEN;
 
-        // Reply budget, counted over content only — reasoning never draws from it. Replaces the old
-        // summed max_tokens, which let a long think starve the answer.
+        // Reply budget, counted over visible prose only: reasoning, tool markers and diff payloads never draw from it.
+        // Once spent it stops at the next sentence end (or well past the budget), so a reply is never cut mid-thought.
         if (turn.RespBudget > 0)
         {
-            turn.ContentTokens = (turn.ContentBuilder.Length + turn.ResponseBuilder.Length) / CHARS_PER_TOKEN;
-            if (turn.ContentTokens >= turn.RespBudget)
+            turn.ContentTokens = (turn.VisibleChars + turn.ResponseBuilder.Length) / CHARS_PER_TOKEN;
+            if (turn.ContentTokens >= turn.RespBudget) turn.BudgetReached = true;
+            if (turn.BudgetReached)
             {
-                Shared.Logger.LogWarning("[{Agent}] ({Thread}) reply budget reached ({N}/{B} tokens) — ending generation.",
-                    Name, thread.Key, turn.ContentTokens, turn.RespBudget);
-                turn.ReplyBudgetHit = true;
+                string trimmed = deltaText.TrimEnd();
+                bool sentenceEnd = deltaText.EndsWith('\n') || trimmed.EndsWith('.') || trimmed.EndsWith('!') || trimmed.EndsWith('?');
+                if (sentenceEnd || turn.ContentTokens >= turn.RespBudget * BUDGET_GRACE)
+                {
+                    Shared.Logger.LogWarning("[{Agent}] ({Thread}) reply budget reached ({N}/{B} tokens) — ending generation.",
+                        Name, thread.Key, turn.ContentTokens, turn.RespBudget);
+                    turn.ReplyBudgetHit = true;
+                }
             }
         }
         if (!turn.TextToolLeak && turn.PendingCalls.Count == 0 && turn.TextToolLeakRetries < 3
@@ -1424,6 +1658,24 @@ public abstract class Agent
         // long, so everything written is kept and the turn ends here — no tool round-trip, no retry.
         if (turn.ReplyBudgetHit)
         {
+            if (turn.BudgetContinues < MAX_BUDGET_CONTINUES && turn.ResponseBuilder.Length > 0)
+            {
+                // Backstop: a long answer is not cut off. What was written is kept, and the model is asked to carry on.
+                string written = turn.ResponseBuilder.ToString().TrimEnd();
+                turn.ContentBuilder.Append(written + "\n\n");
+                if (turn.OnTextDelta is not null) turn.TextOnlyBuilder.Append(written + "\n\n");
+                if (turn.LiveText is not null) { turn.Trace.Remove(turn.LiveText); turn.LiveText = null; }
+                turn.Trace.Add(new TraceStep { Kind = "text", Text = written });
+                turn.ResponseBuilder.Clear();
+                turn.VisibleChars   = 0;
+                turn.BudgetReached  = false;
+                turn.BudgetContinues++;
+                turn.Messages.Add(new { role = "assistant", content = written });
+                turn.Messages.Add(new { role = "user", content = "[Continue exactly where you left off. Do not repeat anything or start over.]" });
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) reply budget spent — continuing ({N}/{M}).", Name, thread.Key, turn.BudgetContinues, MAX_BUDGET_CONTINUES);
+                if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
+                return;
+            }
             turn.FinishReason = "length";
             turn.IsStreaming  = false;
             return;
@@ -1473,7 +1725,7 @@ public abstract class Agent
             if (turn.ResponseBuilder.Length > 0)
             {
                 string preText = turn.ResponseBuilder.ToString().TrimEnd();
-                if (preText.Length > 0) turn.ContentBuilder.Append(preText + "\n");
+                if (preText.Length > 0) { turn.ContentBuilder.Append(preText + "\n"); turn.VisibleChars += preText.Length; }
             }
 
             turn.Messages.Add(new { role = "assistant", tool_calls = new[]
@@ -1782,7 +2034,7 @@ public abstract class Agent
                 }
 
                 // File mutations are logged with their result so a refused/ineffective edit is diagnosable from the log.
-                if (call.Name is "edit_file" or "write_file" && !ToolCallParser.IsError(result))
+                if (call.Name is "edit_file" or "edit_files" or "write_file" && !ToolCallParser.IsError(result))
                     Shared.Logger.LogInformation("[{Agent}] ({Thread}) Tool '{Tool}' result: {Result}", Name, thread.Key, call.Name,
                         result.Length > 160 ? result[..160] + "…" : result);
                 if (ToolCallParser.IsError(result))
@@ -2031,7 +2283,7 @@ public abstract class Agent
 
         if (UsePersona)
         {
-            string persona = PersonaStore.Get();
+            string persona = PersonaStore.Get(thread.PersonaId);
             if (persona.Length > 0)
                 sections.Add($"--- **Persona** ---\n\n{persona}\n\n{BlockRule}");
         }
@@ -2222,9 +2474,9 @@ public abstract class Agent
         body["chat_template_kwargs"] = chatTemplateKwargs;
 
         if (toolSchemas is not null) body["tools"] = toolSchemas;
-        if (Slot is not null)
+        if (LaneFor(thread) is { } lane)
         {
-            int slotIndex = srv.Slots.FindIndex(sl => sl.Id == Slot.Id);
+            int slotIndex = srv.Slots.FindIndex(sl => sl.Id == lane.Id);
             if (slotIndex >= 0) body["id_slot"] = slotIndex;
         }
 

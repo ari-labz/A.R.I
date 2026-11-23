@@ -54,6 +54,7 @@ public class APIModule : IAsyncDisposable
         builder.Logging.AddProvider(new ForwardingLoggerProvider(loggerFactory));
 
         LLMModule.ConventionsProvider = ConventionsStore.Get;
+        LLMModule.ConventionsSaver    = ConventionsStore.Set;
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.Port}");
         builder.WebHost.UseShutdownTimeout(TimeSpan.FromSeconds(2));
         builder.WebHost.ConfigureKestrel(k =>

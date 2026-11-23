@@ -30,23 +30,24 @@ internal static class CapabilitiesBlock
         if (owner && ToolRegistry.IsEnabled("write_tool"))
             sb.AppendLine("You can write tools for yourself (tool_docs, then write_tool): if a job needs a capability that doesn't exist, build it, test it with test_tool, and use it.");
         if (owner && ToolRegistry.IsEnabled("run_code"))
-            sb.AppendLine("How you work on a real job: for anything with several steps, write the plan with todo and keep it up to date. Use your tools rather than guessing or " +
-                          "going from memory: run_code to calculate or process data, shell to run things, read_document for PDFs and spreadsheets, browser to look at a page. " +
-                          "When a tool returns an error, read it, fix the cause and try again before you give up or ask. Check your work before saying it's done: run it, open the file, " +
-                          "take a screenshot of the page you built.");
+            sb.AppendLine("For a real job: plan multi-step work with todo; use tools instead of guessing or memory (run_code to calculate, shell to run things, read_document for documents, " +
+                          "browser for pages); on an error, fix the cause and retry before giving up; check your work (run it, open it, screenshot it) before saying it's done.");
         if (owner && ToolRegistry.IsEnabled("list_chats"))
             sb.AppendLine("If you feel you're missing context, list_chats and read_chat show your other recent conversations.");
 
         if (conversation && thread.Medium != ThreadMedium.Channel)
-            sb.AppendLine("Your files and commands are on the server you run on, not on the user's own computer or phone. You can't open a file from their device: they upload it into the chat, " +
-                          "and you give them yours with deliver_file. If they mention a file on their desktop, ask them to attach it.");
+            sb.AppendLine(owner
+                ? $"Where you run, read from the machine just now (this beats anything a memory says): {MachineFacts.Line}. A path under {MachineFacts.Home} is on this machine and your tools can open it, so try. " +
+                  "The owner may be talking to you from another device, like a phone: a file only on that device needs attaching to the chat, and you give files back with deliver_file."
+                : "Your files and commands are on the server you run on, not on the user's own computer or phone. You can't open a file from their device: they upload it into the chat, " +
+                  "and you give them yours with deliver_file. If they mention a file on their desktop, ask them to attach it.");
+        if (conversation)
+            sb.AppendLine("Memories about what you can or can't do, or what machine you're on, may be out of date: the tools listed here are the truth. If a memory says you can't but a tool says you can, use the tool.");
 
         if (conversation)
-            sb.AppendLine("Can and can't: if your tools, or code you run, or a tool you write, can get it done, do it. Work out the steps and fix errors yourself; don't refuse " +
-                          "something these tools can do just because a generic AI assistant couldn't. If nothing here can do it, say so plainly in a sentence or two: what is missing, " +
-                          "and the closest thing you can do instead. Something outside you that none of your tools reach (a bank balance, someone's phone, an inbox or account you aren't connected to) isn't something you \"don't know\": " +
-                          "say you have no connection to it. Never pretend, and never invent a result. " +
-                          "If you've tried several different approaches and are still not getting anywhere, stop: tell the user what you tried and what's blocking you, and ask, instead of carrying on.");
+            sb.AppendLine("Can and can't: if your tools, code you run, or a tool you write can do it, do it, fixing errors yourself; don't refuse what a generic assistant couldn't do. " +
+                          "If nothing here can, say so in a sentence or two with the closest thing you can do. Something none of your tools reach (a bank balance, someone's phone, " +
+                          "an account you aren't connected to): say you have no connection to it. Never pretend or invent a result. After several failed approaches, stop, say what you tried and ask.");
 
         if (owner)
         {
@@ -117,5 +118,34 @@ internal static class CapabilitiesBlock
         if (first.Length <= BlurbLength) return first;
         int cut = first.LastIndexOf(' ', BlurbLength);
         return first[..(cut > 40 ? cut : BlurbLength)] + "…";
+    }
+}
+
+/// <summary>The machine ARI is running on, read once at start-up: its name, chip, memory and the user's home folder.</summary>
+internal static class MachineFacts
+{
+    internal static readonly string Home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+    internal static readonly string Line = Build();
+
+    private static string Build()
+    {
+        string chip = OperatingSystem.IsMacOS() ? Sysctl("machdep.cpu.brand_string") : "";
+        string model = OperatingSystem.IsMacOS() ? Sysctl("hw.model") : "";
+        double ramGb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024d / 1024d / 1024d;
+        string os = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+        return $"{Environment.MachineName}{(model.Length > 0 ? $" ({model})" : "")}, {(chip.Length > 0 ? chip + ", " : "")}{Math.Round(ramGb)} GB memory, {os}, as user {Environment.UserName}";
+    }
+
+    private static string Sysctl(string key)
+    {
+        try
+        {
+            using System.Diagnostics.Process p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("sysctl", $"-n {key}") { RedirectStandardOutput = true, UseShellExecute = false })!;
+            string v = p.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit(2000);
+            return v;
+        }
+        catch { return ""; }
     }
 }

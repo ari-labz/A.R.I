@@ -45,7 +45,7 @@
       "Enabled": false,
       "ComfyUiPath": "",
       "Port": 8188,
-      "IdleSeconds": 300,
+      "IdleSeconds": 600,
       "Checkpoint": ""
     }
   },

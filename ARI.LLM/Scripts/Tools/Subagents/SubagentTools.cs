@@ -23,7 +23,9 @@ internal sealed class SpawnAgent(Thread parent) : Tool
                     title   = new { type = "string", description = "A short name for the task, e.g. \"Python version\"." },
                     prompt  = new { type = "string", description = "What to do and what to report back." },
                     context = new { type = "string", description = "Everything it needs to know from this conversation: relevant facts, who's asking, constraints. It can't see this conversation." },
-                    tools   = new { type = "array", items = new { type = "string" }, description = "Tool names to give it, from those loaded here. Omit for read-only lookups." }
+                    tools   = new { type = "array", items = new { type = "string" }, description = "Tool names to give it, from those loaded here. Omit for read-only lookups." },
+                    where   = new { type = "string", description = $"Optional: which server runs it. {SubagentManager.ServerList?.Invoke() ?? ""} Pick a small fast model for quick lookups and a big one for hard thinking. It takes whichever slot there is free. Omit for the usual one." },
+                    instructions = new { type = "string", description = "Optional: who this worker is and how it should work, in your words (e.g. \"You are a strict code reviewer: list every bug, no praise.\"). Replaces its usual instructions; the task still goes in prompt." }
                 },
                 required = new[] { "title", "prompt" }
             }
@@ -33,7 +35,7 @@ internal sealed class SpawnAgent(Thread parent) : Tool
     internal override Task<ToolResult> Execute(string argsJson)
     {
         string title = "", task = "";
-        string? context = null;
+        string? context = null, where = null, instructions = null;
         List<string>? tools = null;
         try
         {
@@ -41,12 +43,14 @@ internal sealed class SpawnAgent(Thread parent) : Tool
             title   = doc.RootElement.TryGetProperty("title",   out JsonElement ti) ? ti.GetString() ?? "" : "";
             task    = doc.RootElement.TryGetProperty("prompt",  out JsonElement pr) ? pr.GetString() ?? "" : "";
             context = doc.RootElement.TryGetProperty("context", out JsonElement cx) ? cx.GetString() : null;
+            where   = doc.RootElement.TryGetProperty("where",   out JsonElement wh) ? wh.GetString() : null;
+            instructions = doc.RootElement.TryGetProperty("instructions", out JsonElement ins) ? ins.GetString() : null;
             if (doc.RootElement.TryGetProperty("tools", out JsonElement t) && t.ValueKind == JsonValueKind.Array)
                 tools = t.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => s.Length > 0).ToList();
         }
         catch (JsonException) { return Task.FromResult<ToolResult>("[Error: arguments weren't valid JSON]"); }
 
-        (SubagentManager.Run? run, string message) = SubagentManager.Spawn(parent, title, task, context, tools);
+        (SubagentManager.Run? run, string message) = SubagentManager.Spawn(parent, title, task, context, tools, where, instructions);
         return Task.FromResult<ToolResult>(run is null ? $"[Error: {message}]" : message);
     }
 

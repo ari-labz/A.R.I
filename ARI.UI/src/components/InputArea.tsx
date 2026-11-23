@@ -5,6 +5,7 @@ import type { PendingAttachment } from "../App"
 import type { Project } from "../hooks/useThreads"
 import PipelineSelector from "./PipelineSelector"
 import ThinkingEffort from "./ThinkingEffort"
+import type { PersonaOption } from "./PersonaPicker"
 
 interface Command { cmd: string; desc: string }
 
@@ -32,6 +33,9 @@ interface Props {
     codeMode:         boolean
     safetyMode:       boolean
     onToggleSafety:   () => void
+    personas:         PersonaOption[]
+    personaId:        string
+    onChoosePersona:  (id: string) => void
 }
 
 function fileExtLabel(name: string) {

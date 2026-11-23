@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ARI.LLM;
 
@@ -26,13 +29,7 @@ internal class Read : Tool
         function = new
         {
             name        = "read_file",
-            description =
-                "Read a file. What comes back depends on the kind of file, so you never choose a different tool: " +
-                "TEXT and CODE are read by lines (start_line/end_line; at most 100 lines per call, so pass the range you need: preview_file first shows what is in a code file). " +
-                "A PDF, Word (.docx), PowerPoint (.pptx) or Excel (.xlsx) file is opened as a document: with only a path you get its page or sheet count and the opening; " +
-                "then use pages to read parts, find to search the whole file for a word, and for Excel sheet and range such as A1:F50. " +
-                "An IMAGE (a path or an http(s) URL) is shown to you so you can see it. A .ipynb notebook returns its cells as text. " +
-                "Never open a document with the shell or by its raw bytes.",
+            description = "Read a file; the right reader is picked for you. Text and code: by lines, up to 100 per call (start_line, end_line; preview_file shows a code file's outline first). PDF, Word, PowerPoint, Excel: a path alone gives the size and opening, then use pages, find, or sheet and range. Images (a path or URL) are shown to you; .ipynb gives its cells. Each read ends with a coverage note: to review or summarise a file, keep reading until it says the whole file is covered. Never open documents with the shell.",
             parameters  = new
             {
                 type       = "object",
@@ -61,6 +58,9 @@ internal class Read : Tool
         if (DocumentReader.Extensions.Contains(Extension(path)) || await SniffsAsDocument(path))
             return await new ReadDocument(fs).Execute(argsJson);
 
+        // Files read_file can't show, but another tool can: say which, instead of handing back raw bytes.
+        if (OtherReader(Extension(path)) is { } other) return other;
+
         Read? decoder = For(path, fs);
 
         if (decoder is null)   // plain text — the existing windowed, preview-gated path (both backends)
@@ -85,6 +85,14 @@ internal class Read : Tool
             return $"[Error reading {path}: {ex.Message}]";
         }
     }
+
+    private static string? OtherReader(string ext) => ext switch
+    {
+        "glb" or "gltf" or "obj" or "stl" or "fbx" or "blend" => "This is a 3D model, which read_file can't show. Use preview_model (in visual_tools) to see it from several angles, with its triangle count and size.",
+        "wav" or "mp3" or "m4a" or "flac" or "ogg" or "aac" => "This is a sound file, which read_file can't play. Use audio_look (the ffmpeg plugin) to see its waveform, spectrogram, loudness and silences.",
+        "mp4" or "mov" or "mkv" or "webm" or "avi" => "This is a video, which read_file can't play. Use video_info and video_frames (the ffmpeg plugin) to see what's in it.",
+        _ => null,
+    };
 
     private static readonly HttpClient Http = new();
 
@@ -157,7 +165,46 @@ internal class Read : Tool
 
         if (result.Text.Length > MAX_TEXT_CHARS)
             return ToolResult.AsText(result.Text[..MAX_TEXT_CHARS] + $"\n[Truncated at {MAX_TEXT_CHARS} chars — this file is large; read a narrower part.]");
-        return result;
+        return CoverageNote(thread, result);
+    }
+
+    // What each conversation has read of each file, as line ranges, so every read can say how much of the file is now covered.
+    private static readonly ConditionalWeakTable<Thread, ConcurrentDictionary<string, List<(int Start, int End)>>> Covered = new();
+    private static readonly Regex FileHeader = new(@"^\[file: ""(?<path>[^""]+)"" (?:lines (?<s>\d+)-(?<e>\d+) of (?<n>\d+)|\((?<n2>\d+) lines\))\]", RegexOptions.Compiled);
+
+    /// <summary>Adds a note after a text read: the lines of the file read so far in this conversation, and where to continue
+    /// if some are still unread. Anything that isn't a plain windowed text read passes through untouched.</summary>
+    private static ToolResult CoverageNote(Thread thread, ToolResult result)
+    {
+        if (result.Kind != ToolResult.ContentKind.Text) return result;
+        Match m = FileHeader.Match(result.Text);
+        if (!m.Success) return result;
+        int total = int.Parse(m.Groups["n"].Success ? m.Groups["n"].Value : m.Groups["n2"].Value);
+        int start = m.Groups["s"].Success ? int.Parse(m.Groups["s"].Value) : 1;
+        int end   = m.Groups["e"].Success ? int.Parse(m.Groups["e"].Value) : total;
+        if (total <= 0) return result;
+
+        string path = m.Groups["path"].Value;
+        List<(int Start, int End)> ranges = Covered.GetOrCreateValue(thread).GetOrAdd(path, _ => new());
+        int read, firstGap;
+        lock (ranges)
+        {
+            ranges.Add((start, end));
+            ranges.Sort();
+            List<(int Start, int End)> merged = new();
+            foreach ((int a, int b) in ranges)
+            {
+                if (merged.Count > 0 && a <= merged[^1].End + 1) merged[^1] = (merged[^1].Start, Math.Max(merged[^1].End, b));
+                else merged.Add((a, b));
+            }
+            ranges.Clear(); ranges.AddRange(merged);
+            read     = merged.Sum(r => r.End - r.Start + 1);
+            firstGap = merged[0].Start > 1 ? 1 : merged[0].End + 1;
+        }
+        string note = read >= total
+            ? $"\n[Coverage: you have now read all {total} lines of {path}.]"
+            : $"\n[Coverage: you have read {read} of {total} lines of {path} ({read * 100 / total}%). Not read yet: from line {firstGap}. If you are reviewing or summarising this file, keep reading before you answer.]";
+        return ToolResult.AsText(result.Text + note);
     }
 
     /// <summary>Selects the decoder for a path by extension; null means plain text (the base's fs.Read path).

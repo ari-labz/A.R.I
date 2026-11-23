@@ -598,32 +598,34 @@ body.cp-win32 #cp-win-controls { display: flex; }
       <div id="cp-sidebar-nav">
         <div class="cp-nav-item top-level active" data-tab="overview">Overview</div>
         <div class="cp-nav-item top-level" data-tab="users">Users</div>
-        <div class="cp-nav-item top-level" data-tab="settings">Settings</div>
-        <div class="cp-nav-item top-level" data-tab="plugins" id="nav-plugins">Plugins</div>
-        <div class="cp-nav-item top-level" data-tab="debug">Deep Thread Inspection (DTI)</div>
-        <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
-        <div class="cp-nav-item" data-tab="customisation" data-group="system">Customisation</div>
-        <div class="cp-nav-item" data-tab="calendar" data-group="system" id="nav-calendar">Calendar</div>
-        <div class="cp-nav-group" data-group-id="llm">LLM<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-group" data-group-id="ari">Ari<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="persona" data-group="ari">Persona</div>
+        <div class="cp-nav-item" data-tab="customisation" data-group="ari">Customisation</div>
+        <div class="cp-nav-item" data-tab="calendar" data-group="ari" id="nav-calendar">Calendar</div>
+        <div class="cp-nav-item" data-tab="feedback" data-group="ari">Response Feedback</div>
+        <div class="cp-nav-group" data-group-id="llm">Models<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="servers" data-group="llm">Servers</div>
         <div class="cp-nav-item" data-tab="models" data-group="llm">Models</div>
         <div class="cp-nav-item" data-tab="agents" data-group="llm">Agents</div>
         <div class="cp-nav-item" data-tab="pipelines" data-group="llm">Pipelines</div>
         <div class="cp-nav-item" data-tab="tools" data-group="llm">Tools</div>
-        <div class="cp-nav-item" data-tab="conventions" data-group="llm">Coding Conventions</div>
-        <div class="cp-nav-item" data-tab="persona" data-group="llm">Persona</div>
-        <div class="cp-nav-item" data-tab="feedback" data-group="llm">Response Feedback</div>
         <div class="cp-nav-item" data-tab="llmconfigs" data-group="llm">Configurations</div>
+        <div class="cp-nav-group" data-group-id="coding">Coding<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="conventions" data-group="coding">Coding Conventions</div>
+        <div class="cp-nav-group" id="nav-group-memory" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="brain" data-group="memory" id="nav-brain">Brain</div>
         <div class="cp-nav-group" id="nav-group-voice" data-group-id="voice">Voice<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="voices" data-group="voice" id="nav-voices">Voices</div>
         <div class="cp-nav-item" data-tab="voice" data-group="voice" id="nav-voice">Voice Synthesis</div>
         <div class="cp-nav-item" data-tab="dataset" data-group="voice" id="nav-dataset">Dataset Builder</div>
-        <div class="cp-nav-group" id="nav-group-memory" data-group-id="memory">Memory<span class="nav-chevron">▾</span></div>
-        <div class="cp-nav-item" data-tab="brain" data-group="memory" id="nav-brain">Brain</div>
         <div class="cp-nav-group" id="nav-group-imagegen" data-group-id="imagegen">ImageGen<span class="nav-chevron">▾</span></div>
         <div class="cp-nav-item" data-tab="imagegen-model" data-group="imagegen" id="nav-imagegen-model">Models</div>
         <div class="cp-nav-item" data-tab="imagegen-settings" data-group="imagegen" id="nav-imagegen-settings">Settings</div>
+        <div class="cp-nav-group" data-group-id="system">System<span class="nav-chevron">▾</span></div>
+        <div class="cp-nav-item" data-tab="settings" data-group="system">Settings</div>
+        <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
+        <div class="cp-nav-item" data-tab="plugins" data-group="system" id="nav-plugins">Plugins</div>
+        <div class="cp-nav-item" data-tab="debug" data-group="system">Deep Thread Inspection (DTI)</div>
       </div>
     </div>
   </aside>
@@ -649,9 +651,20 @@ body.cp-win32 #cp-win-controls { display: flex; }
     <div id="tab-servers" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
         <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">LLM Servers</div>
-        <button class="vs-btn-primary" id="srv-add-btn" type="button" style="font-size:12px;padding:6px 16px;">+ New server</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="vs-btn-primary" id="srv-startall-btn" type="button" style="font-size:12px;padding:6px 14px;background:transparent;border:1px solid var(--border);color:var(--text);">Start all</button>
+          <button class="vs-btn-primary" id="srv-stopall-btn" type="button" style="font-size:12px;padding:6px 14px;background:transparent;border:1px solid var(--border);color:var(--text);">Stop all</button>
+          <button class="vs-btn-primary" id="srv-import-btn" type="button" style="font-size:12px;padding:6px 14px;background:transparent;border:1px solid var(--border);color:var(--text);">Import server…</button>
+          <input type="file" id="srv-import-file" accept=".json" style="display:none;">
+          <button class="vs-btn-primary" id="srv-add-btn" type="button" style="font-size:12px;padding:6px 16px;">+ New server</button>
+        </div>
       </div>
+      <div id="srv-machine" style="margin-bottom:16px;"></div>
       <div id="srv-cards" style="display:flex;flex-direction:column;gap:12px;"></div>
+
+      
+
+      
     </div>
 
     <!-- Models tab -->
@@ -1045,10 +1058,47 @@ body.cp-win32 #cp-win-controls { display: flex; }
           Ari's identity and voice, prepended to every user-facing agent (dialogue and coding). This shapes
           how she speaks, not what she concludes. Keep it lean — backstory and lore belong in her brain, not here.
         </p>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <select id="persona-select" class="vs-input" style="min-width:180px;font-size:13px;"></select>
+          <input id="persona-name" class="vs-input" type="text" placeholder="Name" style="width:140px;font-size:13px;display:none;">
+          <input id="persona-desc" class="vs-input" type="text" placeholder="One line about it" style="flex:1;min-width:160px;font-size:13px;display:none;">
+          <button class="vs-btn-primary" id="persona-new-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">New persona</button>
+          <button class="vs-btn-primary" id="persona-default-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);" title="Ari speaks as this persona in every conversation">Use this persona</button>
+          <button class="vs-btn-primary" id="persona-del-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);display:none;">Delete</button>
+        </div>
         <textarea id="persona-text" class="vs-input" style="width:100%;min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;resize:vertical;" placeholder="You are Ari, an AI assistant. …"></textarea>
         <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
           <button class="vs-btn-primary" id="persona-save-btn" type="button">Save persona</button>
           <span id="persona-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+      </div>
+
+      <div class="vs-section" style="margin-top:20px;">
+        <style>
+          .rw-sel { background:#b9dbe3; color:#101618; border-radius:2px; } .rw-del { background:rgba(224,106,90,.22); color:#d0604f; text-decoration:line-through; border-radius:2px; }
+          .rw-ins { background:rgba(80,180,120,.22); color:#3f9a66; border-radius:2px; } .rw-badge { font:10.5px ui-monospace,Menlo,monospace; color:var(--accent); border:1px solid var(--accent); border-radius:999px; padding:0 6px; margin-left:6px; }
+          .rw-selc { background:rgba(160,120,230,.25); outline:1px solid #a07ae6; border-radius:2px; } .rw-struck { text-decoration:line-through; color:#d0604f; }
+          .rw-cur { position:relative; display:inline-block; width:0; height:1.15em; border-left:2px solid #a07ae6; vertical-align:text-bottom; }
+          .rw-cur i { position:absolute; bottom:100%; left:-2px; white-space:nowrap; background:#a07ae6; color:#fff; font:normal 600 10px ui-monospace,Menlo,monospace; padding:1px 6px; border-radius:4px 4px 4px 0; }
+          .rw-opt { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+          .rw-opt small { display:block; color:var(--text-dim); }
+        </style>
+        <div class="vs-section-title">Suggestions from Ari</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">While idle, she reads her own corrections and notices what keeps coming up. Nothing changes until you approve it.</p>
+        <div id="rw-inbox" style="display:flex;flex-direction:column;gap:8px;margin-bottom:22px;"></div>
+        <div class="vs-section-title">Live editing</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          While Ari writes, a second pass reads each paragraph and fixes what is wrong in it: echoing you, invented details, padding. You see the fix being made. Pick how it looks; the preview shows it on a sample reply.
+        </p>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:12px;"><input type="checkbox" id="rw-enabled"> Review replies while she writes</label>
+        <div style="display:grid;grid-template-columns:minmax(220px,300px) 1fr;gap:16px;align-items:start;">
+          <div id="rw-options" style="display:flex;flex-direction:column;gap:8px;"></div>
+          <div>
+            <div id="rw-preview" style="position:relative;min-height:90px;border:1px dashed var(--border);border-radius:8px;padding:12px 14px;font-size:15px;line-height:1.7;"></div>
+            <button class="vs-btn-primary" id="rw-replay" type="button" style="margin-top:10px;background:transparent;border:1px solid var(--border);color:var(--text);">Replay preview</button>
+            <button class="vs-btn-primary" id="rw-save" type="button" style="margin-top:10px;">Save</button>
+            <span id="rw-status" style="font-size:12px;color:var(--text-dim);margin-left:8px;"></span>
+          </div>
         </div>
       </div>
     </div>
@@ -1126,6 +1176,16 @@ body.cp-win32 #cp-win-controls { display: flex; }
                 <input id="cal-f-end" class="vs-input" type="text" readonly style="width:100%;margin-top:4px;cursor:pointer;">
               </label>
             </div>
+          </div>
+
+          <!-- Remind me (events) -->
+          <div id="cal-f-remind-fields" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;"><input id="cal-f-remind" type="checkbox" style="width:15px;height:15px;"> Remind me</label>
+            <span id="cal-f-remind-detail" style="display:none;align-items:center;gap:6px;">
+              <input id="cal-f-remind-n" class="vs-input" type="number" min="1" value="15" style="width:70px;">
+              <select id="cal-f-remind-unit" class="vs-input"><option value="1">minutes</option><option value="60">hours</option><option value="1440">days</option></select>
+              before it starts
+            </span>
           </div>
 
           <!-- Reminder-only fields -->
@@ -1219,6 +1279,13 @@ body.cp-win32 #cp-win-controls { display: flex; }
         </div>
       </div>
 
+    
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">Loads when needed</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">These start the first time they are used and are unloaded after sitting idle, which frees their memory. Voice picks up a new time when ARI next starts.</p>
+        <div id="lazy-table" style="display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(90px,.8fr) minmax(150px,1fr) auto;gap:8px 14px;align-items:center;font-size:13px;"></div>
+        <span id="lazy-status" style="font-size:12px;color:var(--text-dim);"></span>
+      </div>
     </div>
 
     <!-- Tools tab -->
@@ -1252,6 +1319,17 @@ body.cp-win32 #cp-win-controls { display: flex; }
           Drop a <code>.cs</code> or <code>.txt</code> file anywhere on this table to start a new custom tool from it. A saved custom tool is live straight away and runs with full access to this machine.
         </p>
       </div>
+    
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">MCP servers</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">Tool servers other AI apps share. Each one listed here is started by ARI, and its tools become Ari's (for you only), named mcp_&lt;server&gt;_&lt;tool&gt;. Example: <code>{"servers":[{"name":"files","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}]}</code></p>
+        <textarea id="mcp-config" class="vs-input" spellcheck="false" style="width:100%;min-height:160px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;"></textarea>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap;">
+          <button class="vs-btn-primary" id="mcp-save-btn" type="button">Save and restart servers</button>
+          <span id="mcp-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+        <div id="mcp-servers" style="display:flex;flex-direction:column;gap:6px;margin-top:12px;font-size:13px;"></div>
+      </div>
     </div>
 
     <!-- Settings tab -->
@@ -1274,22 +1352,7 @@ body.cp-win32 #cp-win-controls { display: flex; }
         </div>
       </div>
 
-      <div class="vs-section" style="margin-top:28px;">
-        <div class="vs-section-title">Memory and other people</div>
-        <div style="display:flex;align-items:flex-start;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,var(--col-control-panel-line-1656-colour));">
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Let Engram remember conversations with other people</div>
-            <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">
-              Off by default: Engram only remembers your own conversations. Turn this on and it also remembers server channels, direct messages
-              with other people and guests' chats. Anything someone says there can become a note, so a guest's words end up in the brain,
-              and notes from a conversation with several people can attribute things to the wrong person. What ARI recalls for them is still
-              filtered. Applies immediately.
-            </div>
-            <div id="eo-status" style="font-size:12px;color:var(--text-dim);margin-top:8px;"></div>
-          </div>
-          <div id="eo-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
-        </div>
-      </div>
+      
 
       <div class="vs-section" style="margin-top:28px;">
         <div class="vs-section-title">Dreaming</div>
@@ -1315,6 +1378,28 @@ body.cp-win32 #cp-win-controls { display: flex; }
           </div>
           <div style="display:flex;flex-direction:column;gap:12px;" id="lg-rows"></div>
           <div id="lg-status" style="font-size:12px;color:var(--text-dim);margin-top:10px;"></div>
+        </div>
+      </div>
+    
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">Updates</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;"><input type="checkbox" id="au-enabled"> Update automatically</label>
+        <p style="color:var(--text-dim);font-size:13px;margin:6px 0 0;">When a new version is out, ARI waits until nothing has been happening for ten minutes, installs it and starts again on her own.</p>
+        <div id="au-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;"></div>
+      </div>
+    
+      <div class="vs-section" style="margin-top:24px;">
+        <div class="vs-section-title">Settings backup</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          Everything except the Brain: settings, agents, servers, persona, feedback, plugins, custom tools, accounts and conversations.
+          Restoring it on a fresh install brings ARI back as she was. Your current settings are saved first, and ARI has to be restarted afterwards.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <button class="vs-btn-primary" id="cfg-export-btn" type="button">Download settings backup</button>
+          <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:6px;"><input type="checkbox" id="cfg-export-keys"> Include keys and tokens</label>
+          <button class="vs-btn-primary" id="cfg-restore-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">Restore from file…</button>
+          <input type="file" id="cfg-restore-file" accept=".zip" style="display:none;">
+          <span id="cfg-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
       </div>
     </div>
@@ -1350,6 +1435,11 @@ body.cp-win32 #cp-win-controls { display: flex; }
 .pip-world svg path:hover{stroke:#d9534f}
 .pip-world svg path.stream{stroke:#2aa6b8;stroke-dasharray:10 7;animation:pipflow .8s linear infinite}
 .pip-world svg path.tmp{stroke:#5aa9b8;stroke-dasharray:5 5;pointer-events:none}
+.pip-world svg path.loop{stroke:#9a72e0;stroke-dasharray:9 6}
+.pip-world svg text.loop-lab{fill:#9a72e0;font:600 12px ui-monospace,Menlo,monospace;pointer-events:all;cursor:pointer}
+.pip-tools{margin:4px 10px 0;padding:4px 0 2px;border-top:1px solid rgba(255,255,255,.18);font:700 10px ui-monospace,Menlo,monospace;letter-spacing:.08em;color:rgba(255,255,255,.65)}
+.pip-row.pathway{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.pip-row.pathway.loops{color:#d3c1f5}
 @keyframes pipflow{to{stroke-dashoffset:-17}}
 .pip-node{position:absolute;width:230px;border-radius:12px;background:#666d70;color:#fff;box-shadow:0 3px 10px rgba(0,0,0,.3);font-size:13px}
 .pip-node.sel{box-shadow:0 0 0 2.5px #5aa9b8,0 3px 10px rgba(0,0,0,.3)}
@@ -1383,6 +1473,17 @@ body.cp-win32 #cp-win-controls { display: flex; }
 
     <div id="tab-brain" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
+        <div class="vs-section-title">Browse the brain</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">The notes by folder, to read. Links open the note they point to. Nothing here changes the brain.</p>
+        <div style="display:flex;gap:16px;align-items:stretch;min-height:320px;max-height:560px;">
+          <div style="flex:0 0 260px;display:flex;flex-direction:column;gap:8px;min-width:0;">
+            <input id="bb-filter" type="search" placeholder="Filter notes…" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;">
+            <div id="bb-tree" style="flex:1;overflow:auto;font-size:13px;border:1px solid var(--border);border-radius:8px;padding:6px;"></div>
+          </div>
+          <div id="bb-note" style="flex:1;min-width:0;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-size:14px;line-height:1.55;color:var(--text);"><span style="color:var(--text-dim);">Pick a note.</span></div>
+        </div>
+      </div>
+      <div class="vs-section">
         <div class="vs-section-title">Engram sweep interval</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
           How many message exchanges an active conversation accumulates before Engram sweeps it into
@@ -1399,6 +1500,23 @@ body.cp-win32 #cp-win-controls { display: flex; }
           <span id="brain-interval-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
       </div>
+      <div class="vs-section" style="margin-top:28px;">
+        <div class="vs-section-title">Memory and other people</div>
+        <div style="display:flex;align-items:flex-start;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--user-bubble,var(--col-control-panel-line-1656-colour));">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Let Engram remember conversations with other people</div>
+            <div style="font-size:13px;color:var(--text-dim);line-height:1.45;">
+              Off by default: Engram only remembers your own conversations. Turn this on and it also remembers server channels, direct messages
+              with other people and guests' chats. Anything someone says there can become a note, so a guest's words end up in the brain,
+              and notes from a conversation with several people can attribute things to the wrong person. What ARI recalls for them is still
+              filtered. Applies immediately.
+            </div>
+            <div id="eo-status" style="font-size:12px;color:var(--text-dim);margin-top:8px;"></div>
+          </div>
+          <div id="eo-toggle" style="display:flex;align-items:center;padding-top:2px;"></div>
+        </div>
+      </div>
+
       <div class="vs-section">
         <div class="vs-section-title">Backups</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
@@ -1412,6 +1530,27 @@ body.cp-win32 #cp-win-controls { display: flex; }
           <span id="brain-status" style="font-size:12px;color:var(--text-dim);"></span>
         </div>
         <div id="brain-backup-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+
+        <div class="vs-section-title" style="margin-top:28px;">Tidiness check</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          A read-only look at how easy the graph is to follow: notes that lead nowhere, notes nothing leads to, probable duplicates, notes with no type and notes nobody has touched for four months. It changes nothing. Fixes are yours to approve.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <button class="vs-btn-primary" id="brain-health-btn" type="button">Check the brain</button>
+          <span id="brain-health-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+        <div id="brain-health-result" style="display:flex;flex-direction:column;gap:8px;"></div>
+
+        <div class="vs-section-title" style="margin-top:28px;">Suggestions for the brain</div>
+        <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">
+          While Ari is idle, she looks over the graph and suggests tidy-ups: notes that are one thing under two names, notes with no type, and notes nothing links to. Nothing changes until you approve it; a dismissed suggestion never comes back.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <button class="vs-btn-primary" id="brain-prop-scan" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);">Look for suggestions now</button>
+          <span id="brain-prop-status" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+        <div id="brain-prop-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+
       </div>
     </div>
 
@@ -1696,21 +1835,21 @@ function switchTab(name) {
     }
     if (name === 'customisation') { loadBranding(); loadCustomisation(); }
     if (name === 'conventions') loadConventions();
-    if (name === 'persona') loadPersona();
+    if (name === 'persona') { loadPersona(); loadReflectSettings(); }
     if (name === 'feedback') loadFeedback();
     if (name === 'models') loadModels();
-    if (name === 'brain') loadBrain();
+    if (name === 'brain') { loadBrain(); loadBrainProposals(); loadBrainBrowser(); loadEngramOthers(); }
     if (name === 'servers') loadServers();
     if (name === 'pipelines' && !pipDirty) pipMode = 'list';   // the tab always opens on the list; Edit opens the editor
     if (name === 'agents' || name === 'pipelines') loadAgents();
     if (name === 'llmconfigs') loadLLMConfigs();
-    if (name === 'tools') loadTools();
+    if (name === 'tools') { loadTools(); loadMcp(); }
     if (name === 'calendar') loadCalendar();
     if (name === 'plugins') { loadPlugins(); plSetMode('installed'); }
     if (name === 'debug') loadDebugThreads();
     if (name === 'users') loadUserManagement();
-    if (name === 'settings') { loadPersistedThreads(); loadLogging(); loadDreaming(); loadEngramOthers(); }
-    if (name === 'modules') loadModules();
+    if (name === 'settings') { loadPersistedThreads(); loadLogging(); loadDreaming(); loadAutoUpdate(); }
+    if (name === 'modules') { loadModules(); loadLazyServices(); }
     if (name === 'voices') { closeVoiceDetail(); loadVoicesList(); }
     if (name === 'voice') vsRestoreTraining();
     if (name === 'imagegen-model' || name === 'imagegen-settings') igLoad();
@@ -2635,6 +2774,7 @@ function wireCalendarOnce() {
     document.getElementById('cal-modal-overlay').addEventListener('click', e => { if (e.target.id === 'cal-modal-overlay') closeCalModal(); });
     document.getElementById('cal-f-repeat').addEventListener('change', calUpdateRepeatVisibility);
     document.getElementById('cal-f-wholeday').addEventListener('change', calUpdateWholeDayFields);
+    document.getElementById('cal-f-remind').addEventListener('change', e => { document.getElementById('cal-f-remind-detail').style.display = e.target.checked ? 'inline-flex' : 'none'; });
     dtpInit();
     document.getElementById('cal-f-start').addEventListener('click', () => dtpOpen(document.getElementById('cal-f-start')));
     document.getElementById('cal-f-end').addEventListener('click', () => dtpOpen(document.getElementById('cal-f-end')));
@@ -2852,6 +2992,7 @@ function openCalModal(kind, item, defaultDate, timeRange) {
 
     document.getElementById('cal-modal-title').textContent   = (item ? 'Edit ' : 'New ') + (kind === 'reminder' ? 'Reminder' : 'Event');
     document.getElementById('cal-f-event-fields').style.display    = kind === 'event'    ? '' : 'none';
+    document.getElementById('cal-f-remind-fields').style.display   = kind === 'event'    ? 'flex' : 'none';
     document.getElementById('cal-f-reminder-fields').style.display = kind === 'reminder' ? '' : 'none';
     document.getElementById('cal-f-delete').style.display = item ? '' : 'none';
     document.getElementById('cal-modal-status').textContent = '';
@@ -2863,6 +3004,14 @@ function openCalModal(kind, item, defaultDate, timeRange) {
     base.setHours(9, 0, 0, 0);
     if (kind === 'event') {
         document.getElementById('cal-f-wholeday').checked = item ? !!item.isWholeDay : false;
+        {
+            const m = item && item.remindBeforeMinutes ? item.remindBeforeMinutes : 0;
+            const unit = m && m % 1440 === 0 ? 1440 : m && m % 60 === 0 ? 60 : 1;
+            document.getElementById('cal-f-remind').checked = !!m;
+            document.getElementById('cal-f-remind-n').value = m ? m / unit : 15;
+            document.getElementById('cal-f-remind-unit').value = String(unit);
+            document.getElementById('cal-f-remind-detail').style.display = m ? 'inline-flex' : 'none';
+        }
         const rangeStart = item ? item._start : (timeRange ? timeRange.start : base);
         const rangeEnd   = item ? item._end   : (timeRange ? timeRange.end   : new Date(base.getTime() + 60 * 60 * 1000));
         // Always populate as datetime first — calUpdateWholeDayFields() below switches the fields to
@@ -3269,6 +3418,7 @@ async function saveCalModal() {
             start: wholeDay ? `${start}T00:00:00` : start + ':00',
             end:   wholeDay ? `${end}T00:00:00`   : end + ':00',
             isWholeDay: wholeDay,
+            remindBeforeMinutes: document.getElementById('cal-f-remind').checked ? Math.max(1, parseInt(document.getElementById('cal-f-remind-n').value, 10) || 1) * parseInt(document.getElementById('cal-f-remind-unit').value, 10) : 0,
             recurrence: calBuildRecurrencePayload(),
         };
     } else {
@@ -3423,6 +3573,111 @@ document.getElementById('brain-backup-btn').addEventListener('click', async () =
     } catch { s.textContent = 'Backup failed.'; }
 });
 document.getElementById('brain-refresh-btn').addEventListener('click', () => { brainStatus().textContent = ''; loadBrain(); });
+
+// ── brain tidiness check ──────────────────────────────────
+// ── Brain browser (read-only) ─────────────────────────────────────────
+let bbNotes = [];
+async function loadBrainBrowser() {
+    const tree = document.getElementById('bb-tree');
+    try { const r = await cpFetch('/api/v1/admin/brain/notes'); bbNotes = r.ok ? await r.json() : []; } catch { bbNotes = []; }
+    if (!bbNotes.length) { tree.innerHTML = '<span style="color:var(--text-dim);">The brain is empty or not running.</span>'; return; }
+    renderBrainTree();
+    const f = document.getElementById('bb-filter');
+    if (!f.dataset.wired) { f.dataset.wired = '1'; f.addEventListener('input', renderBrainTree); }
+}
+function renderBrainTree() {
+    const q = document.getElementById('bb-filter').value.trim().toLowerCase();
+    const groups = {};
+    for (const n of bbNotes) {
+        if (q && !n.toLowerCase().includes(q)) continue;
+        const i = n.lastIndexOf('/'); const folder = i < 0 ? '' : n.slice(0, i);
+        (groups[folder] ||= []).push(n);
+    }
+    const folders = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+    document.getElementById('bb-tree').innerHTML = folders.map(f => `<details ${q || folders.length < 6 ? 'open' : ''}><summary style="cursor:pointer;font-weight:600;padding:2px 0;color:var(--text);">${escHtml(f || 'Top level')} <span style="color:var(--text-dim);font-weight:400;">${groups[f].length}</span></summary>` +
+        groups[f].map(n => `<div data-bb="${escHtml(n)}" style="cursor:pointer;padding:2px 0 2px 14px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(n.slice(n.lastIndexOf('/') + 1))}</div>`).join('') + '</details>').join('');
+    document.querySelectorAll('[data-bb]').forEach(el => el.addEventListener('click', () => openBrainNote(el.dataset.bb)));
+}
+async function openBrainNote(name) {
+    const box = document.getElementById('bb-note');
+    const r = await cpFetch('/api/v1/admin/brain/note?path=' + encodeURIComponent(name));
+    if (!r.ok) { box.innerHTML = '<span style="color:var(--text-dim);">That note isn\'t there.</span>'; return; }
+    const n = await r.json();
+    const linked = n.content.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => `<a href="#" data-bblink="${escHtml(target)}">${escHtml(label || target)}</a>`);
+    const meta = [n.type, n.sensitive ? 'private' : null, (n.keywords || []).filter(k => k.startsWith('#')).join(' ') || null].filter(Boolean).join(' · ');
+    box.innerHTML = `<div style="font-size:18px;font-weight:700;margin-bottom:2px;">${escHtml(n.title)}</div><div style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">${escHtml(n.name)}${meta ? ' · ' + escHtml(meta) : ''}</div>` + marked.parse(linked);
+    box.querySelectorAll('[data-bblink]').forEach(a => a.addEventListener('click', e => {
+        e.preventDefault();
+        const t = a.dataset.bblink.toLowerCase();
+        const hit = bbNotes.find(x => x.toLowerCase() === t) || bbNotes.find(x => x.toLowerCase().endsWith('/' + t));
+        if (hit) openBrainNote(hit);
+    }));
+    box.scrollTop = 0;
+}
+
+async function loadBrainProposals() {
+    const box = document.getElementById('brain-prop-list'); let items = [];
+    try { const r = await cpFetch('/api/v1/admin/brain/proposals'); if (r.ok) items = await r.json(); } catch {}
+    const say = p => p.kind === 'merge' ? `Merge <b>${escHtml(p.a)}</b> into <b>${escHtml(p.b)}</b>` : p.kind === 'type' ? `Mark <b>${escHtml(p.a)}</b> as a ${escHtml(p.value)}` : p.kind === 'stale' ? `In <b>${escHtml(p.a)}</b>, change <s>${escHtml(p.b)}</s> to <b>${escHtml(p.value)}</b>` : `Link <b>${escHtml(p.b)}</b> to <b>${escHtml(p.a)}</b>`;
+    box.innerHTML = items.length ? items.map(p => `<div style="display:flex;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <span style="flex:1;min-width:0;">${say(p)}<span style="display:block;color:var(--text-dim);font-size:12px;">${escHtml(p.why || '')}</span></span>
+        <button class="vs-btn-primary" type="button" data-bp="${p.id}" data-yes="1" style="font-size:12px;padding:4px 12px;">Approve</button>
+        <button class="vs-btn-primary" type="button" data-bp="${p.id}" style="font-size:12px;padding:4px 12px;background:transparent;border:1px solid var(--border);color:var(--text);">Dismiss</button></div>`).join('')
+        : '<div style="color:var(--text-dim);font-size:13px;">No suggestions right now.</div>';
+    box.querySelectorAll('[data-bp]').forEach(b => b.addEventListener('click', async () => {
+        const st = document.getElementById('brain-prop-status');
+        const r = await cpFetch('/api/v1/admin/brain/proposals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: b.dataset.bp, approve: !!b.dataset.yes }) });
+        const j = await r.json().catch(() => ({})); st.textContent = j.result || (r.ok ? 'Done.' : 'That didn\'t work.'); setTimeout(() => st.textContent = '', 6000);
+        loadBrainProposals();
+    }));
+}
+document.getElementById('brain-prop-scan').addEventListener('click', async () => {
+    const st = document.getElementById('brain-prop-status'); st.textContent = 'Looking…';
+    const r = await cpFetch('/api/v1/admin/brain/proposals/scan', { method: 'POST' }); const j = await r.json().catch(() => ({}));
+    st.textContent = r.ok ? (j.added ? j.added + ' new suggestion(s).' : 'Nothing new to suggest.') : (j.error || 'That didn\'t work.');
+    loadBrainProposals();
+});
+
+document.getElementById('brain-health-btn').addEventListener('click', async () => {
+    const status = document.getElementById('brain-health-status'), out = document.getElementById('brain-health-result');
+    status.textContent = 'Checking…'; out.innerHTML = '';
+    try {
+        const r = await cpFetch('/api/v1/admin/brain/health');
+        if (!r.ok) { status.textContent = 'Failed: ' + await cpErrorText(r); return; }
+        const d = await r.json();
+        status.textContent = d.notes + ' notes' + (d.unresolvedLinks >= 0 ? ', ' + d.unresolvedLinks + ' links that point at nothing' : '') + '.';
+        const group = (title, list) => `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;"><summary style="cursor:pointer;">${escHtml(title)} (${list.length}${list.length >= 60 ? '+' : ''})</summary><div style="font-size:12px;color:var(--text-dim);margin-top:6px;">${list.map(escHtml).join('<br>') || 'None.'}</div></details>`;
+        out.innerHTML = group('Lead nowhere (no links out)', d.deadEnds) + group('Nothing leads to them', d.orphans)
+            + group('Probable duplicates', d.duplicates.map(x => x.a + '  ↔  ' + x.b)) + group('No type', d.untyped) + group('Untouched for four months', d.stale);
+    } catch { status.textContent = 'Failed.'; }
+});
+
+// ── settings backup ───────────────────────────────────────
+document.getElementById('cfg-export-btn').addEventListener('click', async () => {
+    const status = document.getElementById('cfg-status'); status.textContent = 'Preparing…';
+    try {
+        const keys = document.getElementById('cfg-export-keys').checked;
+        const r = await cpFetch('/api/v1/admin/config/export?keys=' + keys);
+        if (!r.ok) { status.textContent = 'Failed: ' + await cpErrorText(r); return; }
+        const url = URL.createObjectURL(await r.blob());
+        const a = Object.assign(document.createElement('a'), { href: url, download: 'ARI-Config-' + new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-') + '.zip' });
+        a.click(); URL.revokeObjectURL(url);
+        status.textContent = 'Downloaded.';
+    } catch { status.textContent = 'Failed.'; }
+});
+document.getElementById('cfg-restore-btn').addEventListener('click', () => document.getElementById('cfg-restore-file').click());
+document.getElementById('cfg-restore-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    if (!confirm('Restore settings from ' + file.name + '? Your current settings are saved first. ARI must be restarted afterwards.')) return;
+    const status = document.getElementById('cfg-status'); status.textContent = 'Restoring…';
+    const form = new FormData(); form.append('file', file);
+    try {
+        const r = await cpFetch('/api/v1/admin/config/restore', { method: 'POST', body: form });
+        const body = await r.json().catch(() => ({}));
+        status.textContent = r.ok ? 'Restored ' + body.restored + ' files (previous settings saved as ' + body.savedBefore + '). Restart ARI to apply.' : 'Failed: ' + (body.error || r.statusText);
+    } catch { status.textContent = 'Failed.'; }
+});
 
 // ── plugins ───────────────────────────────────────────────
 // A plugin describes its own settings, actions and source; this page only draws them. IDs stay strings end to end: Discord snowflakes exceed 2^53.
@@ -3983,25 +4238,123 @@ document.getElementById('um-reset-cancel').addEventListener('click', () => {
 });
 
 // ── Persona ───────────────────────────────────────────────
-let personaLoaded = false;
+// Several personas can exist; each conversation speaks in one of them. "ari" is the main one and can't be deleted.
+let personaList = [], personaDefault = 'ari', personaCurrent = 'ari';
 async function loadPersona() {
-    if (personaLoaded) return;
+    const status = document.getElementById('persona-status');
     try {
-        const d = await cpGetSettings();
-        document.getElementById('persona-text').value = d.persona || '';
-        personaLoaded = true;
-    } catch { document.getElementById('persona-status').textContent = 'Failed to load.'; }
+        const r = await cpFetch('/api/v1/personas'); const d = await r.json();
+        personaList = d.personas; personaDefault = d.defaultId;
+        if (!personaList.some(p => p.id === personaCurrent)) personaCurrent = 'ari';
+        renderPersonaSelect();
+        await showPersona(personaCurrent);
+    } catch { status.textContent = 'Failed to load.'; }
 }
+function renderPersonaSelect() {
+    const sel = document.getElementById('persona-select');
+    sel.innerHTML = personaList.map(p => `<option value="${escHtml(p.id)}" ${p.id === personaCurrent ? 'selected' : ''}>${escHtml(p.name)}${p.id === personaDefault ? ' (active)' : ''}</option>`).join('');
+}
+async function showPersona(id) {
+    personaCurrent = id;
+    const info = personaList.find(p => p.id === id);
+    const r = await cpFetch('/api/v1/admin/personas/' + encodeURIComponent(id)); const d = await r.json();
+    document.getElementById('persona-text').value = d.text || '';
+    const named = id !== 'ari';
+    document.getElementById('persona-name').style.display = named ? '' : 'none';
+    document.getElementById('persona-desc').style.display = named ? '' : 'none';
+    document.getElementById('persona-del-btn').style.display = named ? '' : 'none';
+    document.getElementById('persona-name').value = info?.name || '';
+    document.getElementById('persona-desc').value = info?.description || '';
+    document.getElementById('persona-default-btn').disabled = id === personaDefault;
+}
+document.getElementById('persona-select').addEventListener('change', e => { personaCurrent = e.target.value; renderPersonaSelect(); showPersona(personaCurrent); });
 document.getElementById('persona-save-btn').addEventListener('click', async () => {
     const status = document.getElementById('persona-status');
-    const text   = document.getElementById('persona-text').value;
     status.textContent = 'Saving…';
     try {
-        const r = await cpPatchSettings({ persona: text });
+        const body = { text: document.getElementById('persona-text').value };
+        if (personaCurrent !== 'ari') { body.name = document.getElementById('persona-name').value; body.description = document.getElementById('persona-desc').value; }
+        const r = await cpFetch('/api/v1/admin/personas/' + encodeURIComponent(personaCurrent), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         if (!r.ok) throw new Error();
-        status.textContent = 'Saved — applies to new threads.';
+        status.textContent = 'Saved. Applies from the next reply in each conversation.';
+        await loadPersona();
         setTimeout(() => { status.textContent = ''; }, 4000);
     } catch { status.textContent = 'Save failed.'; }
+});
+document.getElementById('persona-new-btn').addEventListener('click', async () => {
+    const name = prompt('Name for the new persona?'); if (!name) return;
+    const r = await cpFetch('/api/v1/admin/personas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description: '', text: 'Describe how this persona speaks here.' }) });
+    if (!r.ok) { document.getElementById('persona-status').textContent = 'Could not create it.'; return; }
+    personaCurrent = (await r.json()).id; await loadPersona();
+});
+document.getElementById('persona-default-btn').addEventListener('click', async () => {
+    await cpFetch('/api/v1/admin/personas-default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personaId: personaCurrent }) });
+    await loadPersona();
+});
+document.getElementById('persona-del-btn').addEventListener('click', async () => {
+    if (!confirm('Delete this persona? Conversations using it fall back to the default.')) return;
+    await cpFetch('/api/v1/admin/personas/' + encodeURIComponent(personaCurrent), { method: 'DELETE' });
+    personaCurrent = 'ari'; await loadPersona();
+});
+
+// ── Live editing style ────────────────────────────────────
+const RW_STYLES = [
+    { id: 'cursor', name: 'Second author with a cursor', note: 'A named cursor selects the phrase, deletes it and types the fix.' },
+    { id: 'retype', name: 'Strike, delete, retype', note: 'The old words are struck through, backspaced away and retyped.' },
+    { id: 'select', name: 'Select, then type over', note: 'The phrase is highlighted, then replaced by typing.' },
+    { id: 'suggest', name: 'Suggestion mode', note: 'Old words in red, new in green, then it settles.' },
+];
+const RW_TEXT = "yes, it was good. stop making a budget spreadsheet in your head over twelve quid of cheese and just get it. you already know you will.";
+const RW_OLD = 'stop making a budget spreadsheet in your head', RW_NEW = 'quit auditing your wallet';
+let rwStyle = 'cursor', rwRun = 0;
+const rwSleep = ms => new Promise(r => setTimeout(r, ms));
+async function rwPlay() {
+    const box = document.getElementById('rw-preview'), id = ++rwRun, t0 = RW_TEXT.indexOf(RW_OLD), t1 = t0 + RW_OLD.length;
+    box.innerHTML = '<span class="pre"></span><span class="tgt"></span><span class="post"></span>';
+    const pre = box.querySelector('.pre'), tgt = box.querySelector('.tgt'), post = box.querySelector('.post');
+    const cur = () => { const c = document.createElement('span'); c.className = 'rw-cur'; c.innerHTML = '<i>Ari · reviewing</i>'; return c; };
+    const type = async (el, text, ms, after) => { for (const ch of text) { if (id !== rwRun) return; el.append(ch); if (after) el.append(after); await rwSleep(ms); if (after) after.remove(); } };
+    const edit = async () => {
+        const old = tgt.textContent; const step = Math.max(1, Math.ceil(old.length / 25));
+        if (rwStyle === 'select') { tgt.className = 'rw-sel'; await rwSleep(850); tgt.textContent = ''; tgt.className = ''; await type(tgt, RW_NEW, 30); }
+        else if (rwStyle === 'suggest') { tgt.className = 'rw-del'; const ins = document.createElement('span'); ins.className = 'rw-ins'; tgt.after(ins); await rwSleep(500); await type(ins, RW_NEW, 28); await rwSleep(1100); tgt.remove(); ins.className = ''; }
+        else if (rwStyle === 'retype') { tgt.className = 'rw-struck'; await rwSleep(600); for (let k = old.length - step; k > 0; k -= step) { tgt.textContent = old.slice(0, k); await rwSleep(24); } tgt.textContent = ''; tgt.className = ''; await type(tgt, RW_NEW, 30); }
+        else { tgt.className = 'rw-selc'; const c = cur(); tgt.after(c); await rwSleep(850); for (let k = old.length - step; k > 0; k -= step) { tgt.textContent = old.slice(0, k); await rwSleep(20); } tgt.textContent = ''; tgt.className = ''; for (const ch of RW_NEW) { if (id !== rwRun) return; tgt.append(ch); await rwSleep(32); } await rwSleep(500); c.remove(); }
+    };
+    let edited = false;
+    for (let i = 0; i < RW_TEXT.length; i++) {
+        if (id !== rwRun) return;
+        (i < t0 ? pre : i < t1 ? tgt : post).append(RW_TEXT[i]);
+        if (!edited && i === t1 + 22) { edited = true; edit(); }
+        await rwSleep(24);
+    }
+}
+function rwRenderOptions() {
+    document.getElementById('rw-options').innerHTML = RW_STYLES.map(s => `<label class="rw-opt" style="${s.id === rwStyle ? 'border-color:var(--accent);' : ''}"><input type="radio" name="rw-style" value="${s.id}" ${s.id === rwStyle ? 'checked' : ''}><span>${escHtml(s.name)}<small>${escHtml(s.note)}</small></span></label>`).join('');
+    document.querySelectorAll('input[name="rw-style"]').forEach(r => r.addEventListener('change', () => { rwStyle = r.value; rwRenderOptions(); rwPlay(); }));
+}
+async function loadReflectSettings() {
+    try { const d = await (await cpFetch('/api/v1/admin/reflect')).json(); rwStyle = d.editStyle || 'cursor'; document.getElementById('rw-enabled').checked = !!d.enabled; } catch {}
+    rwRenderOptions(); rwPlay(); loadReflectInbox();
+}
+async function loadReflectInbox() {
+    const box = document.getElementById('rw-inbox'); let items = [];
+    try { const r = await cpFetch('/api/v1/admin/reflect/proposals'); if (r.ok) items = await r.json(); } catch {}
+    box.innerHTML = items.length ? items.map(p => `<div class="rw-opt" style="cursor:default;align-items:center;">
+        <span style="flex:1;min-width:0;">${p.kind === 'banned_phrase' ? 'Never say: <b>' + escHtml(p.text) + '</b>' : escHtml(p.text)}<small>${escHtml(p.why || '')}</small></span>
+        <button class="vs-btn-primary" type="button" data-rwp="${p.id}" data-yes="1" style="font-size:12px;padding:4px 12px;">${p.kind === 'banned_phrase' ? 'Add' : 'Noted'}</button>
+        <button class="vs-btn-primary" type="button" data-rwp="${p.id}" style="font-size:12px;padding:4px 12px;background:transparent;border:1px solid var(--border);color:var(--text);">Dismiss</button></div>`).join('')
+        : '<div style="color:var(--text-dim);font-size:13px;">No suggestions right now.</div>';
+    box.querySelectorAll('[data-rwp]').forEach(b => b.addEventListener('click', async () => {
+        await cpFetch('/api/v1/admin/reflect/proposals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: b.dataset.rwp, approve: !!b.dataset.yes }) });
+        loadReflectInbox();
+    }));
+}
+document.getElementById('rw-replay').addEventListener('click', rwPlay);
+document.getElementById('rw-save').addEventListener('click', async () => {
+    const st = document.getElementById('rw-status'); st.textContent = 'Saving…';
+    const r = await cpFetch('/api/v1/admin/reflect', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ editStyle: rwStyle, enabled: document.getElementById('rw-enabled').checked }) });
+    st.textContent = r.ok ? 'Saved. Applies from her next reply.' : 'Save failed.'; setTimeout(() => st.textContent = '', 4000);
 });
 
 // ── Response Feedback ─────────────────────────────────────
@@ -4842,21 +5195,26 @@ function agBindingPickers(agent) {
 
     function fillSlots() {
         const s = (agData.servers || []).find(x => x.name === srv.value);
-        const slots = (s && s.slots && s.slots.length) ? s.slots : [{ name: 'Default' }];
+        const slots = (s && s.slots && s.slots.length) ? s.slots : [];
         slot.innerHTML = '';
+        // The usual choice: the agent belongs to the server and each turn takes whichever slot is free. Naming a slot holds it for this agent.
+        const any = document.createElement('option');
+        any.value = ''; any.textContent = 'Any free slot';
+        slot.append(any);
         slots.forEach(sl => {
             const o = document.createElement('option');
-            o.value = sl.name; o.textContent = sl.name;
+            o.value = sl.name; o.textContent = 'Hold ' + sl.name;
             if (sl.name === agent.slotName) o.selected = true;
             slot.append(o);
         });
-        // Nothing matched (unnamed / renamed since) — fall back to whatever's first, same as the server.
-        if (!slots.some(sl => sl.name === agent.slotName)) slot.value = slots[0]?.name ?? '';
+        // Nothing matched (unnamed, or renamed since): it takes any free slot, the same as the server does.
+        if (!slots.some(sl => sl.name === agent.slotName)) slot.value = '';
+        slot.title = 'Any free slot: each turn runs on whichever of the server\'s slots is idle or least busy, so conversations run side by side. Hold a slot: this agent always uses it, and nothing else does.';
     }
     fillSlots();
 
-    srv.addEventListener('change', () => { agent.serverName = srv.value; agent.slotName = null; fillSlots(); agent.slotName = slot.value; agDirty(); });
-    slot.addEventListener('change', () => { agent.slotName = slot.value; agDirty(); });
+    srv.addEventListener('change', () => { agent.serverName = srv.value; agent.slotName = null; fillSlots(); agent.slotName = slot.value || null; agDirty(); });
+    slot.addEventListener('change', () => { agent.slotName = slot.value || null; agDirty(); });
     wrap.append(srv, slot);
     return wrap;
 }
@@ -5023,6 +5381,32 @@ function agRestartNote(id) {
 // ── Prompts tab: a list on the left, one prompt at a time on the right ──
 var prSelected = 'agent:Dialogue';
 
+// A reviewer's pathway tools: name, arguments, the sentence the agent reads, and where each leads (from the pipelines it sits in).
+function prPathwayTable(ed, agent) {
+    const row = agEl('div', 'margin:0 0 18px;');
+    row.append(agEl('label', 'display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;', 'Pathway tools'));
+    row.append(agEl('div', 'font-size:12px;color:var(--text-dim);margin-bottom:8px;max-width:640px;', 'Give this agent pathway tools to make it a reviewer. It reads the reply as it is written and ends by calling one; each tool is an output in the pipeline graph. They do nothing by themselves and only this agent can call them.'));
+    const leads = name => { const out = []; ((pipD && pipD.data && pipD.data.pipelines) || []).forEach(pl => pl.nodes.filter(n => n.type === 'agent' && n.agent === agent.name).forEach(n => { const e = pl.edges.find(x => x.from === n.id && x.fromPort === name); out.push(e ? pl.name + ': ' + pipLabel(pipNode(pl, e.to)) + ' ↻' : pl.name + ': ends the turn'); })); return out.join('; ') || 'not in a pipeline yet'; };
+    const tbl = agEl('table', 'border-collapse:collapse;font-size:13px;width:100%;max-width:820px;');
+    const head = agEl('tr'); ['Tool', 'Arguments', 'The agent reads', 'Leads to', ''].forEach(t => head.append(agEl('th', 'text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);padding:4px 6px;', t))); tbl.append(head);
+    const list = agent.pathways = agent.pathways || [];
+    const input = (val, ph, w, on) => { const i = document.createElement('input'); i.type = 'text'; i.className = 'vs-input'; i.value = val; i.placeholder = ph; i.style.cssText = 'width:' + w + ';box-sizing:border-box;'; i.oninput = () => { on(i.value); agDirty(); }; return i; };
+    list.forEach((t, k) => {
+        const tr = agEl('tr'); const td = c => { const x = agEl('td', 'padding:4px 6px;border-top:1px solid var(--border);vertical-align:middle;'); x.append(c); tr.append(x); };
+        td(input(t.name || '', 'Pass', '110px', v => t.name = v.replace(/[^A-Za-z0-9_]/g, '')));
+        td(input((t.args || []).join(', '), 'reason', '120px', v => t.args = v.split(',').map(x => x.trim()).filter(Boolean)));
+        td(input(t.description || '', 'what this choice means', '100%', v => t.description = v));
+        td(agEl('span', 'font-size:12px;color:var(--text-dim);', leads(t.name)));
+        const rm = agEl('button', '', 'Remove'); rm.className = 'agv-btn'; rm.type = 'button'; rm.onclick = () => { list.splice(k, 1); agDirty(); prRenderEditor(); }; td(rm);
+        tbl.append(tr);
+    });
+    row.append(tbl);
+    const add = agEl('button', 'margin-top:8px;margin-right:8px;', '+ Add a tool'); add.className = 'agv-btn'; add.type = 'button'; add.onclick = () => { list.push({ name: '', args: [], description: '' }); agDirty(); prRenderEditor(); };
+    const pf = agEl('button', 'margin-top:8px;', 'Use Pass / Fail(reason)'); pf.className = 'agv-btn'; pf.type = 'button'; pf.onclick = () => { agent.pathways = [{ name: 'Pass', args: [], description: 'The reply is good: end the turn.' }, { name: 'Fail', args: ['reason'], description: 'The reply needs work: say exactly what to fix.' }]; agDirty(); prRenderEditor(); };
+    row.append(add, pf);
+    ed.append(row);
+}
+
 function prField(host, label, hint, tokens, value, onInput) {
     const wrap = agEl('div', 'margin-bottom:26px;');
     wrap.append(agEl('div', 'font-size:14px;font-weight:600;', label));
@@ -5061,7 +5445,7 @@ function prRenderList() {
     add.onclick = async () => {
         const name = (prompt('Name for the new agent?') || '').trim(); if (!name) return;
         const srv = (agData.servers || [])[0] || { name: '', slots: [] };
-        const r = await cpFetch('/api/v1/admin/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, serverName: srv.name, slotName: (srv.slots && srv.slots[0] && (srv.slots[0].name || srv.slots[0])) || null, agentPrompt: '' }) });
+        const r = await cpFetch('/api/v1/admin/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, serverName: srv.name, slotName: null, agentPrompt: '' }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { alert(j.error || 'Could not create the agent.'); return; }
         agIsDirty = false; agData = null; prSelected = 'agent:' + name; await loadAgents();
@@ -5092,6 +5476,7 @@ function prRenderEditor() {
             const inp = document.createElement('input'); inp.type = 'text'; inp.className = 'vs-input'; inp.style.cssText = 'width:100%;max-width:520px;box-sizing:border-box;'; inp.placeholder = 'e.g. memory_tools'; inp.value = (agent.preloadedTools || []).join(', ');
             inp.oninput = () => { agent.preloadedTools = inp.value.split(',').map(x => x.trim()).filter(Boolean); agDirty(); };
             row.append(inp, agEl('div', 'font-size:12px;color:var(--text-dim);margin-top:4px;', 'Tool groups loaded from the start, so it does not have to ask for them. Behind the scenes in a pipeline an agent can only use tools that read.')); ed.append(row); }
+        if (agent.custom) prPathwayTable(ed, agent);
         if (agent.custom) { const row = agEl('div', 'margin:0 0 18px;'); row.append(agEl('label', 'display:block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim);margin-bottom:4px;', 'Max tool calls'));
             const inp = document.createElement('input'); inp.type = 'number'; inp.min = 0; inp.className = 'vs-input'; inp.style.cssText = 'width:90px;'; inp.value = agent.maxToolCalls || 0;
             inp.oninput = () => { agent.maxToolCalls = Math.max(0, parseInt(inp.value) || 0); agDirty(); };
@@ -5125,9 +5510,12 @@ function prRenderEditor() {
 // START (the conversation) → agents → END (the user). An agent's input ports are its {tokens} (custom agents) or fixed
 // (built-ins); each port takes one wire. The graph marked "active" answers chat messages in place of the built-in Dialogue.
 var pipD = null, pipSel = null, pipDirty = false, pipHooked = false, pipViews = {}, pipMode = 'list';
-const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories'] };
+const PIP_W = 230, PIP_BUILTIN = { Memory: ['history'], Dialogue: ['history', 'memories', 'critique'], Coder: ['history', 'critique'], Talking: ['history', 'memories'] };
+// A reviewer agent's pathway tools (Pass, Fail…) are its output ports; a wire from one may lead back to the writer.
+const pipPathways = n => n.type === 'agent' ? ((pipDef(n).pathways) || []) : [];
+const pipIsPathwayEdge = (p, e) => { const f = pipNode(p, e.from); return !!f && f.type === 'agent' && !!e.fromPort && !['history', 'message', 'output'].includes(e.fromPort); };
 const pipUid = () => Math.random().toString(36).slice(2, 8);
-const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => x !== 'message' && x !== 'since');   // both are always filled in, never wired
+const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => !['message', 'since', 'attempt', 'max_attempts', 'attempt_log', 'seconds_since_reply', 'changes', 'conventions'].includes(x));   // both are always filled in, never wired
 const pipAgentTokens = d => pipTokens((d.agentPrompt || '') + '\n' + (d.messagePrompt || ''));
 function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a => a.name === n.agent) || {} : {}; }
 // A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
@@ -5135,7 +5523,7 @@ const PIP_SUB_PORTS = ['history', 'message'];
 function pipSubOf(n) { return (pipD.data.pipelines || []).find(x => x.id === n.pipeline); }
 function pipLabel(n) { return n.type === 'pipeline' ? (pipSubOf(n) ? pipSubOf(n).name : '(missing pipeline)') : n.agent === 'Memory' ? 'Recall' : n.agent; }
 const pipIsBox = n => n.type === 'agent' || n.type === 'pipeline';
-function pipOutputs(n) { return n.type === 'start' ? ['history', 'message'] : ['output']; }
+function pipOutputs(n) { if (n.type === 'start') return ['history', 'message']; const pw = pipPathways(n); return pw.length ? pw.map(x => x.name) : ['output']; }
 function pipPortsOf(name) { const d = (agData.agents || []).find(a => a.name === name); if (!d) return null; return d.custom ? pipAgentTokens(d) : (pipD.ports && pipD.ports[name]) || PIP_BUILTIN[name] || null; }
 function pipInputs(n) { return n.type === 'agent' ? (pipPortsOf(n.agent) || []) : n.type === 'pipeline' ? PIP_SUB_PORTS : n.type === 'end' ? ['stream'] : []; }
 function pipCur() { return pipD.data.pipelines.find(p => p.id === pipD.cur) || pipD.data.pipelines[0]; }
@@ -5188,7 +5576,9 @@ function pipRenderList() {
         const text = agEl('div', 'flex:1;min-width:0;');
         const title = agEl('div', 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;');
         title.append(agEl('span', 'font-size:14px;font-weight:600;', q.name));
+        const core = q.id === 'code' || q.id === 'talk';   // shipped with ARI and picked with the Code and Talk buttons, not this list
         if (q.id === 'default') { const b = agEl('span', '', 'Default'); b.className = 'mdl-badge startup'; title.append(b); }
+        if (core) { const b = agEl('span', '', 'Built-in'); b.className = 'mdl-badge startup'; title.append(b); }
         const probs = pipProblems(q);
         const stat = agEl('div', 'font-size:12.5px;color:' + (probs.length ? '#d9a441' : 'var(--text-dim)') + ';line-height:1.45;',
             probs.length ? '⚠ ' + probs[0] + (probs.length > 1 ? ' (+' + (probs.length - 1) + ' more)' : '') : (q.nodes.filter(n => n.type === 'agent' || n.type === 'pipeline').map(n => n.type === 'pipeline' ? (pipSubOf(n) || { name: '?' }).name : (n.agent === 'Memory' ? 'Recall' : n.agent)).join(' → ') || 'No steps yet.'));
@@ -5201,8 +5591,9 @@ function pipRenderList() {
                 try { await pipPersist(); } catch (e) { q.hidden = on; alert(e.message); pipRenderList(); }
             });
         const edit = agEl('button', '', 'Edit'); edit.className = 'agv-btn'; edit.type = 'button'; edit.onclick = () => { pipD.cur = q.id; pipSel = null; pipMode = 'edit'; pipRender(); };
-        right.append(lab, tog, edit);
-        if (q.id !== 'default') {
+        if (core) right.append(agEl('span', 'font-size:12px;color:var(--text-dim);', q.id === 'code' ? 'Used by Code chats' : 'Used by Talk'), edit);
+        else right.append(lab, tog, edit);
+        if (q.id !== 'default' && !core) {
             const del = agEl('button', '', 'Delete'); del.className = 'agv-btn'; del.type = 'button';
             del.onclick = async () => { if (!confirm('Delete "' + q.name + '"? Chats using it go back to Default.')) return; pipD.data.pipelines = pipD.data.pipelines.filter(x => x.id !== q.id); try { await pipPersist(); } catch (e) { alert(e.message); await pipLoad(); return; } pipRenderList(); };
             right.append(del);
@@ -5258,7 +5649,7 @@ function pipFit() {
 }
 window.addEventListener('resize', () => { if (pipCanvas && pipCanvas.isConnected) { pipFit(); if (typeof pipCur === 'function' && pipD) { try { pipApplyView(pipCur()); } catch {} } } });
 
-function pipReaches(p, from, to) { const seen = new Set(), st = [from]; while (st.length) { const x = st.pop(); if (x === to) return true; if (seen.has(x)) continue; seen.add(x); p.edges.filter(e => e.from === x).forEach(e => st.push(e.to)); } return false; }
+function pipReaches(p, from, to, skipLoops) { const seen = new Set(), st = [from]; while (st.length) { const x = st.pop(); if (x === to) return true; if (seen.has(x)) continue; seen.add(x); p.edges.filter(e => e.from === x && !(skipLoops && pipIsPathwayEdge(p, e))).forEach(e => st.push(e.to)); } return false; }
 function pipIssues(p) {
     const out = [], end = p.nodes.find(n => n.type === 'end'), into = p.edges.filter(e => e.to === end.id);
     if (!into.length) out.push('Nothing is connected to END, so this pipeline never answers.');
@@ -5287,7 +5678,7 @@ function pipPos(n, side, port) {
     if (!pipIsBox(n)) return { x: n.x + 13, y: n.y + 13 };
     const outs = pipOutputs(n);
     if (side === 'out') return { x: n.x + PIP_W, y: n.y + 46 + Math.max(0, outs.indexOf(port)) * 28 };
-    return { x: n.x, y: n.y + 46 + outs.length * 28 + pipInputs(n).indexOf(port) * 28 };
+    return { x: n.x, y: n.y + 46 + outs.length * 28 + (pipPathways(n).length ? 22 : 0) + pipInputs(n).indexOf(port) * 28 };
 }
 const pipWirePath = (a, b) => { const d = Math.max(60, Math.abs(b.x - a.x) / 2); return `M${a.x},${a.y} C${a.x + d},${a.y} ${b.x - d},${b.y} ${b.x},${b.y}`; };
 function pipApplyView(p) {
@@ -5314,7 +5705,8 @@ function pipAddAgentNode(p, a, at) { const id = pipUid(); p.nodes.push({ id, typ
 function pipDelete(p, n) { if (!pipIsBox(n)) return; p.nodes = p.nodes.filter(x => x !== n); p.edges = p.edges.filter(e => e.from !== n.id && e.to !== n.id); if (pipSel === n.id) pipSel = null; pipTouch(); pipRender(); }
 function pipAddable(p) {   // agents that can sit in a graph and aren't in this one yet
     const have = new Set(p.nodes.filter(n => n.type === 'agent').map(n => n.agent));
-    return (agData.agents || []).filter(a => !have.has(a.name) && !a.system && (a.custom || PIP_BUILTIN[a.name]));
+    // Coder and Talking belong to the Code and Talk pipelines and are already there.
+    return (agData.agents || []).filter(a => !have.has(a.name) && !a.system && (a.custom || (PIP_BUILTIN[a.name] && !['Coder', 'Talking'].includes(a.name))));
 }
 function pipAddPipelineNode(p, sub, at) { const id = pipUid(); p.nodes.push({ id, type: 'pipeline', pipeline: sub.id, x: at.x, y: at.y }); pipSel = id; pipTouch(); pipRender(); }
 function pipAddablePipelines(p) { return (pipD.data.pipelines || []).filter(x => x.id !== p.id && x.id !== 'default'); }
@@ -5337,11 +5729,19 @@ function pipDraw(p) {
             const def = pipDef(n), ports = pipInputs(n), outs = pipOutputs(n), isSub = n.type === 'pipeline';
             d = agEl('div'); d.className = 'pip-node' + (pipSel === n.id ? ' sel' : '') + (def.enabled === false ? ' off' : '');
             const h = agEl('div'); h.className = 'pip-nh'; h.append(agEl('span', '', pipLabel(n))); const tg = agEl('span', '', isSub ? 'pipeline' : def.custom ? 'custom' : 'built-in'); tg.className = 'pip-tag'; h.append(tg);
-            d.append(h); outs.forEach(o => { const out = agEl('div', '', o === 'output' ? 'Output' : o); out.className = 'pip-row out'; d.append(out); });
+            d.append(h);
+            const pws = pipPathways(n);
+            outs.forEach(o => {
+                const pw = pws.find(x => x.name === o);
+                const loops = pw && p.edges.some(e => e.from === n.id && e.fromPort === o);
+                const out = agEl('div', '', o === 'output' ? 'Output' : pw ? '▸ ' + pw.name + '(' + (pw.args || []).join(', ') + ')' + (loops ? '  ↻' : '') : o);
+                out.className = 'pip-row out' + (pw ? ' pathway' + (loops ? ' loops' : '') : ''); d.append(out);
+            });
+            if (pws.length) { const t = agEl('div', '', 'PATHWAY TOOLS ▲'); t.className = 'pip-tools'; t.title = 'The tools this agent ends with. Each one is an output: wire it to where that answer should go. A wire back to the writer makes a loop.'; d.append(t); }
             ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
-            const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName || 'default slot') + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
+            const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName ? 'holds ' + def.slotName : 'any free slot') + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
             outs.forEach((o, i) => { const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, o); d.append(po); });
-            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28}px`; d.append(pi); });
+            ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28 + (pws.length ? 22 : 0)}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
             d.oncontextmenu = e => { e.stopPropagation(); pipMenu(e, pipLabel(n), [['Disconnect all', () => { p.edges = p.edges.filter(x => x.from !== n.id && x.to !== n.id); pipTouch(); pipRender(); }], ['Remove from pipeline', () => pipDelete(p, n)]]); };
         } else if (n.type === 'start') {
@@ -5361,11 +5761,23 @@ function pipDraw(p) {
     });
 }
 function pipWires(p) {
-    pipSvg.querySelectorAll('path:not(.tmp)').forEach(x => x.remove());
+    pipSvg.querySelectorAll('path:not(.tmp), text.loop-lab').forEach(x => x.remove());
     p.edges.forEach((e, i) => {
         const A = pipNode(p, e.from), B = pipNode(p, e.to); if (!A || !B) return;
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', pipWirePath(pipPos(A, 'out', e.fromPort), pipPos(B, 'in', e.port))); if (e.mode === 'stream') path.setAttribute('class', 'stream');
+        const pa = pipPos(A, 'out', e.fromPort), pb = pipPos(B, 'in', e.port), loop = pipIsPathwayEdge(p, e);
+        path.setAttribute('d', loop && pb.x < pa.x ? `M${pa.x},${pa.y} C${pa.x + 120},${pa.y} ${pa.x + 120},${Math.max(pa.y, pb.y) + 170} ${(pa.x + pb.x) / 2},${Math.max(pa.y, pb.y) + 170} S${pb.x - 120},${pb.y} ${pb.x},${pb.y}` : pipWirePath(pa, pb));
+        if (e.mode === 'stream') path.setAttribute('class', 'stream');
+        if (loop) {
+            path.setAttribute('class', 'loop');
+            const setRounds = () => { const v = parseInt(prompt('How many times may this loop go round in one turn? (1-10)', e.maxRounds || 2), 10); if (v >= 1 && v <= 10) { e.maxRounds = v; pipTouch(); pipRender(); } };
+            const lab = document.createElementNS('http://www.w3.org/2000/svg', 'text'); lab.setAttribute('class', 'loop-lab');
+            lab.setAttribute('x', (pa.x + pb.x) / 2 - 50); lab.setAttribute('y', (pb.x < pa.x ? Math.max(pa.y, pb.y) + 162 : (pa.y + pb.y) / 2 - 8));
+            lab.textContent = '↻ ' + e.fromPort + ' · max ' + (e.maxRounds || 2); lab.onclick = setRounds; pipSvg.append(lab);
+            path.onclick = setRounds;
+            path.oncontextmenu = ev => pipMenu(ev, 'Loop', [['Set the round limit', setRounds], ['Disconnect', () => { p.edges.splice(i, 1); pipTouch(); pipRender(); }]]);
+            pipSvg.append(path); return;
+        }
         const flip = () => { e.mode = e.mode === 'stream' ? 'complete' : 'stream'; pipTouch(); pipRender(); };
         path.onclick = flip;
         path.oncontextmenu = ev => pipMenu(ev, 'Connection', [[e.mode === 'stream' ? 'Wait until finished' : 'Stream live (not run yet)', flip], ['Disconnect', () => { p.edges.splice(i, 1); pipTouch(); pipRender(); }]]);
@@ -5386,9 +5798,10 @@ function pipDragWire(p, from, e, fromPort) {
         document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); t.remove();
         const el = document.elementFromPoint(ev.clientX, ev.clientY);
         if (!el || !el.dataset || !el.dataset.port || el.dataset.node === from.id) return;
-        const to = pipNode(p, el.dataset.node); if (!to || pipReaches(p, to.id, from.id)) return;
+        const pathway = from.type === 'agent' && fromPort && fromPort !== 'output';
+        const to = pipNode(p, el.dataset.node); if (!to || (!pathway && pipReaches(p, to.id, from.id, true))) return;
         p.edges = p.edges.filter(x => !(x.to === to.id && x.port === el.dataset.port));
-        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' ? { fromPort: /^message$/i.test(el.dataset.port) ? 'message' : 'history' } : {}) }); pipTouch(); pipRender();
+        p.edges.push({ from: from.id, to: to.id, port: el.dataset.port, mode: to.type === 'end' ? 'stream' : 'complete', ...(from.type === 'start' ? { fromPort: /^message$/i.test(el.dataset.port) ? 'message' : 'history' } : pathway ? { fromPort, maxRounds: 2 } : {}) }); pipTouch(); pipRender();
     };
     document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up); mv(e);
 }
@@ -5430,8 +5843,14 @@ function pipInspector(p) {
     }
     const def = pipDef(n);
     box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
-    lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName || 'default slot'));
+    lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName ? 'holds ' + def.slotName : 'any free slot'));
     lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? (p.edges.find(e => e.to === n.id && e.port === q).fromPort === 'message' ? 'latest message' : 'conversation history') : pipLabel(f); })() : 'nothing') ).join('\n') || 'none');
+    if ((def.pathways || []).length) {
+        lab('Pathway tools');
+        dim(def.pathways.map(t => { const e = p.edges.find(x => x.from === n.id && x.fromPort === t.name); const to = e ? pipNode(p, e.to) : null;
+            return t.name + '(' + (t.args || []).join(', ') + ')  →  ' + (to ? pipLabel(to) + (e.port ? ' {' + e.port + '}' : '') + '  ↻ max ' + (e.maxRounds || 2) : 'ends the turn'); }).join('\n'));
+        dim('This agent reads the reply as it is written and ends by calling one of these. A tool with no wire ends the turn; a wire back to the writer gives it another go, and the user sees the fix being made.');
+    }
     lab('System prompt'); dim(((def.agentPrompt || '').slice(0, 300) + ((def.agentPrompt || '').length > 300 ? '…' : '')) || '(empty)');
     if (def.custom) {
         lab('Own sub-thread');
@@ -5506,11 +5925,75 @@ async function loadServers() {
         data = await r.json();
     } catch(e) { console.error('[loadServers] fetch/parse error:', e); renderServerCards([]); return; }
     srvAllModels = data.models ?? [];
+    await srvLoadExtras();
+    renderMachinePanel(data.servers ?? []);
     renderServerCards(data.servers ?? []);
     clearTimeout(srvPollTimer);
     const hasTransient = (data.servers ?? []).some(s => s.status === 'Starting' || s.status === 'Stopping' || s.download);
     srvPollTimer = setTimeout(loadServers, hasTransient ? 1500 : 6000);
 }
+
+// ── Services that load on demand (voice, image generation) ──────────────
+async function loadLazyServices() {
+    const box = document.getElementById('lazy-table');
+    let rows = [];
+    try { const r = await cpFetch('/api/v1/admin/lazyServices'); if (r.ok) rows = await r.json(); } catch {}
+    if (!rows.length) { box.innerHTML = '<span style="color:var(--text-dim);">Nothing here on this install.</span>'; return; }
+    const head = t => `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">${t}</div>`;
+    box.innerHTML = head('Service') + head('Now') + head('Unload after idle for') + '<div></div>' + rows.map(r => {
+        const state = !r.enabled ? 'Off' : r.running ? 'Loaded' : 'Unloaded';
+        const col = r.running ? 'var(--accent)' : 'var(--text-dim)';
+        return `<div>${escHtml(r.name)}</div>
+          <div style="color:${col};font-weight:600;">${state}</div>
+          <div><input type="number" min="1" max="1440" value="${r.idleMinutes}" data-lazy="${r.id}" style="width:80px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"> minutes</div>
+          <button class="vs-btn-primary" type="button" data-lazy-save="${r.id}" style="font-size:12px;padding:4px 12px;">Save</button>`;
+    }).join('');
+    box.querySelectorAll('[data-lazy-save]').forEach(b => b.addEventListener('click', async () => {
+        const id = b.dataset.lazySave, v = parseInt(box.querySelector(`[data-lazy="${id}"]`).value, 10);
+        const st = document.getElementById('lazy-status');
+        const r = await cpFetch('/api/v1/admin/lazyServices', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, idleMinutes: v }) });
+        st.textContent = r.ok ? 'Saved. Applies when ARI next starts.' : ((await r.json().catch(() => ({}))).error || 'Save failed.');
+        setTimeout(() => st.textContent = '', 5000);
+    }));
+}
+
+// ── Automatic updates ─────────────────────────────────────────────────
+async function loadAutoUpdate() {
+    const box = document.getElementById('au-enabled'), st = document.getElementById('au-status');
+    let d = null;
+    try { const r = await cpFetch('/api/v1/admin/autoUpdate'); if (r.ok) d = await r.json(); } catch {}
+    if (!d) { st.textContent = ''; return; }
+    box.checked = d.enabled;
+    const lines = [`On ${escHtml(d.current)}${d.latest ? (d.outdated ? ` · ${escHtml(d.latest)} is out` : ' · up to date') : ''}.`];
+    if (d.blocked) lines.push(escHtml(d.blocked));
+    if (d.lastResult) lines.push(`Last: ${escHtml(d.lastResult)}${d.lastAt ? ` (${new Date(d.lastAt).toLocaleString()})` : ''}.`);
+    st.innerHTML = lines.join('<br>');
+    if (!box.dataset.wired) {
+        box.dataset.wired = '1';
+        box.addEventListener('change', async () => {
+            await cpFetch('/api/v1/admin/autoUpdate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: box.checked }) });
+            loadAutoUpdate();
+        });
+    }
+}
+
+// ── MCP servers ───────────────────────────────────────────────────────
+function renderMcpServers(list) {
+    const box = document.getElementById('mcp-servers');
+    box.innerHTML = (list || []).length === 0 ? '<span style="color:var(--text-dim);">No servers running.</span>' : list.map(s =>
+        `<div><b>${escHtml(s.name)}</b> <span style="color:${s.state === 'running' ? 'var(--accent)' : 'var(--text-dim)'};">${escHtml(s.state)}</span>${s.tools.length ? ' · ' + s.tools.map(escHtml).join(', ') : ''}</div>`).join('');
+}
+async function loadMcp() {
+    try { const r = await cpFetch('/api/v1/admin/mcp'); if (!r.ok) return; const d = await r.json(); document.getElementById('mcp-config').value = d.config; renderMcpServers(d.servers); } catch {}
+}
+document.getElementById('mcp-save-btn').addEventListener('click', async () => {
+    const st = document.getElementById('mcp-status'); st.textContent = 'Starting…';
+    const r = await cpFetch('/api/v1/admin/mcp', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config: document.getElementById('mcp-config').value }) });
+    const d = await r.json().catch(() => ({}));
+    st.textContent = r.ok ? 'Saved.' : (d.error || 'Save failed.');
+    if (r.ok) renderMcpServers(d.servers);
+    setTimeout(() => st.textContent = '', 6000);
+});
 
 async function srvAction(id, action) {
     await cpFetch(`/api/v1/admin/servers/${id}/${action}`, { method:'POST' });
@@ -5611,9 +6094,17 @@ function buildServerCard(server) {
     }
 
     const sec = agSection(isNew ? 'New server' : server.name, { right: headerRight });
+    sec.head.style.flexWrap = 'wrap';
     sec.card.style.marginTop = '0';
     if (expanded) { sec.body.style.display = ''; sec.head.querySelector('span').textContent = '▼'; }
     if (!isNew) { const dlStrip = srvDownloadStrip(server); if (dlStrip) sec.card.firstElementChild.after(dlStrip); }
+    if (!isNew) {
+        const extra = agEl('div', 'display:flex;gap:6px;');
+        const mkBtn = (label, fn) => { const b = agEl('button', 'font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;', label); b.type = 'button'; b.addEventListener('click', e => { e.stopPropagation(); fn(); }); return b; };
+        extra.append(mkBtn('Logs', () => srvShowLogs(server)), mkBtn('Export', () => srvExport(server)));
+        headerRight.append(extra);
+        sec.card.firstElementChild.after(buildLaneView(server));
+    }
     if (!isNew) sec.card._srvRefs = { badge: headerRight.children[0], startBtn: headerRight.children[1], stopBtn: headerRight.children[2], restartBtn: headerRight.children[3] };
 
     if (expanded) renderServerCardBody(sec.body, draft, server, isNew);
@@ -5660,7 +6151,10 @@ function renderServerCardBody(body, draft, server, isNew) {
     // ── Sampler defaults ──
     const samplerSec = agSection('Sampler defaults', { note: '— the catch-all every agent falls back to' });
     samplerSec.card.classList.add('srv-subsection');
-    renderSamplerFields(samplerSec.body, draft, null);
+    const samplerFields = agEl('div', '');
+    samplerSec.body.append(samplerFields);
+    renderSamplerFields(samplerFields, draft, null);
+    buildSamplerProfileBar(samplerSec.body, draft, samplerFields);
 
     body.style.display = 'flex'; body.style.flexDirection = 'column'; body.style.gap = '10px';
     body.append(settingsSec.card, slotsSec.card, samplerSec.card);
@@ -5817,6 +6311,7 @@ function buildSlotsFields(body, draft, onChange) {
             row.innerHTML = `
                 <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
                     <input type="text" class="srv-slot-name vs-input" style="flex:1;font-size:12px;padding:5px 8px;" value="${escHtml(slot.name)}" placeholder="Slot name">
+                    <input type="text" class="srv-slot-pool vs-input" style="width:96px;font-size:12px;padding:5px 8px;" value="${escHtml(slot.pool || '')}" placeholder="Pool" title="Slots in the same pool are interchangeable lanes: each new chat is given the least busy one, and chats on different lanes run at the same time. Leave empty for a slot of its own.">
                     <button type="button" class="srv-slot-del mdl-btn-secondary" style="font-size:11px;padding:5px 8px;color:var(--col-control-panel-srv-slot-del-text);border-color:var(--col-control-panel-srv-slot-del-border);" ${draft.slots.length <= 1 ? 'disabled' : ''}>×</button>
                 </div>
                 <div style="display:flex;align-items:flex-start;gap:10px;">
@@ -5835,6 +6330,7 @@ function buildSlotsFields(body, draft, onChange) {
             ctxSlider.value = ctxSliderIndex(slot.contextLimit, SLOT_CTX_STEPS);
             ctxText.value   = ctxTokensToText(slot.contextLimit);
             nameInput.addEventListener('input', () => { slot.name = nameInput.value; });
+            row.querySelector('.srv-slot-pool').addEventListener('input', e => { slot.pool = e.target.value.trim() || null; onChange(); });
             ctxSlider.addEventListener('input', () => {
                 slot.contextLimit = SLOT_CTX_STEPS[parseInt(ctxSlider.value, 10)];
                 ctxText.value = ctxTokensToText(slot.contextLimit);
@@ -5879,9 +6375,11 @@ function buildSlotsFields(body, draft, onChange) {
     body.append(list, addBtn, warn, hint);
 }
 
-function renderRamEstimate(box, draft) {
+// Weights and KV cache for one server's settings, in MB (null when the model's size or layout isn't known). Shared by the per-server
+// estimate and the machine-wide memory bar.
+function srvRamParts(draft) {
     const ctx     = draft.contextSize;
-    const slots   = Math.max(1, draft.slots.length);
+    const slots   = Math.max(1, (draft.slots ?? []).length);
     const kBits   = draft.kvCacheQuantK;
     const vBits   = draft.kvCacheQuantV;
     const kvSlots = draft.unifiedCache ? 1 : slots;
@@ -5901,6 +6399,11 @@ function renderRamEstimate(box, draft) {
         const quantScale = (kBits + vBits) / 32;
         kvMb = (ctx / 1024) * kvSlots * kvPerKtokPerSlotF16 * quantScale;
     }
+    return { weightsMb, kvMb };
+}
+
+function renderRamEstimate(box, draft) {
+    const { weightsMb, kvMb } = srvRamParts(draft);
 
     const wTxt  = weightsMb > 0 ? fmtRamMb(weightsMb) : '—';
     const kvTxt = kvMb !== null ? '~' + fmtRamMb(kvMb) : '—';
@@ -5916,6 +6419,132 @@ function renderRamEstimate(box, draft) {
             <div>Total<br><span style="font-size:13px;font-weight:700;color:var(--col-control-panel-line-4498-text);">${totTxt}</span></div>
         </div>`;
 }
+
+// ── Machine memory bar, lanes, logs, import/export, sampler profiles ──
+let srvUsableMb = null, srvHwTried = false, srvAgentList = null;
+async function srvLoadExtras() {
+    if (!srvHwTried) {
+        srvHwTried = true;
+        try { const r = await cpFetch('/api/v1/admin/system/hardware'); if (r.ok) srvUsableMb = Math.round((await r.json()).usableBytes / 1048576); } catch {}
+    }
+    if (srvAgentList === null) {
+        try { const r = await cpFetch('/api/v1/admin/agents'); if (r.ok) srvAgentList = (await r.json()).agents ?? []; } catch { srvAgentList = []; }
+    }
+}
+const srvIsLocal = s => /^(https?:\/\/)?(127\.0\.0\.1|localhost)/i.test(s.endpoint || 'http://127.0.0.1');
+
+// The bar: what the configured servers would take on this machine, as one estimate, with a warning if it won't fit.
+function renderMachinePanel(servers) {
+    const box = document.getElementById('srv-machine');
+    const local = servers.filter(srvIsLocal);
+    if (!local.length) { box.innerHTML = ''; return; }
+    const parts = [];
+    local.forEach((s, i) => {
+        const { weightsMb, kvMb } = srvRamParts(s);
+        buildServerHues(local.map(x => x.name));
+        if (weightsMb > 0) parts.push({ label: s.name + ' weights', mb: weightsMb, color: hslForServer(s.name, false) });
+        if (kvMb) parts.push({ label: s.name + ' KV cache', mb: kvMb, color: hslForServer(s.name, true) });
+        if (s.cacheRamMib > 0) parts.push({ label: s.name + ' prompt cache', mb: s.cacheRamMib, color: 'var(--border)' });
+    });
+    const used = parts.reduce((a, p) => a + p.mb, 0);
+    const limit = srvUsableMb ?? 0;
+    const scale = Math.max(limit, used) || 1;
+    const over = limit > 0 && used > limit * 0.9;
+    const unknown = local.filter(s => !srvRamParts(s).weightsMb).map(s => s.name);
+    box.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;"><b>Memory this machine can use for models</b><span style="color:var(--text-dim);">${limit ? fmtRamMb(limit) : 'unknown'}</span></div>
+        <div style="display:flex;height:24px;border-radius:6px;overflow:hidden;border:1px solid var(--border);">${parts.map(p => `<i title="${escHtml(p.label)} ${fmtRamMb(p.mb)}" style="display:block;height:100%;width:${(p.mb / scale * 100).toFixed(2)}%;background:${p.color};"></i>`).join('')}</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--text-dim);">${parts.map(p => `<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;background:${p.color};"></span>${escHtml(p.label)} ${fmtRamMb(p.mb)}</span>`).join('')}<span>${limit ? 'free ' + fmtRamMb(Math.max(0, limit - used)) : ''}</span></div>
+        <div style="font-size:12px;color:${over ? 'var(--col-control-panel-line-4234-colour)' : 'var(--text-dim)'};">${over ? `<b>This probably won't fit.</b> The servers add up to about ${fmtRamMb(used)}, over 90% of the ${fmtRamMb(limit)} available. Lower a context size, use a smaller KV precision or a smaller model, or stop a server. ` : ''}An estimate from model file size and context, not a measurement.${unknown.length ? ' No size known for: ' + escHtml(unknown.join(', ')) + '.' : ''}</div></div>`;
+}
+
+// Each slot as a lane, with the agents that use it.
+function buildLaneView(server) {
+    const wrap = agEl('div', 'display:flex;gap:8px;flex-wrap:wrap;padding:0 14px 10px;');
+    (server.slots ?? []).forEach(slot => {
+        const agents = (srvAgentList ?? []).filter(a => (a.serverName ?? a.ServerName) === server.name && (a.slotName ?? a.SlotName) === slot.name).map(a => a.name ?? a.Name);
+        const lane = agEl('div', 'border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;display:flex;flex-direction:column;gap:4px;min-width:130px;');
+        lane.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px;"><b>${escHtml(slot.name)}</b><span style="color:var(--text-dim);">${ctxTokensToText(slot.contextLimit)}${slot.pool ? ' · pool ' + escHtml(slot.pool) : ''}</span></div>`
+            + `<div style="display:flex;gap:4px;flex-wrap:wrap;">${agents.length ? agents.map(a => `<span style="background:var(--col-control-panel-line-4251-background);border-radius:5px;padding:1px 6px;">${escHtml(a)}</span>`).join('') : '<span style="color:var(--text-dim);">no agents</span>'}</div>`;
+        wrap.append(lane);
+    });
+    return wrap;
+}
+
+async function srvShowLogs(server) {
+    const overlay = agEl('div', 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;display:flex;align-items:center;justify-content:center;padding:20px;');
+    const box = agEl('div', 'background:var(--main-bg,#fff);color:var(--text);border:1px solid var(--border);border-radius:12px;width:min(900px,100%);max-height:85vh;display:flex;flex-direction:column;');
+    const head = agEl('div', 'display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);');
+    head.innerHTML = `<b>${escHtml(server.name)} · llama-server log</b>`;
+    const btns = agEl('div', 'display:flex;gap:8px;');
+    const refresh = agEl('button', 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;', 'Refresh');
+    const close = agEl('button', 'font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;', 'Close');
+    btns.append(refresh, close); head.append(btns);
+    const pre = agEl('pre', 'margin:0;padding:12px 16px;overflow:auto;font-size:11.5px;line-height:1.45;white-space:pre-wrap;flex:1;');
+    box.append(head, pre); overlay.append(box); document.body.append(overlay);
+    const load = async () => {
+        pre.textContent = 'Loading…';
+        try { const r = await cpFetch(`/api/v1/admin/servers/${server.id}/logs?lines=400`); const d = await r.json(); pre.textContent = d.text || d.note || '(empty)'; pre.scrollTop = pre.scrollHeight; }
+        catch { pre.textContent = 'Could not read the log.'; }
+    };
+    refresh.onclick = load; close.onclick = () => overlay.remove(); overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    load();
+}
+
+// One server's setup as a file, to keep or to give to someone else. No id, so importing always makes a new server.
+function srvExport(server) {
+    const copy = { ...server }; ['id', 'status', 'pid', 'download', 'activeModel'].forEach(k => delete copy[k]);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(copy, null, 2)], { type: 'application/json' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: `ARI-server-${server.name.replace(/[^a-z0-9]+/gi, '-')}.json` });
+    a.click(); URL.revokeObjectURL(url);
+}
+
+const SAMPLER_KEYS = ['temperature','topP','topK','minP','topNSigma','typicalP','xtcProbability','xtcThreshold','dynatempRange','dynatempExp','repeatLastN','repeatPenalty','presencePenalty','frequencyPenalty','dryMultiplier','dryBase','dryAllowedLength','dryPenaltyLastN','drySequenceBreakers','mirostat','mirostatLr','mirostatEnt','seed'];
+async function buildSamplerProfileBar(body, draft, samplerBody) {
+    const bar = agEl('div', 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;font-size:12px;');
+    let profiles = {};
+    try { const r = await cpFetch('/api/v1/admin/sampler-profiles'); if (r.ok) profiles = await r.json(); } catch {}
+    const sel = agEl('select', 'font-size:12px;'); sel.className = 'vs-input';
+    const fill = () => { sel.innerHTML = '<option value="">Saved profiles…</option>' + Object.keys(profiles).map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join(''); };
+    fill();
+    const btn = (label, fn) => { const b = agEl('button', 'font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text);cursor:pointer;', label); b.type = 'button'; b.onclick = fn; return b; };
+    bar.append(sel,
+        btn('Apply', () => { const p = profiles[sel.value]; if (!p) return; Object.assign(draft, p); samplerBody.innerHTML = ''; renderSamplerFields(samplerBody, draft, null); }),
+        btn('Save current as…', async () => {
+            const name = prompt('Name for this sampler profile?'); if (!name) return;
+            const values = {}; SAMPLER_KEYS.forEach(k => { if (draft[k] !== undefined) values[k] = draft[k]; });
+            await cpFetch('/api/v1/admin/sampler-profiles/' + encodeURIComponent(name), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+            profiles[name] = values; fill(); sel.value = name;
+        }),
+        btn('Delete', async () => { if (!sel.value || !confirm('Delete profile "' + sel.value + '"?')) return; await cpFetch('/api/v1/admin/sampler-profiles/' + encodeURIComponent(sel.value), { method: 'DELETE' }); delete profiles[sel.value]; fill(); }));
+    body.prepend(bar);
+}
+
+document.getElementById('srv-startall-btn').addEventListener('click', async () => {
+    for (const s of lastServerList.filter(x => srvShownStatus(x) === 'Offline')) await srvAction(s.id, 'start');
+    loadServers();
+});
+document.getElementById('srv-stopall-btn').addEventListener('click', async () => {
+    if (!confirm('Stop every running server? ARI cannot answer until they are started again.')) return;
+    for (const s of lastServerList.filter(x => x.status === 'Online')) await srvAction(s.id, 'stop');
+    loadServers();
+});
+document.getElementById('srv-import-btn').addEventListener('click', () => document.getElementById('srv-import-file').click());
+document.getElementById('srv-import-file').addEventListener('change', async e => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    try {
+        const cfg = JSON.parse(await file.text());
+        const names = new Set(lastServerList.map(s => s.name));
+        let name = cfg.name || 'Imported server', n = 2; const base = name;
+        while (names.has(name)) name = `${base} (${n++})`;
+        const ports = new Set(lastServerList.map(s => s.port));
+        let port = cfg.port || nextServerPort(); while (ports.has(port)) port++;
+        const r = await cpFetch('/api/v1/admin/servers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...cfg, id: '00000000-0000-0000-0000-000000000000', name, port, endpoint: 'http://127.0.0.1' }) });
+        if (!r.ok) { alert('Could not import: ' + await cpErrorText(r)); return; }
+        loadServers();
+    } catch { alert('That file is not a server setup.'); }
+});
 
 document.getElementById('srv-add-btn').addEventListener('click', () => {
     srvNewDraftActive = true;

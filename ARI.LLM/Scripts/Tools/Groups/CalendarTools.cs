@@ -41,7 +41,7 @@ internal sealed class CreateEvent : Tool
         function = new
         {
             name        = "create_event",
-            description = "Add an event to ARI's calendar. Events are pure context — they are never acted on by themselves, just shown to you as background (e.g. working hours, a birthday, a trip). Use create_reminder if you actually need to say something to the owner at a given time. Call get_time first whenever the date is relative (\"today\", \"tomorrow\", \"next Friday\") — never guess the current date.",
+            description = "Add an event to ARI's calendar (working hours, a birthday, a trip, a deadline). Use it whenever the owner mentions a date that matters to them: a birthday or anniversary repeats yearly as a whole-day event. Set remind_before_minutes when they'll want a heads-up; for something that needs preparing (a card, a present, booking) a week ahead (10080) is usual. Whole-day events without a reminder still get a look-ahead from you once in the week before. Use create_reminder when you need to do or say something specific at a given time. Call get_time first whenever the date is relative (\"today\", \"tomorrow\", \"next Friday\") — never guess the current date.",
             parameters  = new
             {
                 type       = "object",
@@ -52,6 +52,7 @@ internal sealed class CreateEvent : Tool
                     end          = new { type = "string", description = "ISO date/time the event ends. Can be a later day than start for a multi-day event." },
                     is_whole_day = new { type = "boolean", description = "True if this is an all-day event — start/end are still required (use midnight for both) but time-of-day is ignored." },
                     notes        = new { type = "string", description = "Optional free-text detail." },
+                    remind_before_minutes = new { type = "integer", description = "Optional. Have ARI message the owner this many minutes before the event starts (60 = an hour, 1440 = a day). Leave out for no reminder." },
                     repeat          = new { type = "string", @enum = new[] { "none", "daily", "weekly", "monthly", "yearly" }, description = "How this repeats. 'none' (default) never repeats." },
                     repeat_interval = new { type = "integer", description = "Repeat every N units of `repeat` (e.g. 2 with 'weekly' = every 2 weeks). Defaults to 1." },
                     repeat_days     = new { type = "array", items = new { type = "string", @enum = new[] { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" } }, description = "Only for 'weekly': which days it lands on, e.g. every weekday = [Monday..Friday]." },
@@ -75,7 +76,8 @@ internal sealed class CreateEvent : Tool
         bool isWholeDay = root.TryGetProperty("is_whole_day", out JsonElement w) && w.ValueKind == JsonValueKind.True;
         string? notes = root.TryGetProperty("notes", out JsonElement n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
 
-        long id = calendar.CreateEvent(title, start, end, isWholeDay, notes, CalendarRecurrence.FromArgs(root));
+        int? remind = root.TryGetProperty("remind_before_minutes", out JsonElement rm) && rm.ValueKind == JsonValueKind.Number && rm.TryGetInt32(out int rmv) && rmv > 0 ? rmv : null;
+        long id = calendar.CreateEvent(title, start, end, isWholeDay, notes, CalendarRecurrence.FromArgs(root), remind);
         return Task.FromResult<ToolResult>($"Created event '{title}' [{id}] ({start:g} - {end:g}).");
     }
 }

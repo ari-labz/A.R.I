@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ARI.Common;
+using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
@@ -101,6 +102,37 @@ public abstract class ScriptPlugin : IPlugin, IToolProvider
         State = PluginState.Stopped;
     }
 
+    // ── Hooks: ARI tells a running plugin what is happening, so it can do something alongside, or instead ─────────
+    // A plugin overrides only the ones it needs. The On… hooks add a step: they run in the background, in HookOrder, and never hold
+    // anything up. RewriteUserMessage and ReplacesMemorySweep replace a step: ARI waits for them (briefly), in HookOrder. A hook that
+    // throws is logged and ignored.
+
+    /// <summary>Where this plugin's hooks run among other plugins' hooks on the same step: lower first. Ties go by plugin id.</summary>
+    public virtual int HookOrder => 0;
+
+    /// <summary>Replaces the text of a message before Ari reads it. Return null to leave it alone. With several plugins, each sees the
+    /// text the one before it returned. ARI waits up to five seconds, then carries on without it.</summary>
+    public virtual Task<string?> RewriteUserMessage(HookMessage message) => Task.FromResult<string?>(null);
+
+    /// <summary>Return true to handle a memory sweep instead of Engram (do the plugin's own sweep inside). The first plugin to say true
+    /// takes it and Engram doesn't run for that sweep.</summary>
+    public virtual Task<bool> ReplacesMemorySweep(HookSweep sweep) => Task.FromResult(false);
+
+    /// <summary>Someone sent a message in a chat. <see cref="HookMessage.IsOwner"/> says whether it was the owner.</summary>
+    public virtual Task OnUserMessage(HookMessage message) => Task.CompletedTask;
+
+    /// <summary>Ari finished a reply in a chat.</summary>
+    public virtual Task OnReplyFinished(HookReply reply) => Task.CompletedTask;
+
+    /// <summary>A memory sweep of a conversation has just finished.</summary>
+    public virtual Task OnMemorySweep(HookSweep sweep) => Task.CompletedTask;
+
+    /// <summary>Asks ARI's model a question (on the reflector's server) and returns its answer. For plugins that need judgement.</summary>
+    public static Task<string> AskModel(string text, CancellationToken ct = default) => PluginHooks.Ask?.Invoke(text, ct) ?? Task.FromResult("");
+
+    /// <summary>This plugin's own folder, for files it keeps (never sent anywhere).</summary>
+    protected string PluginFolder => folder;
+
     public Task<string> RunActionAsync(string key) => Actions.Any(a => a.Key == key) ? OnAction(key) : Task.FromResult($"{Name} has no action called {key}.");
 
     // ── Settings ─────────────────────────────────────────────────────────────
@@ -173,5 +205,65 @@ public abstract class ScriptPlugin : IPlugin, IToolProvider
             if (!OperatingSystem.IsWindows()) { try { File.SetUnixFileMode(SettingsFile, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { } }
             return null;
         }
+    }
+}
+
+public sealed record HookMessage(string ThreadKey, string Text, bool IsOwner, DateTime Sent);
+public sealed record HookReply(string ThreadKey, string Text);
+public sealed record HookSweep(string ThreadKey, string Trigger);
+
+/// <summary>Calls the hooks of every running script plugin. Fire and forget: a slow or failing plugin never delays Ari.</summary>
+internal static class PluginHooks
+{
+    internal static Func<string, CancellationToken, Task<string>>? Ask { get; set; }
+
+    private static readonly TimeSpan RewriteWait = TimeSpan.FromSeconds(5);
+
+    private static List<ScriptPlugin> Running() => PluginRegistry.All.OfType<ScriptPlugin>()
+        .Where(p => p.State == PluginState.Running).OrderBy(p => p.HookOrder).ThenBy(p => p.Id, StringComparer.Ordinal).ToList();
+
+    private static bool Overrides(ScriptPlugin p, string method) => p.GetType().GetMethod(method)?.DeclaringType != typeof(ScriptPlugin);
+
+    /// <summary>Runs an add-on hook on every running plugin, one after another in HookOrder, in the background.</summary>
+    internal static void Fire(Func<ScriptPlugin, Task> hook)
+    {
+        List<ScriptPlugin> plugins = Running();
+        if (plugins.Count == 0) return;
+        _ = Task.Run(async () =>
+        {
+            foreach (ScriptPlugin plugin in plugins)
+            {
+                try { await hook(plugin); }
+                catch (Exception ex) { Shared.Logger.LogWarning("[Plugin {Id}] hook failed: {Err}", plugin.Id, ex.Message); }
+            }
+        });
+    }
+
+    /// <summary>The message after every plugin that rewrites messages has had its turn, in HookOrder.</summary>
+    internal static async Task<string> RewriteUserMessage(HookMessage message)
+    {
+        string text = message.Text;
+        foreach (ScriptPlugin plugin in Running().Where(p => Overrides(p, nameof(ScriptPlugin.RewriteUserMessage))))
+        {
+            try
+            {
+                Task<string?> rewrite = plugin.RewriteUserMessage(message with { Text = text });
+                if (await Task.WhenAny(rewrite, Task.Delay(RewriteWait)) != rewrite) { Shared.Logger.LogWarning("[Plugin {Id}] took too long to rewrite a message; carried on without it.", plugin.Id); continue; }
+                if (await rewrite is { } changed && changed != text) { text = changed; Shared.Logger.LogInformation("[Plugin {Id}] rewrote a message.", plugin.Id); }
+            }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Plugin {Id}] rewrite failed: {Err}", plugin.Id, ex.Message); }
+        }
+        return text;
+    }
+
+    /// <summary>The id of the plugin that took this sweep instead of Engram, or null when Engram should run.</summary>
+    internal static async Task<string?> TakeMemorySweep(HookSweep sweep)
+    {
+        foreach (ScriptPlugin plugin in Running().Where(p => Overrides(p, nameof(ScriptPlugin.ReplacesMemorySweep))))
+        {
+            try { if (await plugin.ReplacesMemorySweep(sweep)) return plugin.Id; }
+            catch (Exception ex) { Shared.Logger.LogWarning("[Plugin {Id}] sweep hook failed: {Err}", plugin.Id, ex.Message); }
+        }
+        return null;
     }
 }

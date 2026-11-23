@@ -144,6 +144,11 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 :is(#thread-list, .thread-list) li.pending  { opacity: 0.6; font-style: italic; }
 :is(#thread-list, .thread-list) li.inactive { opacity: 0.45; font-style: italic; }
 
+.state-icon { display: inline-block; flex: none; background-color: currentColor; -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; }
+.thread-state { width: 18px; height: 18px; flex: none; margin-right: 8px; display: flex; align-items: center; justify-content: center; }
+.thread-state-fade { display: flex; color: #c8c8c8; animation: thread-state-fade 1.6s ease-in-out infinite; }
+.thread-unread-dot { width: 9px; height: 9px; border-radius: 50%; background: #3b82f6; animation: thread-state-fade 1.6s ease-in-out infinite; }
+@keyframes thread-state-fade { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
 .thread-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .thread-meta { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 .thread-time { font-size: 11px; color: var(--sidebar-dim); }
@@ -330,8 +335,11 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     transform: translateX(calc(100% + 4px));
     transition: transform .3s ease-in-out;
     pointer-events: none;
+    box-shadow: none;   /* shut, it sits off the edge: its shadow must not leak into the chat */
 }
-#thread-panel.open { transform: translateX(0); pointer-events: auto; }
+#thread-panel.open { transform: translateX(0); pointer-events: auto; box-shadow: -4px 0 24px var(--col-thread-panel-colour-3); }
+/* With windows open the chat is a narrow column, but the panel belongs to the screen's right edge. */
+#main.with-windows #thread-panel { position: fixed; top: 80px; }
 #thread-panel-inner { display: flex; flex-direction: column; overflow-y: auto; flex: 1; }
 
 #thread-panel-header {
@@ -468,7 +476,7 @@ button, a, input, select, textarea, label, [role="button"] {
        already shrinks smoothly as the keyboard opens, in step with the real available space,
        so that hack is gone — the composer stays where it is; only opening a thread moves it. */
     height: calc(var(--app-vh, 100dvh) * 0.44); flex-shrink: 0;
-    transition: height 0.65s ease-in-out, padding 0.65s ease-in-out, border-color 0.3s ease-in-out;
+    transition: height 0.65s ease-in-out, padding 0.65s ease-in-out, border-color 0.3s ease-in-out, transform .65s cubic-bezier(.65,0,.35,1);
     border-bottom: 1px solid transparent;
     overflow: hidden;
     background: var(--col-main-header-colour); z-index: 1;
@@ -601,6 +609,8 @@ button, a, input, select, textarea, label, [role="button"] {
 #main.code-mode .bubble th { background: var(--col-code-bubble-th-colour); }
 .bubble hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
 .bubble a { color: var(--accent); text-decoration: underline; }
+#main.code-mode .bubble a { color: var(--col-code-bubble-link-colour); }
+#main.code-mode .bubble a:hover { color: var(--col-code-bubble-link-hover-colour); }
 .msg-row.user .bubble code { background: var(--col-msg-row-user-bubble-code-colour); border-color: var(--col-msg-row-user-bubble-code-colour-2); }
 
 /* ── bottom input ───────────────────────────────────────── */
@@ -1756,7 +1766,7 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 #btn-begin-speech:active { transform: translateY(1px); }
 
 
-/* ── "A·R·I will remember that" card, in the chat where remembering began; and the queued-reply line ── */
+/* ── "A·R·I will remember that" card, in the chat where remembering began ── */
 .memory-marker { align-self: center; display: flex; align-items: center; gap: 14px; margin: 14px auto; padding: 13px 26px 13px 16px; border-radius: 12px; background: #101618; color: #CADDE2; animation: memory-marker-in .45s ease-out both; }
 .memory-marker-icon { width: 34px; height: 34px; flex: none; border-radius: 50%; border: 1.5px solid #CADDE2; display: flex; align-items: center; justify-content: center; }
 .memory-marker-text { display: flex; flex-direction: column; gap: 1px; }
@@ -1765,7 +1775,6 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 .memory-marker-dots b { display: inline-block; width: 4px; height: 4px; margin-left: 3px; border-radius: 50%; background: currentColor; animation: memory-marker-pulse 1.2s infinite; }
 .memory-marker-dots b:nth-child(2) { animation-delay: .2s; }
 .memory-marker-dots b:nth-child(3) { animation-delay: .4s; }
-.reply-queued { align-self: flex-end; display: flex; align-items: center; gap: 6px; margin: 2px 0 8px; font-size: 12px; color: var(--text-dim, #6b7b80); }
 @keyframes memory-marker-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes memory-marker-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
@@ -1820,3 +1829,93 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 .ari-visual { margin: 10px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; max-width: 760px; }
 .ari-visual iframe { display: block; width: 100%; }
 .ari-visual .ari-visual-loading { display: block; padding: 18px; color: var(--text-dim); font-size: 13px; }
+
+/* persona picker on the composer's hint row */
+#persona-picker { position: relative; }
+#btn-persona { background: none; border: none; color: var(--text-dim); font-size: 12px; padding: 3px 8px; border-radius: 6px; cursor: pointer; }
+#btn-persona:hover, #btn-persona.active { color: var(--text); background: var(--col-btn-thinking-effort-hover-colour); }
+#persona-popup { position: absolute; right: 0; bottom: 30px; min-width: 200px; background: var(--col-app-line-108-background); border: 1px solid var(--col-app-line-108-border); border-radius: 10px; padding: 6px; box-shadow: 0 8px 28px var(--col-app-line-108-shadow); z-index: 30; display: flex; flex-direction: column; gap: 2px; }
+#persona-popup button { background: none; border: none; text-align: left; padding: 8px 10px; border-radius: 7px; color: var(--col-app-line-108-text); cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+#persona-popup button:hover { background: var(--col-btn-thinking-effort-hover-colour); }
+#persona-popup button.selected .persona-name { color: var(--accent); }
+#persona-popup .persona-name { font-size: 13px; font-weight: 600; }
+#persona-popup .persona-desc { font-size: 11px; opacity: .65; }
+
+/* live edits: how Ari's corrections to her own reply look while she is still writing */
+.rw-sel { background: var(--col-btn-thinking-effort-hover-colour, #b9dbe3); border-radius: 2px; }
+.rw-del { background: rgba(224, 106, 90, .22); color: #d0604f; text-decoration: line-through; border-radius: 2px; }
+.rw-ins { background: rgba(80, 180, 120, .22); color: #3f9a66; border-radius: 2px; }
+.rw-badge { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
+.rw-selc { background: rgba(160, 120, 230, .25); outline: 1px solid #a07ae6; border-radius: 2px; }
+.rw-cur { position: relative; display: inline-block; width: 0; height: 1.15em; border-left: 2px solid #a07ae6; vertical-align: text-bottom; }
+.rw-cur i { position: absolute; bottom: 100%; left: -2px; white-space: nowrap; background: #a07ae6; color: #fff; font: normal 600 10px ui-monospace, Menlo, monospace; padding: 1px 6px; border-radius: 4px 4px 4px 0; }
+
+/* ── edit windows: Ari's file edits, beside the chat ───────── */
+#chat-col { flex: 1 1 100%; transition: flex-basis .65s cubic-bezier(.65,0,.35,1); }
+#main.with-windows #chat-col { flex: 0 1 min(60%, calc(var(--col-max) + 48px)); }
+.edit-pane { position: relative; z-index: 1; flex: 1 1 0; min-width: 0; padding: 76px 20px 20px 8px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; overflow-y: auto; }
+.ew { max-width: 100%; width: max-content; min-width: min(260px, 100%); background: #0d1416; color: #cadde2; border: 1px solid rgba(108,192,208,.5); border-radius: 14px; position: relative; overflow: hidden;
+      box-shadow: 0 0 14px rgba(108,192,208,.15); opacity: 0; transform: translateY(-14px);
+      transition: opacity .65s cubic-bezier(.65,0,.35,1), transform .65s cubic-bezier(.65,0,.35,1), margin-left .65s cubic-bezier(.65,0,.35,1); }
+.ew.in { opacity: 1; transform: none; }
+.edit-pane.leaving .ew { opacity: 0; transform: translateY(-60px); }
+.ew::before, .ew::after { content: ""; position: absolute; width: 10px; height: 10px; border: 2px solid #6cc0d0; }
+.ew::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; border-top-left-radius: 14px; }
+.ew::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; border-bottom-right-radius: 14px; }
+.ew.folded { opacity: .8; }
+.ew-bar { all: unset; box-sizing: border-box; width: 100%; display: flex; justify-content: space-between; gap: 18px; padding: 8px 16px; cursor: pointer; font: 500 11px ui-monospace, Menlo, monospace; }
+.ew-bar:focus-visible { outline: 2px solid #6cc0d0; outline-offset: -2px; }
+.ew-name { color: #6cc0d0; letter-spacing: .06em; }
+.ew-meta { color: #8fa9b0; white-space: nowrap; }
+.ew-cnt-add { color: #7fd3a0; } .ew-cnt-del { color: #ef8a79; }
+.ew-fold { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .65s cubic-bezier(.65,0,.35,1); }
+.ew.folded .ew-fold { grid-template-rows: 0fr; }
+.ew-fold-in { overflow: hidden; min-height: 0; }
+.ew-code { border-top: 1px solid rgba(108,192,208,.5); font: 12.5px/1.75 ui-monospace, Menlo, monospace; padding: 10px 16px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ew-line { min-height: 1.75em; } .ew-ctx { color: #8fa9b0; }
+.ew-del { background: rgba(239,138,121,.2); color: #ef8a79; text-decoration: line-through; border-radius: 2px; }
+.ew-add { background: rgba(127,211,160,.2); color: #7fd3a0; border-radius: 2px; margin-left: 6px; }
+.ew-block { margin-left: 0; }
+.ew-caret { display: inline-block; width: 2px; height: 1.1em; margin-left: 1px; vertical-align: text-bottom; background: #a07ae6; }
+/* a page Ari showed gets the room it needs: the chat narrows further and the window takes the rest */
+#main.with-page #chat-col { flex-basis: min(42%, calc(var(--col-max) + 48px)); }
+.ari-visual-card { display: inline-flex; align-items: center; gap: 10px; margin: 8px 0; padding: 9px 14px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; font-size: 14px; }
+.ari-visual-card:hover, .ari-visual-card:focus-visible { border-color: #6cc0d0; outline: none; }
+.ari-visual-card-icon { color: #6cc0d0; }
+.ari-visual-card-open { color: var(--text-dim); font-size: 12px; }
+.ew-close { margin-left: 12px; padding: 0 4px; color: #cadde2; font-size: 14px; cursor: pointer; }
+.ew-close:hover { color: #ef8a79; }
+.ew.ew-visual { width: 100%; }
+.ew-page { border-top: 1px solid rgba(108,192,208,.5); }
+@media (max-width: 640px) { #main.with-windows #chat-col { flex: 1 1 100%; } .edit-pane { display: none; }
+    #main.with-page .edit-pane { display: flex; position: fixed; inset: 0; z-index: 50; padding: 12px; background: rgba(13,20,22,.92); } }
+@media (prefers-reduced-motion: reduce) { .ew, .ew-fold, #chat-col { transition: none; } }
+
+/* The title banner's line runs the full width of the screen, over the windows' side too. */
+#main.with-windows.active::after { content: ''; position: absolute; top: 67px; left: 0; right: 0; height: 1px; z-index: 2; pointer-events: none; background: var(--col-main-active-main-header-colour); }
+
+/* The ARI logo stays where it was while the chat slides left: the header shifts back by half the width the chat gave up. */
+#main.with-windows #main-header { transform: translateX(var(--header-shift, 0px)); overflow: visible; }
+#main.with-windows #chat-col { overflow: visible; }
+
+/* Dev mode chip: top left of the banner while dev mode is on. */
+#dev-chip { position: absolute; top: 14px; right: 16px; z-index: 6; display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px 4px 10px; border-radius: 999px;
+    border: 1px solid #b3262e; background: rgba(224,70,80,.16); color: #b3262e; font: 700 11px var(--font-sans, system-ui), sans-serif; letter-spacing: .08em; cursor: default; }
+#dev-chip i { width: 6px; height: 6px; border-radius: 50%; background: #d8343e; }
+#dev-chip .dev-chip-tip { position: absolute; top: calc(100% + 8px); right: 0; width: 240px; padding: 8px 10px; border-radius: 10px; background: #2a1013; color: #f6d9db; border: 1px solid #b3262e;
+    font: 500 12px/1.45 system-ui, sans-serif; letter-spacing: 0; text-transform: none; opacity: 0; pointer-events: none; transform: translateY(-4px); transition: opacity .15s, transform .15s; }
+#dev-chip:hover .dev-chip-tip, #dev-chip:focus-visible .dev-chip-tip { opacity: 1; transform: none; }
+#main:not(.active) #dev-chip { top: 14px; }
+
+/* Review loop timeline, under a reply that a reviewer checked */
+.review-tl-row { padding-top: 0; }
+.review-tl { font-size: 12.5px; color: var(--text-dim, #6b7c82); }
+.review-tl summary { cursor: pointer; list-style: none; user-select: none; }
+.review-tl summary::-webkit-details-marker { display: none; }
+.review-tl summary:hover { color: var(--text, inherit); }
+.review-tl-grid { display: grid; gap: 4px; margin-top: 6px; padding: 8px 12px; border: 1px solid var(--border, rgba(0,0,0,.12)); border-radius: 10px; max-width: 560px; }
+.review-tl-step { display: grid; grid-template-columns: 90px 1fr auto; gap: 10px; align-items: baseline; }
+.review-tl-step b { font: 600 11px ui-monospace, Menlo, monospace; }
+.review-tl-what.fail { color: #b3402f; font-family: ui-monospace, Menlo, monospace; }
+.review-tl-what.pass, .review-tl-what.settle { color: #26704a; font-family: ui-monospace, Menlo, monospace; }
+.review-tl-s { font: 11px ui-monospace, Menlo, monospace; opacity: .7; }

@@ -206,7 +206,10 @@ public class Thread
     /// scratchpad or project gives it one. ToolFactories reads this for ANY agent's request_tools call;
     /// availability depends on this state, not on which agent is asking (no per-agent allowlist).</summary>
     internal string? FilesystemRoot   { get; set; }
-    internal FileSnapshots? Snapshots     { get; set; }
+    // Created on first use: a chat that isn't a Code thread had none, so its reads were never recorded and edit_file
+    // refused every file with "read it first", however often she had.
+    private FileSnapshots? snapshots;
+    internal FileSnapshots? Snapshots     { get => snapshots ??= new FileSnapshots(); set => snapshots = value; }
     internal bool     IsBrainVault { get; set; }
     internal bool     IsRemoteProject { get; set; }
     internal CancellationToken Ct  { get; set; }
@@ -287,9 +290,6 @@ public class Thread
     /// (Discord, proactive, internal) so existing behaviour is preserved.</summary>
     public bool HasMemoryAccess { get; set; } = true;
 
-    /// <summary>True while a reply is being held back because Engram is still saving this conversation. Shown to the user as "Reply queued".</summary>
-    public volatile bool WaitingOnMemory;
-
     /// <summary>True when she's talking to someone other than the Master: a guest's chat, a server channel, or a DM she
     /// opened with someone else. Such conversations get filtered recall and none of the Master's own tools.</summary>
     internal bool IsGuarded =>
@@ -345,7 +345,7 @@ public class Thread
     /// continue"). Drained by the agent loop — mid-think via the steering redirect, or at the top of the
     /// next step (between tool rounds) — and fed back into the model with the reasoning preserved, so Ari
     /// folds the new information into her existing chain of thought rather than starting over.</summary>
-    internal readonly ConcurrentQueue<(string User, string Text, List<Attachment> Attachments)> Interjections = new();
+    internal readonly ConcurrentQueue<(string User, string Text, List<Attachment> Attachments, string? ClientId)> Interjections = new();
 
     /// <summary>Set by Agent.SplitResponse when a mid-turn interjection splits the turn: "{user}{text}".
     /// The streaming callback emits it to the client as a [SPLIT] control line before the continuation's
@@ -357,7 +357,7 @@ public class Thread
     internal bool HasInterjections => !Interjections.IsEmpty;
 
     /// <summary>Queue a mid-turn user message for the agent loop to fold into the current response.</summary>
-    internal void Interject(string user, string text, List<Attachment> attachments) => Interjections.Enqueue((user, text, attachments));
+    internal void Interject(string user, string text, List<Attachment> attachments, string? clientId = null) => Interjections.Enqueue((user, text, attachments, clientId));
 
     /// <summary>Set by the agent loop only while a tool is executing: lets a long-running tool (e.g. spawn_coder)
     /// append rendered display content into the agent's in-progress response, so a sub-agent's work shows inline
@@ -408,9 +408,16 @@ public class Thread
     /// (<see cref="LLMModule.BindProjectContext"/>, the chat API's per-message bind).</summary>
     internal string? ProjectName { get; set; }
 
-    /// <summary>Set by the <c>hand_to_coder</c> tool on a Dialogue thread: the dialogue turn finishes, then the
+    /// <summary>Set by the <c>switch_pipeline</c> tool on a Dialogue thread: the dialogue turn finishes, then the
     /// router moves the thread onto the Code pipeline and runs the request there. Holds the tool's brief.</summary>
     internal string? PendingCoderHandoff { get; set; }
+
+    /// <summary>The persona this conversation speaks in (see <see cref="ARI.Common.PersonaStore"/>). Null = the default one.</summary>
+    public string? PersonaId { get; set; }
+
+    /// <summary>The lane this conversation uses in each slot pool (pool name → slot id), chosen the first time it needs one
+    /// and kept, so its prompt cache stays on one llama-server slot. See <see cref="NamedSlot.Pool"/>.</summary>
+    internal System.Collections.Concurrent.ConcurrentDictionary<string, Guid> PoolLanes { get; } = new(StringComparer.OrdinalIgnoreCase);
     public   string  Key             => threadKey;
 
     internal event Action? Updated;

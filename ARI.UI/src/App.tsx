@@ -128,7 +128,7 @@ function dedupeRecentUserMessages(items: ThreadItem[]): ThreadItem[] {
     const out: ThreadItem[] = []
     items.forEach((it, i) => {
         if (i >= cut && it.type === "userMessage") {
-            const key = it.content ?? ""
+            const key = it.clientId ?? it.content ?? ""
             if (seen.has(key)) return
             seen.add(key)
         }
@@ -140,6 +140,73 @@ function dedupeRecentUserMessages(items: ThreadItem[]): ThreadItem[] {
 export default function App() {
     const { threads, load: loadThreads } = useThreads()
 
+    useEffect(() => {
+        apiFetch("/api/v1/personas").then(r => r.ok ? r.json() : null).then(d => {
+            if (!d) return
+            setPersonas(d.personas ?? []); setDefaultPersona(d.defaultId ?? "ari")
+        }).catch(() => {})
+    }, [])
+
+    // Ari is changing part of her reply while it is on screen (the reflect stage): the old words are struck through, deleted, and the new
+    // ones typed in their place, like an author going back over a line. The server waits about as long as this takes before sending the
+    // reply as it now reads, so the two never fight over the text.
+    const rewritingRef = useRef(false)   // while true, reply text arriving from the stream waits, so it doesn't overwrite the animation
+    async function animateRewrite(oldText: string, newText: string, style: string) {
+        rewritingRef.current = true
+        try { await animateRewriteSteps(oldText, newText, style) } finally { rewritingRef.current = false }
+    }
+    async function animateRewriteSteps(oldText: string, newText: string, style: string) {
+        const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+        const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        const re = /<!--rw-->[\s\S]*?<!--\/rw-->/
+        const show = (inner: string) => setItems(prev => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].type !== "ariResponse" || !prev[i].isStreaming) continue
+                const content = prev[i].content ?? ""
+                const marked = `<!--rw-->${inner}<!--/rw-->`
+                const next = re.test(content) ? content.replace(re, () => marked) : content.includes(oldText) ? content.replace(oldText, () => marked) : content
+                if (next === content) return prev
+                const copy = [...prev]; copy[i] = { ...prev[i], content: next }; return copy
+            }
+            return prev
+        })
+        const cursor = '<span class="rw-cur"><i>Ari · reviewing</i></span>'
+        const delStep = Math.max(1, Math.ceil(oldText.length / 25))
+        const typeStep = Math.max(1, Math.ceil(newText.length / 60))
+        const typeNew = async (wrap: (partial: string) => string, ms: number) => {
+            for (let j = typeStep; j < newText.length; j += typeStep) { show(wrap(esc(newText.slice(0, j)))); await sleep(ms) }
+        }
+
+        if (style === "select") {
+            show(`<span class="rw-sel">${esc(oldText)}</span>`); await sleep(850)
+            show(""); await typeNew(t => t, 30)
+        } else if (style === "suggest") {
+            const del = `<span class="rw-del">${esc(oldText)}</span>`
+            show(del); await sleep(500)
+            await typeNew(t => `${del}<span class="rw-ins">${t}</span><span class="rw-badge">suggested</span>`, 28)
+            show(`${del}<span class="rw-ins">${esc(newText)}</span><span class="rw-badge">suggested</span>`); await sleep(1100)
+        } else if (style === "retype") {
+            show(`~~${oldText}~~`); await sleep(600)
+            for (let k = oldText.length - delStep; k > 0; k -= delStep) { show(`~~${oldText.slice(0, k)}~~`); await sleep(24) }
+            show(""); await typeNew(t => t, 30)
+        } else {
+            // cursor (the default): a named second author selects the phrase, deletes it and types the replacement
+            show(`<span class="rw-selc">${esc(oldText)}</span>${cursor}`); await sleep(850)
+            for (let k = oldText.length - delStep; k > 0; k -= delStep) { show(`<span class="rw-selc">${esc(oldText.slice(0, k))}</span>${cursor}`); await sleep(20) }
+            show(cursor)
+            await typeNew(t => t + cursor, 32)
+            show(esc(newText) + cursor); await sleep(500)
+        }
+        show(esc(newText))
+    }
+
+    // The persona applies from the next reply. With no conversation yet, it is kept until one is made.
+    function choosePersona(id: string) {
+        if (!activeThread) { setPendingPersona(id); return }
+        apiFetch(`/api/v1/threads/${activeThread}/persona`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personaId: id }) })
+            .then(() => loadThreads()).catch(() => {})
+    }
+
     const [activeThread,     setActiveThread]     = useState<string | null>(null)
     const [isInternal,       setIsInternal]        = useState(false)
     const [agentName,        setAgentName]         = useState<string | null>(null)
@@ -149,6 +216,10 @@ export default function App() {
     const [isStreaming,      setIsStreaming]        = useState(false)
     const [isRemembering,    setIsRemembering]      = useState(false)
     const [threadStatus,     setThreadStatus]       = useState<ThreadStatus>("idle")
+    const [unreadThreads,    setUnreadThreads]      = useState<Set<string>>(new Set())
+    const [personas,         setPersonas]           = useState<{ id: string; name: string; description: string }[]>([])
+    const [defaultPersona,   setDefaultPersona]     = useState("ari")
+    const [pendingPersona,   setPendingPersona]     = useState<string | null>(null)   // chosen before the conversation exists
     const watchStreamRef = useRef<EventSource | null>(null)
     const [sidebarCollapsed, setSidebarCollapsed]  = useState(isNarrowPortrait)
     const [pendingAttach,    setPendingAttach]      = useState<PendingAttachment[]>([])
@@ -244,11 +315,12 @@ export default function App() {
     // send the selected project's instructions to the backend as the project-rules context block.
     const projectsRef = useRef<Project[]>([])
 
-    const [clientVersion,  setClientVersion]  = useState<string | null>(null)
+    const [serverVersion,  setServerVersion]  = useState<string | null>(null)
     const [outdated,       setOutdated]       = useState(false)
     const [protocolMismatch, setProtocolMismatch] = useState<number | null>(null)
     // Assume ready until told otherwise, so a slow/failed check never blocks the composer.
     const [serverReady,    setServerReady]    = useState(true)
+    const [devMode,        setDevMode]        = useState(false)
 
     const globalEsRef      = useRef<EventSource | null>(null)
     const abortRef         = useRef<AbortController | null>(null)
@@ -353,6 +425,8 @@ export default function App() {
                         break
                     case "streamingFinished":
                         loadThreads()
+                        if (data.threadKey !== activeThreadRef.current)
+                            setUnreadThreads(prev => new Set(prev).add(data.threadKey))
                         playResponseChime()   // issue #63: chime when an Ari response completes
                         if (data.threadKey === activeThreadRef.current) {
                             refreshThreadAttach(data.threadKey)
@@ -417,16 +491,18 @@ export default function App() {
     useEffect(() => {
         if (authState !== "authed") return
         connectAndInit()
-        // Long fallback poll — events drive updates; this is only a safety net.
-        const pollId = setInterval(loadThreads, 60_000)
+        // Events drive most updates; this poll also keeps the sidebar's reading / thinking / typing icons current.
+        const pollId = setInterval(loadThreads, 3_000)
 
         // Shows the outdated banner when a newer stable server release exists on GitHub.
         // The server does the GitHub comparison and caches it; we just read the flag.
         async function checkVersion() {
             const res = await apiFetch("/api/v1/info/version").catch(() => null)
             if (!res?.ok) return
-            const { serverOutdated } = await res.json()
+            const { serverOutdated, serverVersion: ver } = await res.json()
             setOutdated(!!serverOutdated)
+            // Beside the logo goes the version of the server she runs on, on the website and the desktop app alike.
+            if (typeof ver === "string" && ver) setServerVersion(ver.replace(/^v/i, ""))
         }
 
         // Is any model server online? A fresh install has none running by design, so the composer
@@ -435,11 +511,11 @@ export default function App() {
         async function checkReady() {
             const res = await apiFetch("/api/v1/info/ready").catch(() => null)
             if (!res?.ok) return
-            const { ready } = await res.json()
+            const { ready, devMode: dev } = await res.json()
             setServerReady(!!ready)
+            setDevMode(!!dev)
         }
 
-        env.getVersion().then(ver => { if (ver) setClientVersion(ver) })
         checkVersion()
         checkReady()
         const readyPollId   = setInterval(checkReady, 5 * 1000)
@@ -1044,22 +1120,23 @@ export default function App() {
             // Her reply hasn't got any text yet, so the new message goes ABOVE her pending bubble straight away: it is the last thing said, and
             // what she writes will answer it. Once she has written something it goes after that bubble, as before.
             const interjectStamp = new Date().toISOString()
+            const clientId = crypto.randomUUID()
             setItems(prev => {
-                const msg: ThreadItem = { type: "userMessage", content: prompt, timestamp: interjectStamp, attachments: interjectAttach as Attachment[] | undefined }
+                const msg: ThreadItem = { type: "userMessage", content: prompt, clientId, timestamp: interjectStamp, attachments: interjectAttach as Attachment[] | undefined }
                 const last = prev[prev.length - 1]
                 const pending = last?.type === "ariResponse" && last.isStreaming && !last.content && !(last.blocks?.length)
                 return pending ? [...prev.slice(0, -1), msg, last] : [...prev, msg]
             })
             const res = await apiFetch(`/api/v1/threads/${key}/interjections`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text: prompt }),
+                body: JSON.stringify({ text: prompt, clientId }),
             }).catch(() => null)
             // 409 = the turn finished between keypress and send, or she hasn't started it yet (she is waiting on memory); fall through to a normal
             // new message. That send adds the message and a fresh reply bubble itself, so take back the copy shown above and the old pending
             // bubble, or the message would appear twice with a stale "Reading" left behind.
             if (res && res.ok) return
             setItems(prev => prev
-                .filter(it => !(it.type === "userMessage" && it.timestamp === interjectStamp && it.content === prompt))
+                .filter(it => !(it.type === "userMessage" && it.clientId === clientId))
                 .filter(it => !(it.type === "ariResponse" && it.isStreaming && !it.content && !(it.blocks?.length)))
                 .map(it => it.type === "ariResponse" && it.isStreaming ? { ...it, isStreaming: false } : it))
         }
@@ -1091,8 +1168,20 @@ export default function App() {
         let key = activeThreadRef.current
         let newIsCode = false
         if (needsNew) {
-            const made = await createThreadWithMode(selectedProject, selectedPipeline)
+            let made: { key: string; isCodeMode: boolean }
+            try {
+                made = await createThreadWithMode(selectedProject, selectedPipeline)
+                if (!made.key) throw new Error("no thread")
+            } catch {
+                // She isn't there to start the chat: say so under the message instead of leaving it unanswered.
+                pendingMsgRef.current = null
+                setItems(prev => [...prev, { type: "ariResponse", content: "couldn't reach A·R·I. she isn't running right now, so this message wasn't sent.", timestamp: new Date().toISOString() }])
+                return
+            }
             key = made.key; newIsCode = made.isCodeMode
+            if (pendingPersona && pendingPersona !== defaultPersona)
+                void apiFetch(`/api/v1/threads/${key}/persona`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ personaId: pendingPersona }) })
+            setPendingPersona(null)
             setActiveThread(key)
             attachWatch(key)   // a thread created by sending is watched too, not only one opened from the list
             activeProjectRef.current = selectedProject
@@ -1184,16 +1273,41 @@ export default function App() {
         abortRef.current = ctrl
         const keyForStream = key!
 
+        // The send never reached her, or she refused it: say so in her reply bubble instead of leaving it empty.
+        // The message stays in the chat so it can be copied and sent again.
+        function showSendError(text: string) {
+            abortRef.current = null; setIsStreaming(false)
+            setItems(prev => {
+                for (let i = prev.length - 1; i >= 0; i--)
+                    if (prev[i].type === "ariResponse" && prev[i].isStreaming) {
+                        const next = [...prev]; next[i] = { ...prev[i], content: text, isStreaming: false }; return next
+                    }
+                return [...prev, { type: "ariResponse", content: text, timestamp: new Date().toISOString() }]
+            })
+        }
+
         async function runStream() {
+            let resp: Response
             try {
-                const resp = await apiFetch(`/api/v1/threads/${keyForStream}/messages`, {
+                resp = await apiFetch(`/api/v1/threads/${keyForStream}/messages`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ prompt, ...(localPath ? { localPath } : {}), ...(safetyMode && !isApprove ? { safeMode: true } : {}) }),
                     signal: ctrl.signal,
                 })
+            } catch (err: unknown) {
+                if (err instanceof Error && err.name === "AbortError") return
+                showSendError("couldn't reach A·R·I. she isn't running right now, so this message wasn't sent.")
+                return
+            }
+            if (!resp.ok || !resp.body) {
+                const err = await resp.json().catch(() => null) as { error?: string } | null
+                showSendError(err?.error ?? `A·R·I couldn't take that message (error ${resp.status}).`)
+                return
+            }
 
-                const reader  = resp.body!.getReader()
+            try {
+                const reader  = resp.body.getReader()
                 const decoder = new TextDecoder()
                 let buf = ""
 
@@ -1236,32 +1350,41 @@ export default function App() {
                         abortRef.current = null; setIsStreaming(false)
                         return
                     }
+                    if (data.startsWith("[REWRITE]")) {
+                        const [oldText, newText = "", style = "cursor"] = data.slice(9).split("\u0001")
+                        void animateRewrite(oldText, newText, style)
+                        return
+                    }
                     if (data.startsWith("[SPLIT]")) {
                         // Mid-turn interjection. Notice = mode + sep + username + sep + text.
                         //   split  -> the response so far HAS content: cap it off (no footer) and open a new
                         //             bubble below the interjection for the continuation.
                         //   before -> the response has NO content yet: slot the interjection ABOVE the still-
                         //             streaming bubble instead of leaving an empty one; it keeps streaming below.
-                        const fields  = data.slice(7).split("\u0001")
-                        const mode    = fields.length >= 3 ? fields[0] : "split"
-                        const msgText = fields.length >= 3 ? fields.slice(2).join("\u0001") : fields[fields.length - 1]
-                        const mkMsg = () => ({ type: "userMessage" as const, content: msgText, timestamp: new Date().toISOString() })
+                        // Newer servers send mode, username, the sender's client id, then the text; older ones have no id.
+                        const fields   = data.slice(7).split("\u0001")
+                        const mode     = fields.length >= 3 ? fields[0] : "split"
+                        const hasId    = fields.length >= 4
+                        const clientId = hasId && fields[2] ? fields[2] : undefined
+                        const msgText  = hasId ? fields.slice(3).join("\u0001") : fields.length >= 3 ? fields.slice(2).join("\u0001") : fields[fields.length - 1]
+                        const isSame   = (it: ThreadItem) => it.type === "userMessage" && (clientId && it.clientId ? it.clientId === clientId : it.content === msgText)
+                        const mkMsg = () => ({ type: "userMessage" as const, content: msgText, clientId, timestamp: new Date().toISOString() })
                         setItems(prev => {
                             const arr = [...prev]
                             let respIdx = -1
                             for (let i = arr.length - 1; i >= 0; i--) if (arr[i].type === "ariResponse" && arr[i].isStreaming) { respIdx = i; break }
                             if (mode === "before") {
                                 // Drop the optimistic copy (appended after the bubble), then insert ABOVE the bubble.
-                                const dupIdx = arr.findIndex(it => it.type === "userMessage" && it.content === msgText)
+                                const dupIdx = arr.findIndex(isSame)
                                 if (dupIdx >= 0 && dupIdx !== respIdx) { arr.splice(dupIdx, 1); if (dupIdx < respIdx) respIdx-- }
                                 arr.splice(respIdx >= 0 ? respIdx : arr.length, 0, mkMsg())
                             } else {
                                 if (respIdx >= 0) arr[respIdx] = { ...arr[respIdx], isStreaming: false, continued: true }
                                 // The optimistic copy may sit above the bubble (it was placed there while she had written nothing); she has since
                                 // written some, so the message belongs after it.
-                                const early = arr.findIndex(it => it.type === "userMessage" && it.content === msgText)
+                                const early = arr.findIndex(isSame)
                                 if (early >= 0 && early < respIdx) arr.splice(early, 1)
-                                if (!arr.some(it => it.type === "userMessage" && it.content === msgText)) arr.push(mkMsg())
+                                if (!arr.some(isSame)) arr.push(mkMsg())
                                 arr.push({ type: "ariResponse", content: "", timestamp: new Date().toISOString(), isStreaming: true })
                             }
                             return dedupeRecentUserMessages(arr)
@@ -1274,6 +1397,7 @@ export default function App() {
                     // Update the last STREAMING ariResponse in place. Not necessarily the last item: an
                     // optimistic interjection may sit after the still-streaming bubble until the split lands.
                     setItems(prev => {
+                        if (rewritingRef.current) return prev
                         for (let i = prev.length - 1; i >= 0; i--) {
                             if (prev[i].type === "ariResponse" && prev[i].isStreaming) {
                                 const next = [...prev]; next[i] = { ...prev[i], content: text, isStreaming: true }; return next
@@ -1313,7 +1437,7 @@ export default function App() {
         }
 
         runStream()
-    }, [isStreaming, pendingAttach, items.length, mode, loadThreads, selectedProject, selectedPipeline, injectFileTree, openToolSocket])
+    }, [isStreaming, pendingAttach, items.length, mode, loadThreads, selectedProject, selectedPipeline, injectFileTree, openToolSocket, pendingPersona, defaultPersona])
 
     // The plan-proposed card's "Accept & Build" button calls this global — it sends the deterministic
     // "[approve-plan]" signal, which the coding pipeline reads as approval (→ Development with the payload).
@@ -1433,11 +1557,12 @@ export default function App() {
             )}
             <Sidebar
                 threads={threads}
+                unreadThreads={unreadThreads}
                 activeThread={activeThread}
                 activeView={activeView}
                 onNewChat={newChat}
                 onOpenProjects={() => setActiveView("projects")}
-                onSelectThread={(t: ThreadEntry) => { setActiveView("chat"); openThread(t.key, t.isInternal, t.agentName, t.isCodeMode, t.projectId ?? null) }}
+                onSelectThread={(t: ThreadEntry) => { setActiveView("chat"); setUnreadThreads(prev => { if (!prev.has(t.key)) return prev; const n = new Set(prev); n.delete(t.key); return n }); openThread(t.key, t.isInternal, t.agentName, t.isCodeMode, t.projectId ?? null) }}
                 onCloseThread={(t: ThreadEntry) => {
                     // On an expired (saved) thread the button deletes it for good, so ask first.
                     if (t.state === "expired" && !window.confirm("Delete this saved conversation forever? This cannot be undone.")) return
@@ -1453,7 +1578,7 @@ export default function App() {
                 }}
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(c => !c)}
-                clientVersion={clientVersion}
+                serverVersion={serverVersion}
                 outdated={outdated}
                 userDisplayName={authUser?.displayName || authUser?.username}
                 onOpenPreferences={() => setShowPreferences(true)}
@@ -1469,6 +1594,7 @@ export default function App() {
                 <Main
                     mode={mode}
                     serverReady={serverReady}
+                    devMode={devMode}
                     codeMode={codeMode}
                     shieldMode={codeMode || selectedPipeline === "code"}
                     items={items}
@@ -1482,6 +1608,7 @@ export default function App() {
                     agentName={agentName}
                     sidebarCollapsed={sidebarCollapsed}
                     onOpenSidebar={() => setSidebarCollapsed(false)}
+                    onSetSidebarCollapsed={setSidebarCollapsed}
                     pendingAttach={pendingAttach}
                     threadAttach={threadAttach}
                     onSend={send}
@@ -1493,6 +1620,9 @@ export default function App() {
                     onHeartbeatStop={heartbeat.stop}
                     safetyMode={safetyMode}
                     onToggleSafety={() => setSafetyMode(m => !m)}
+                    personas={personas}
+                    personaId={activeThread ? (threads.find(t => t.key === activeThread)?.personaId ?? defaultPersona) : (pendingPersona ?? defaultPersona)}
+                    onChoosePersona={choosePersona}
                     commands={COMMANDS}
                     projects={projects}
                     selectedProject={selectedProject}
@@ -1532,9 +1662,9 @@ export default function App() {
                         <div style={cmdSubStyle}>
                             {pendingCommand.title
                                 ?? (pendingCommand.segment?.tier === "dangerous"
-                                    ? `${pendingCommand.segment.reason ?? "This can't be undone."} This is never remembered — it asks every time.`
+                                    ? `${pendingCommand.segment.reason ?? "This can't be undone."} ${pendingCommand.segment.threadScoped ? "It can be allowed for this chat only." : "This is never remembered — it asks every time."}`
                                     : pendingCommand.segment?.tier === "opaque"
-                                        ? `ARI wants to run a command that can't be checked safely (${pendingCommand.segment.reason ?? "unrecognised form"}). It asks every time.`
+                                        ? `ARI wants to run a command that can't be checked safely (${pendingCommand.segment.reason ?? "unrecognised form"}). ${pendingCommand.segment.threadScoped ? "It can be allowed for this chat only." : "It asks every time."}`
                                         : pendingCommand.segment?.key
                                             ? `ARI wants to run "${pendingCommand.segment.key}", which you haven't decided on yet.`
                                             : "ARI wants to run a command that isn't on the allow list.")}
@@ -1549,6 +1679,12 @@ export default function App() {
                                     onClick={() => { pendingCommand.resolve("allow"); setPendingCommand(null) }}>
                                 {pendingCommand.segment ? "Allow just this time" : "Allow once"}
                             </button>
+                            {pendingCommand.segment?.threadScoped && pendingCommand.segment.tier !== "allowable" && (
+                                <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1413-background)", color: "var(--col-app-line-1413-text)" }}
+                                        onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>
+                                    Allow this command in this chat
+                                </button>
+                            )}
                             {pendingCommand.segment?.tier === "allowable" && pendingCommand.segment.key && (
                                 <button style={{ ...cmdBtnBase, background: "var(--col-app-line-1413-background)", color: "var(--col-app-line-1413-text)" }}
                                         onClick={() => { pendingCommand.resolve("whitelist"); setPendingCommand(null) }}>

@@ -45,6 +45,29 @@ internal static class Database
     {
         using SqliteConnection db = Open();
         Run(db, SCHEMA);
+        // Columns added after the first release: added to an existing database once.
+        AddColumn(db, "remindBeforeMinutes", "INTEGER");
+        AddColumn(db, "lastRemindedStart", "TEXT");
+    }
+
+    private static void AddColumn(SqliteConnection db, string name, string type)
+    {
+        using SqliteCommand check = Command(db, "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name = $n", new (string, object)[] { ("$n", name) });
+        if (Convert.ToInt32(check.ExecuteScalar()) == 0) Run(db, $"ALTER TABLE entries ADD COLUMN {name} {type}");
+    }
+
+    /// <summary>Notes that the reminder for this occurrence of an event has been sent, so it is sent once.</summary>
+    internal static void MarkEventReminded(long id, string occurrenceKey)
+    {
+        using SqliteConnection db = Open();
+        Run(db, "UPDATE entries SET lastRemindedStart = $s WHERE entryID = $id", ("$s", occurrenceKey), ("$id", id));
+    }
+
+    internal static string? LastRemindedStart(long id)
+    {
+        using SqliteConnection db = Open();
+        using SqliteCommand c = Command(db, "SELECT lastRemindedStart FROM entries WHERE entryID = $id", new (string, object)[] { ("$id", id) });
+        return c.ExecuteScalar() as string;
     }
 
     // ── Writes ───────────────────────────────────────────────────────────────────────
@@ -53,11 +76,11 @@ internal static class Database
     {
         using SqliteConnection db = Open();
         Run(db, """
-            INSERT INTO entries(kind, title, notes, start, end, isWholeDay, recurFrequency, recurInterval, recurDays, recurUntil, recurCount)
-            VALUES ($kind, $title, $notes, $start, $end, $isWholeDay, $recurFrequency, $recurInterval, $recurDays, $recurUntil, $recurCount)
+            INSERT INTO entries(kind, title, notes, start, end, isWholeDay, remindBeforeMinutes, recurFrequency, recurInterval, recurDays, recurUntil, recurCount)
+            VALUES ($kind, $title, $notes, $start, $end, $isWholeDay, $remindBefore, $recurFrequency, $recurInterval, $recurDays, $recurUntil, $recurCount)
             """,
             ("$kind", KIND_EVENT), ("$title", calendarEvent.Title), ("$notes", Or(calendarEvent.Notes)),
-            ("$start", Iso(calendarEvent.Start)), ("$end", Iso(calendarEvent.End)), ("$isWholeDay", calendarEvent.IsWholeDay ? 1 : 0),
+            ("$start", Iso(calendarEvent.Start)), ("$end", Iso(calendarEvent.End)), ("$isWholeDay", calendarEvent.IsWholeDay ? 1 : 0), ("$remindBefore", Or(calendarEvent.RemindBeforeMinutes)),
             ("$recurFrequency", calendarEvent.Recurrence.Frequency.ToString()), ("$recurInterval", calendarEvent.Recurrence.Interval),
             ("$recurDays", Or(RecurDaysToText(calendarEvent.Recurrence.DaysOfWeek))),
             ("$recurUntil", Or(IsoOrNull(calendarEvent.Recurrence.Until))),
@@ -94,12 +117,12 @@ internal static class Database
     {
         using SqliteConnection db = Open();
         Run(db, """
-            UPDATE entries SET title = $title, notes = $notes, start = $start, end = $end, isWholeDay = $isWholeDay,
+            UPDATE entries SET title = $title, notes = $notes, start = $start, end = $end, isWholeDay = $isWholeDay, remindBeforeMinutes = $remindBefore,
                 recurFrequency = $recurFrequency, recurInterval = $recurInterval, recurDays = $recurDays, recurUntil = $recurUntil, recurCount = $recurCount
             WHERE entryID = $id AND kind = $kind
             """,
             ("$title", calendarEvent.Title), ("$notes", Or(calendarEvent.Notes)),
-            ("$start", Iso(calendarEvent.Start)), ("$end", Iso(calendarEvent.End)), ("$isWholeDay", calendarEvent.IsWholeDay ? 1 : 0),
+            ("$start", Iso(calendarEvent.Start)), ("$end", Iso(calendarEvent.End)), ("$isWholeDay", calendarEvent.IsWholeDay ? 1 : 0), ("$remindBefore", Or(calendarEvent.RemindBeforeMinutes)),
             ("$recurFrequency", calendarEvent.Recurrence.Frequency.ToString()), ("$recurInterval", calendarEvent.Recurrence.Interval),
             ("$recurDays", Or(RecurDaysToText(calendarEvent.Recurrence.DaysOfWeek))),
             ("$recurUntil", Or(IsoOrNull(calendarEvent.Recurrence.Until))),
@@ -188,7 +211,8 @@ internal static class Database
                 end:        ParseIso(reader, "end"),
                 isWholeDay: reader.GetInt32(reader.GetOrdinal("isWholeDay")) != 0,
                 notes:      NullableString(reader, "notes"),
-                recurrence: ReadRecurrence(reader))
+                recurrence: ReadRecurrence(reader),
+                remindBeforeMinutes: reader.IsDBNull(reader.GetOrdinal("remindBeforeMinutes")) ? null : reader.GetInt32(reader.GetOrdinal("remindBeforeMinutes")))
             { Id = reader.GetInt64(reader.GetOrdinal("entryID")) };
             events.Add(calendarEvent);
         }

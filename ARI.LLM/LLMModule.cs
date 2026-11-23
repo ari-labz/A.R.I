@@ -238,7 +238,11 @@ public class LLMModule : ILLMModule, IDisposable
                 talkingAgent.Think = false;
                 // A slot of its own keeps the voice prompt cached while chats and coding use theirs.
                 if (talkingAgent.Server?.Slots.FirstOrDefault(sl => sl.Name.Equals("Voice", StringComparison.OrdinalIgnoreCase)) is { } voiceSlot)
+                {
                     talkingAgent.Slot = voiceSlot;
+                    talkingAgent.Floating = false;
+                    lock (talkingAgent.Server.Held) talkingAgent.Server.Held.Add(voiceSlot.Id);
+                }
             }
             agentMap["Dialogue"] = textingAgent;
         }
@@ -261,6 +265,27 @@ public class LLMModule : ILLMModule, IDisposable
         else if (_servers.Count > 0 && !disabledAgents.Contains("Subagent"))
             SubagentManager.Agent = Deserialize<Subagent>(JsonDocument.Parse("{\"name\":\"Subagent\"}").RootElement);
         ParentReports.Nudge = WakeIfPending;
+        string subagentJson = rawAgents.TryGetValue("Subagent", out JsonElement subDef) ? subDef.GetRawText() : "{\"name\":\"Subagent\"}";
+        SubagentManager.ServerList = () => "Servers: " + string.Join("; ", _servers.Select(sv =>
+            $"\"{sv.Name}\" ({sv.CurrentModelName ?? "no model"}{(sv.Status == ServerStatus.Online ? "" : ", not running")}, {sv.Slots.Count} slot{(sv.Slots.Count == 1 ? "" : "s")})")) + ".";
+        SubagentManager.AgentOn = (where, instructions) =>
+        {
+            string places = string.Join(", ", _servers.Select(sv => sv.Name));
+            string[] parts = (where ?? "").Split('/', 2, StringSplitOptions.TrimEntries);
+            Server? server = parts[0].Length == 0 ? SubagentManager.Agent?.Server : _servers.FirstOrDefault(sv => sv.Name.Equals(parts[0], StringComparison.OrdinalIgnoreCase));
+            if (server is null || (parts.Length > 1 && !server.Slots.Any(sl => sl.Name.Equals(parts[1], StringComparison.OrdinalIgnoreCase)))) return (null, places);
+            // The Subagent's own settings from Agents.json, placed on the chosen server (any free slot unless one was named),
+            // and with Ari's own instructions for this worker in place of its usual prompt when she gave some.
+            System.Text.Json.Nodes.JsonObject def = System.Text.Json.Nodes.JsonNode.Parse(subagentJson)!.AsObject();
+            foreach (string k in def.Select(p => p.Key).Where(k => k.Equals("ServerName", StringComparison.OrdinalIgnoreCase) || k.Equals("SlotName", StringComparison.OrdinalIgnoreCase)
+                                                                 || (instructions is { Length: > 0 } && k.Equals("AgentPrompt", StringComparison.OrdinalIgnoreCase))).ToList()) def.Remove(k);
+            def["ServerName"] = server.Name;
+            def["SlotName"]   = parts.Length > 1 ? parts[1] : "";
+            if (instructions is { Length: > 0 }) def["AgentPrompt"] = instructions;
+            Subagent made = Deserialize<Subagent>(JsonDocument.Parse(def.ToJsonString()).RootElement);
+            RecomputeHeldSlots();   // a worker sent to a named slot borrows it; it doesn't take it from the floating agents for good
+            return (made, places);
+        };
 
         // Speech conversational-awareness gate. Uses its own Agents.json entry if present, otherwise
         // gets the same server/slot-fallback treatment as any other unbound agent (Deserialize on an
@@ -276,12 +301,27 @@ public class LLMModule : ILLMModule, IDisposable
             _logger.LogWarning("No Awareness entry in Agents.json — using default server/slot with no system prompt. Add an Awareness entry to configure it.");
         }
 
+        // The reflector reads a finished reply and says what should change in it (see Reflector). No Reflector entry means no
+        // reflect stage: replies go out as written.
+        if (rawAgents.TryGetValue("Reflector", out JsonElement reflectorEl) && !disabledAgents.Contains("Reflector"))
+        {
+            Reflector.Current = Deserialize<Reflector>(reflectorEl);
+            _logger.LogInformation("Reflector is active.");
+            _ = Task.Run(ReflectionProposalLoop);
+            PluginHooks.Ask = async (text, ct) =>
+            {
+                Thread scratch = new(ThreadPipeline.Dialogue, $"plugin-ask:{Guid.NewGuid():N}") { Internal = true, ReadOnlyTools = true };
+                return await Reflector.Current!.Prompt(scratch, text, new PromptOptions { MaxTokensOverride = 2000, Ct = ct });
+            };
+        }
+
         if (Brain.Ready && rawAgents.TryGetValue("Memory", out JsonElement memoryEl))
         {
             Memory mem = Deserialize<Memory>(memoryEl);
             if (mem.HopLimit > 0)
             {
                 memory = mem;
+                Memory.Current = mem;
                 agentMap["Memory"] = memory;
                 _logger.LogInformation("Memory agent is active. Hop limit: {HopLimit}.", memory.HopLimit);
             }
@@ -298,6 +338,7 @@ public class LLMModule : ILLMModule, IDisposable
                 engram.Init(textingAgent, context, threads);
                 engram.SweepCompleted += key => NotifyWatchers(key);
                 agentMap["Engram"] = engram;
+                _ = Task.Run(MemoryQueueLoop);
                 _logger.LogInformation("Engram is active. Brain connected.");
             }
 
@@ -331,6 +372,8 @@ public class LLMModule : ILLMModule, IDisposable
             ReloadPipelines();
         }
 
+        HasCoder = codeArchitect is not null;
+        CustomAgentByName = name => customAgents.TryGetValue(name, out CustomAgent? a) ? a : null;
         if (codeArchitect is not null)
             codePipeline = new CodePipeline(codeArchitect, memory, context, engram, processingThreads, liveCalls, NotifyWatchers);
 
@@ -344,6 +387,8 @@ public class LLMModule : ILLMModule, IDisposable
                 Endpoint     = textingAgent.Endpoint,
                 Server       = textingAgent.Server,
                 SlotName               = textingAgent.SlotName,
+                Slot                   = textingAgent.Slot,
+                Floating               = textingAgent.Floating,
                 Think                  = textingAgent.Think,
                 ReasoningEffortOverride = "xhigh",
                 UsePersona             = true,
@@ -499,17 +544,13 @@ public class LLMModule : ILLMModule, IDisposable
             {
                 agent.Slot = agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase));
                 if (agent.Slot is null)
-                    _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — falling back to its first slot.",
+                    _logger.LogWarning("Agent '{Agent}' names slot '{Slot}' which doesn't exist on server '{Server}' — it will take any free slot there instead.",
                         agent.Name, agent.SlotName, agent.Server.Name);
             }
-            // No name given (or it didn't resolve) — default to the server's first slot, same as the
-            // old raw agent.Slot ??= 0 behaviour, so an agent still gets pinned/context-derived out of
-            // the box without needing the control panel touched first.
-            if (agent.Slot is null && agent.Server.Slots.Count > 0)
-            {
-                agent.Slot = agent.Server.Slots[0];
-                agent.SlotName  = agent.Slot.Name;
-            }
+            // No slot named (or it didn't resolve): the agent belongs to the server and each turn takes a free slot there,
+            // so conversations run side by side on different slots instead of queueing for one.
+            agent.Floating = agent.Slot is null;
+            if (agent.Slot is not null) lock (agent.Server.Held) agent.Server.Held.Add(agent.Slot.Id);
         }
         agent.Queue = QueueFor(agent.Server);
         return agent;
@@ -535,6 +576,8 @@ public class LLMModule : ILLMModule, IDisposable
         }
         Thread thread = new Thread(type, threadKey, platformContext);
         Channels.StampPlace(thread);
+        // A persona picked in the app before the conversation existed.
+        if (pendingPersonas.TryRemove(threadKey, out string? chosenPersona)) thread.PersonaId = chosenPersona;
         threads[threadKey] = thread;
         // list_tools/request_tools are always warm (issue #126) and universal — no agent-identity gate.
         // What a group actually resolves to depends on ToolFactories reading this thread's bound context
@@ -560,11 +603,11 @@ public class LLMModule : ILLMModule, IDisposable
         // re-read the prompt, so it's there from the start.
         if (type is ThreadPipeline.Speech)
             ToolFactories.LoadGroup("subagent_tools", thread);
-        // hand_to_coder is the net under the deterministic Code routing: if a coding request lands on a Dialogue
+        // switch_pipeline is the net under the deterministic Code routing: if a coding request lands on a Dialogue
         // thread (the gate never fired), she can pass it to the Coder instead of improvising. Hot, like
         // propose_persona_edit — discovering it via list_tools is not something to rely on mid-request.
         if (!isChannel && type is ThreadPipeline.Dialogue)
-            new HandToCoder(thread).Register(thread);
+            new SwitchPipeline(thread).Register(thread);
         // The pinned tools are in hand from the first message. This is the conversation's first sync; the chat API repeats it on
         // each message, once it knows whether the Master or a guest is talking.
         ToolFactories.SyncPinned(thread);
@@ -583,6 +626,8 @@ public class LLMModule : ILLMModule, IDisposable
         {
             Broadcast(new AppEvent("streamingFinished", threadKey));
             PushIfUnwatched(thread, threadKey);
+            if (!thread.Internal && thread.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText is { Length: > 0 } replyText)
+                PluginHooks.Fire(p => p.OnReplyFinished(new HookReply(threadKey, replyText)));
         };
         thread.ScratchpadFileReady += url => Broadcast(new AppEvent("imageReady", threadKey, url));
         // Persist a plain-text transcript to ChatHistory after every completed exchange.
@@ -627,11 +672,8 @@ public class LLMModule : ILLMModule, IDisposable
                         else if (share < 0.5) nearFull.TryRemove(threadKey, out _);
                     }
                     if (!engram.ShouldIntervalSweep(threadKey) && !nearCompaction) return;
-                    _ = Task.Run(async () =>
-                    {
-                        try { await engram.RunEngram(threadKey, nearCompaction ? "compaction" : "interval"); }
-                        catch (Exception ex) { _logger.LogWarning("[Interval] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
-                    });
+                    try { engram.TakeSnapshot(thread, nearCompaction ? "compaction" : "interval"); }
+                    catch (Exception ex) { _logger.LogWarning("[Engram] snapshot failed for {Key}: {Err}", threadKey, ex.Message); }
                 };
         }
         Broadcast(new AppEvent("newThread", threadKey));
@@ -709,6 +751,8 @@ public class LLMModule : ILLMModule, IDisposable
         Dictionary<string, string[]> result = new(StringComparer.OrdinalIgnoreCase);
         foreach (string name in agentMap.Keys)
             if (graphPipeline?.PortsOf(name) is { } ports) result[name] = ports;
+        // The voice agent isn't in the agent list under its own name, but the Talk pipeline's graph shows it.
+        if (talkingAgent is not null) result["Talking"] = PipelineGraph.BuiltInPorts["Talking"];
         return result;
     }
 
@@ -743,6 +787,15 @@ public class LLMModule : ILLMModule, IDisposable
     /// reply type; one that can only run as a step inside another is kept for that. One that does neither (an agent it uses was
     /// deleted, say) is left out and the reasons logged; threads on it answer with Default until it is fixed. Default is always
     /// there: the one in the file, or the built-in one.</summary>
+    /// <summary>Whether a Coder agent is loaded (the Code pipeline's graph is only valid with one).</summary>
+    internal static bool HasCoder { get; private set; }
+
+    /// <summary>The Code pipeline's graph as saved, for its review loop. Null if it can't run.</summary>
+    internal static PipelineGraph? CodeGraph { get; private set; }
+
+    /// <summary>Finds a loaded custom agent by name (the Code pipeline's reviewer).</summary>
+    internal static Func<string, CustomAgent?>? CustomAgentByName { get; private set; }
+
     public void ReloadPipelines()
     {
         if (graphPipeline is null) return;
@@ -772,6 +825,7 @@ public class LLMModule : ILLMModule, IDisposable
     
         if (!loaded.ContainsKey(PipelineGraph.DefaultId)) loaded[PipelineGraph.DefaultId] = PipelineGraph.BuiltInDefault(graphPipeline.PortsOf("Memory") is not null);
 
+        CodeGraph = loaded.GetValueOrDefault(PipelineGraph.CodeId);
         foreach (string gone in graphs.Keys.Where(k => !loaded.ContainsKey(k)).ToList()) graphs.TryRemove(gone, out _);
         foreach ((string id, PipelineGraph g) in loaded) graphs[id] = g;
         foreach (string gone in subGraphs.Keys.Where(k => !loadedSub.ContainsKey(k)).ToList()) subGraphs.TryRemove(gone, out _);
@@ -812,7 +866,18 @@ public class LLMModule : ILLMModule, IDisposable
         agent.Slot = agent.SlotName is { Length: > 0 }
             ? server.Slots.FirstOrDefault(sl => sl.Name.Equals(agent.SlotName, StringComparison.OrdinalIgnoreCase))
             : null;
+        agent.Floating = agent.Slot is null;
+        agent.Queue = QueueFor(server);
+        RecomputeHeldSlots();
         return true;
+    }
+
+    /// <summary>Which slots are held: those some live agent names for itself. Every other slot is shared by the floating agents.</summary>
+    private void RecomputeHeldSlots()
+    {
+        foreach (Server server in _servers) lock (server.Held) server.Held.Clear();
+        foreach (Agent a in agentMap.Values.Append(talkingAgent).OfType<Agent>().Distinct())
+            if (!a.Floating && a is { Server: { } srv, Slot: { } held }) lock (srv.Held) srv.Held.Add(held.Id);
     }
 
     /// <summary>
@@ -827,6 +892,8 @@ public class LLMModule : ILLMModule, IDisposable
         agent.Slot = agent.Server is not null && slotName is { Length: > 0 }
             ? agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase))
             : null;
+        agent.Floating = agent.Slot is null;
+        RecomputeHeldSlots();
         return true;
     }
 
@@ -877,8 +944,8 @@ public class LLMModule : ILLMModule, IDisposable
         dreamOrchestrator?.Start();
         _ = WarmDialogueAsync();
         _ = WarmRecallAsync();
-        // Conversations ARI closed on before Engram reached them, now that the model is up to sweep them.
-        if (engram is not null) _ = Task.Run(engram.SweepSavedAsync);
+        // Conversations ARI closed on before Engram reached them go into the memory queue.
+        if (engram is not null) _ = Task.Run(engram.QueueUnsweptSaved);
 
         async Task BootOne(Server server, Model? model)
         {
@@ -1111,6 +1178,76 @@ public class LLMModule : ILLMModule, IDisposable
     /// thread processed so its deletion timer may proceed. RunEngram sets EngramProcessed on success; if
     /// it can't run (disabled / a concurrent sweep holds the lock) the flag stays false and the thread's
     /// delete-retry poll tries again.</summary>
+    // ── Engram while idle ────────────────────────────────────────────────────────
+    // Memory never holds up a conversation: each sweep trigger only queues a snapshot (see Engram.TakeSnapshot), and the queue is
+    // worked through here, oldest first, only while she is idle — nothing generating, and either no conversation active or ten
+    // minutes with no prompts, replies or typing. A snapshot already being swept when she gets busy again is finished; the next waits.
+
+    // While nothing else is happening, the Reflector reads its own recent corrections and leaves suggestions for the owner to approve.
+    private async Task ReflectionProposalLoop()
+    {
+        DateTime lastBusy = DateTime.UtcNow;
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(10));
+                if (!IsIdle) { lastBusy = DateTime.UtcNow; continue; }
+                if (DateTime.UtcNow - lastBusy < TimeSpan.FromMinutes(2) || Reflector.Current is not { } reflector) continue;
+                // The brain's own tidy-up suggestions, a few at a time.
+                try { int n = await BrainCuration.Suggest(reflector, 3, CancellationToken.None); if (n > 0) _logger.LogInformation("[BrainCuration] left {N} suggestion(s) for the brain.", n); }
+                catch (Exception ex) { _logger.LogWarning("[BrainCuration] suggestion pass failed: {Err}", ex.Message); }
+                List<string> lines = ReflectionProposals.Unanalysed(8, out int total);
+                if (lines.Count == 0) continue;
+                List<ReflectionProposal> found = await reflector.Propose(lines, CancellationToken.None);
+                ReflectionProposals.Add(found);
+                ReflectionProposals.MarkAnalysed(total);
+                if (found.Count > 0) _logger.LogInformation("[Reflector] left {N} suggestion(s) for review.", found.Count);
+            }
+            catch (Exception ex) { _logger.LogWarning("[Reflector] suggestion pass failed: {Err}", ex.Message); }
+        }
+    }
+
+    private static readonly TimeSpan MemoryQueueIdle = TimeSpan.FromMinutes(10);
+    private DateTime lastActivity = DateTime.UtcNow;
+
+    /// <summary>Nothing generating, and no conversation active or none for <see cref="MemoryQueueIdle"/>.</summary>
+    private bool IdleForMemory()
+    {
+        if (!IsIdle) { lastActivity = DateTime.UtcNow; return false; }
+        bool anyActive = threads.Values.Any(t => !t.Internal && t.State is ThreadState.Active or ThreadState.Streaming);
+        return !anyActive || DateTime.UtcNow - lastActivity >= MemoryQueueIdle;
+    }
+
+    private async Task MemoryQueueLoop()
+    {
+        while (true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5));
+            try
+            {
+                if (!IdleForMemory() || engram is not { IsEnabled: true } e) continue;
+                if (Engram.QueuedSnapshots().FirstOrDefault() is not { } file) continue;
+                (string key, string trigger) = Engram.SnapshotInfo(file);
+                bool done = true;
+                await SweepOrHandOff(key, trigger, async () => done = await e.SweepSnapshot(file));
+                if (File.Exists(file) && done) Engram.DropSnapshot(file);   // a plugin took the sweep
+                // A snapshot the model couldn't answer for stays first in line; give the server a minute before trying it again.
+                if (!done) await Task.Delay(TimeSpan.FromMinutes(1));
+            }
+            catch (Exception ex) { _logger.LogWarning("[Idle] memory queue: {Err}", ex.Message); await Task.Delay(TimeSpan.FromMinutes(1)); }
+        }
+    }
+
+    /// <summary>A memory sweep: a plugin that replaces sweeps takes it, otherwise Engram runs. The add-on sweep hooks fire either way.</summary>
+    private async Task SweepOrHandOff(string key, string trigger, Func<Task> engramSweep)
+    {
+        HookSweep sweep = new(key, trigger);
+        if (await PluginHooks.TakeMemorySweep(sweep) is { } taker) _logger.LogInformation("[Idle] Plugin {Plugin} handled the memory sweep of {Key} instead of Engram.", taker, key);
+        else await engramSweep();
+        PluginHooks.Fire(p => p.OnMemorySweep(sweep));
+    }
+
     private void OnThreadDormant(Thread thread)
     {
         bool canSweep = engram is not null && !thread.EngramProcessed && Engram.MaySweep(thread);
@@ -1118,11 +1255,8 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
         {
-            _ = Task.Run(async () =>
-            {
-                try { await engram!.RunEngram(thread.Key, "dormant"); }
-                catch (Exception ex) { _logger.LogWarning("[Dormant] Engram failed for {Key}: {Err}", thread.Key, ex.Message); }
-            });
+            try { engram!.TakeSnapshot(thread, "dormant"); }
+            catch (Exception ex) { _logger.LogWarning("[Dormant] Engram snapshot failed for {Key}: {Err}", thread.Key, ex.Message); }
         }
         else
         {
@@ -1130,31 +1264,30 @@ public class LLMModule : ILLMModule, IDisposable
         }
     }
 
-    /// <summary>Manually close a thread (close-thread button): remove it from the UI immediately, run a real
-    /// Engram sweep (forced past any disabled gate — a user closing wants it saved), then delete once the
-    /// sweep finishes. The thread stays in the registry, hidden, until Engram completes.</summary>
-    public async Task<bool> CloseThreadAsync(string threadKey)
+    /// <summary>Manually close a thread (close-thread button): remove it from the UI, queue a snapshot of what Engram hasn't
+    /// seen yet (swept later, while she is idle), then delete it.</summary>
+    public Task<bool> CloseThreadAsync(string threadKey)
     {
-        if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
+        if (!threads.TryGetValue(threadKey, out Thread? thread)) return Task.FromResult(false);
 
         Cancel(threadKey);   // stop any active send before we sweep + delete
 
-        // 1) Clear it from the UI now; the thread lingers in the registry until Engram is done.
+        // 1) Clear it from the UI now.
         Broadcast(new AppEvent("threadDeleted", threadKey) { OwnerId = thread.OwnerId });
 
-        // 2) Guarantee the conversation is saved before deletion (honours the no-delete-before-Engram rule).
+        // 2) Queue what it said for memory before deletion (honours the no-delete-before-Engram rule).
         if (engram is not null && !thread.Internal && thread.HasUserMessages)
         {
             if (thread.Pipeline is ThreadPipeline.Dialogue or ThreadPipeline.Speech or ThreadPipeline.Code)
             {
-                try { await engram.RunEngram(threadKey, "closed", force: true); }
-                catch (Exception ex) { _logger.LogWarning("[Close] Engram failed for {Key}: {Err}", threadKey, ex.Message); }
+                try { engram.TakeSnapshot(thread, "closed"); }
+                catch (Exception ex) { _logger.LogWarning("[Close] Engram snapshot failed for {Key}: {Err}", threadKey, ex.Message); }
             }
         }
 
         // 3) Delete for real (fires Deleted → registry removal + a final threadDeleted broadcast).
         thread.Delete();
-        return true;
+        return Task.FromResult(true);
     }
 
     /// <summary>Whether a conversational-awareness gate is available.</summary>
@@ -1213,6 +1346,13 @@ public class LLMModule : ILLMModule, IDisposable
     // still wakes the thread instead of waiting for the next message.
     private async Task<string> RouteThenWake(string threadKey, string prompt, string username, string? platformContext, Func<string, Task>? onDelta, CancellationToken externalCt, List<Attachment>? messageAttachments = null, string? localPath = null, InferencePriority priority = InferencePriority.Normal, SpeechSteeringContext? steering = null, Func<string, Task>? onTextDelta = null)
     {
+        if (threads.TryGetValue(threadKey, out Thread? hooked) && !hooked.Internal)
+        {
+            bool owner = hooked.OwnerId is not null && hooked.OwnerId == Shared.MasterUserId;
+            HookMessage arrived = new(threadKey, prompt, owner, DateTime.Now);
+            prompt = await PluginHooks.RewriteUserMessage(arrived);
+            PluginHooks.Fire(p => p.OnUserMessage(arrived with { Text = prompt }));
+        }
         try { return await Route(threadKey, prompt, username, platformContext, onDelta, externalCt, messageAttachments, localPath, priority, steering, onTextDelta); }
         finally { WakeIfPending(threadKey); }
     }
@@ -1349,7 +1489,7 @@ public class LLMModule : ILLMModule, IDisposable
         }
     }
 
-    /// <summary>Second half of a dialogue→coder handoff (<see cref="HandToCoder"/>): the dialogue turn has finished
+    /// <summary>Second half of a dialogue→coder handoff (<see cref="SwitchPipeline"/>): the dialogue turn has finished
     /// (she told the user she's passing it along), so move the thread onto the Code pipeline — history and bound
     /// project carried by <see cref="Recategorise"/> — and run the request there as an internal prompt. Returns null
     /// when there is no Code pipeline, so the caller keeps the dialogue reply.</summary>
@@ -1547,7 +1687,6 @@ public class LLMModule : ILLMModule, IDisposable
     public bool IsEngramSweeping(string threadKey) => engram?.IsSaving(threadKey) ?? false;
 
     /// <summary>A reply is held back until Engram finishes saving this chat.</summary>
-    public bool IsWaitingOnMemory(string threadKey) => threads.TryGetValue(threadKey, out Thread? t) && t.WaitingOnMemory;
 
     /// <summary>How many completed exchanges an active thread accumulates before Engram sweeps it
     /// mid-conversation. 0 = interval sweeping disabled (dormant/close remain the only triggers).</summary>
@@ -1568,6 +1707,21 @@ public class LLMModule : ILLMModule, IDisposable
     // Idle = no thread is currently being processed. Read statically via Activity.IsIdle(); background
     // work (Dream) runs only while this holds, and yields the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
+
+    /// <summary>Sets the persona a conversation speaks in. False if there is no such conversation.</summary>
+    public bool SetThreadPersona(string threadKey, string personaId)
+    {
+        if (!threads.TryGetValue(threadKey, out Thread? thread))
+        {
+            // The app makes a conversation's key before its first message; the choice waits for the conversation to exist.
+            pendingPersonas[threadKey] = personaId;
+            return true;
+        }
+        thread.PersonaId = personaId;
+        return true;
+    }
+
+    private readonly ConcurrentDictionary<string, string> pendingPersonas = new();
 
     // Ari is "active" whenever any visible (non-Internal) thread is in a state the user can see in the
     // sidebar and is not yet fully settled — Unread (proactive awaiting first reply), Active, Streaming,
@@ -1671,8 +1825,8 @@ public class LLMModule : ILLMModule, IDisposable
         });
         thread.StartUnread();   // proactive opener: await the user's reply, else unread → dormant → deleted
 
-        // Best-effort — a missing/failed push must not lose the thread, which is already created either way.
-        _ = SendProactivePush(assistantText, threadKey, thread.OwnerId);
+        // Like any reply, it rings the phone only if it is still unread two minutes from now (a failed push must not lose the thread).
+        PushIfUnwatched(thread, threadKey);
 
         return threadKey;
     }
@@ -1718,7 +1872,7 @@ public class LLMModule : ILLMModule, IDisposable
         if (thread.Internal || thread.OwnerId is null || thread.Pipeline is not (ThreadPipeline.Dialogue or ThreadPipeline.Code)) return;
         unreadNotifier ??= new UnreadNotifier(TimeSpan.FromMinutes(2), HasWatchers,
             key => threads.TryGetValue(key, out Thread? t)
-                ? (t.OwnerId, t.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContentText)
+                ? (t.OwnerId, t.History.OfType<Response>().LastOrDefault(r => r.State == State.Complete)?.ContextText)
                 : null,
             (key, text, owner) => SendProactivePush(text, key, owner));
         unreadNotifier.ReplyFinished(threadKey, thread.OwnerId);
@@ -1726,6 +1880,7 @@ public class LLMModule : ILLMModule, IDisposable
 
     public void NotifyTyping(string threadKey)
     {
+        lastActivity = DateTime.UtcNow;
         if (threads.TryGetValue(threadKey, out Thread? t)) t.OnUserTyping();
     }
 
@@ -1839,6 +1994,12 @@ public class LLMModule : ILLMModule, IDisposable
     /// pipeline applies it to every code thread each turn — see <see cref="Coder.RefreshConventions"/>.</summary>
     public static Func<string?>? ConventionsProvider { get; set; }
 
+    /// <summary>Starts the MCP servers listed in McpServers.json, in the background of start-up.</summary>
+    public static Task StartMcpServersAsync() => McpTools.ReloadAsync();
+
+    /// <summary>Saves the coding-conventions text (set by the API module alongside <see cref="ConventionsProvider"/>).</summary>
+    public static Action<string>? ConventionsSaver { get; set; }
+
     public void SetCodeThreadContext(string threadKey, string? projectMap, string? conventions, string? rules)
         => codeArchitect?.SetThreadContext(threadKey, projectMap, conventions, rules);
 
@@ -1898,14 +2059,14 @@ public class LLMModule : ILLMModule, IDisposable
     /// thought (mid-think, or at the next tool-round boundary). The agent adds it to the history when it folds it in,
     /// so the transcript shows what she'd done by then; returns false if the thread isn't currently streaming
     /// (nothing to interject into — the caller should send a normal message instead).</summary>
-    public bool Interject(string threadKey, string username, string text, List<Attachment> attachments)
+    public bool Interject(string threadKey, string username, string text, List<Attachment> attachments, string? clientId = null)
     {
         if (string.IsNullOrWhiteSpace(text) && attachments.Count == 0) return false;
         if (!threads.TryGetValue(threadKey, out Thread? thread)) return false;
         if (thread.State != ThreadState.Streaming) return false;
 
         // The message reaches the chat when the agent folds it in, at the point in her reply where it landed.
-        thread.Interject(username, text, attachments);
+        thread.Interject(username, text, attachments, clientId);
         return true;
     }
 
