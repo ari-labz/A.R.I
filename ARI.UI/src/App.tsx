@@ -315,7 +315,7 @@ export default function App() {
     // send the selected project's instructions to the backend as the project-rules context block.
     const projectsRef = useRef<Project[]>([])
 
-    const [clientVersion,  setClientVersion]  = useState<string | null>(null)
+    const [serverVersion,  setServerVersion]  = useState<string | null>(null)
     const [outdated,       setOutdated]       = useState(false)
     const [protocolMismatch, setProtocolMismatch] = useState<number | null>(null)
     // Assume ready until told otherwise, so a slow/failed check never blocks the composer.
@@ -499,8 +499,10 @@ export default function App() {
         async function checkVersion() {
             const res = await apiFetch("/api/v1/info/version").catch(() => null)
             if (!res?.ok) return
-            const { serverOutdated } = await res.json()
+            const { serverOutdated, serverVersion: ver } = await res.json()
             setOutdated(!!serverOutdated)
+            // Beside the logo goes the version of the server she runs on, on the website and the desktop app alike.
+            if (typeof ver === "string" && ver) setServerVersion(ver.replace(/^v/i, ""))
         }
 
         // Is any model server online? A fresh install has none running by design, so the composer
@@ -514,7 +516,6 @@ export default function App() {
             setDevMode(!!dev)
         }
 
-        env.getVersion().then(ver => { if (ver) setClientVersion(ver) })
         checkVersion()
         checkReady()
         const readyPollId   = setInterval(checkReady, 5 * 1000)
@@ -1577,7 +1578,7 @@ export default function App() {
                 }}
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(c => !c)}
-                clientVersion={clientVersion}
+                serverVersion={serverVersion}
                 outdated={outdated}
                 userDisplayName={authUser?.displayName || authUser?.username}
                 onOpenPreferences={() => setShowPreferences(true)}

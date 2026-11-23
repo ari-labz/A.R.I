@@ -12,7 +12,7 @@ interface Props {
     onCloseThread:       (t: ThreadEntry) => void
     collapsed:           boolean
     onToggleCollapse:    () => void
-    clientVersion:       string | null
+    serverVersion:       string | null
     outdated:            boolean
     userDisplayName?:    string
     onOpenPreferences?:  () => void
@@ -21,7 +21,7 @@ interface Props {
     onHideThread?:       (t: ThreadEntry) => void
 }
 
-export default function Sidebar({ threads, unreadThreads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, clientVersion, outdated, userDisplayName, onOpenPreferences, isAdmin, onRenameThread, onHideThread }: Props) {
+export default function Sidebar({ threads, unreadThreads, activeThread, activeView, onNewChat, onOpenProjects, onSelectThread, onCloseThread, collapsed, onToggleCollapse, serverVersion, outdated, userDisplayName, onOpenPreferences, isAdmin, onRenameThread, onHideThread }: Props) {
     const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
     return (
         <aside id="sidebar" className={collapsed ? "collapsed" : ""}>
@@ -29,7 +29,7 @@ export default function Sidebar({ threads, unreadThreads, activeThread, activeVi
                 <div id="sidebar-header">
                     <div id="sidebar-header-left">
                         <img id="sidebar-wordmark" src="/images/logo-white.png?v=2" alt="A·R·I" />
-                        {clientVersion && <span id="sidebar-version">{`v${clientVersion}`}</span>}
+                        {serverVersion && <span id="sidebar-version" title="A·R·I server version">{`v${serverVersion}`}</span>}
                     </div>
                     <button id="btn-toggle-sidebar" title="Close sidebar" onClick={onToggleCollapse}>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
