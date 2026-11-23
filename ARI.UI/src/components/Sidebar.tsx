@@ -74,13 +74,15 @@ const baseName = t.isInternal
                         return (
                             <li key={t.key} className={classes} onClick={() => onSelectThread(t)}
                                 onContextMenu={e => { if (t.isInternal) return; e.preventDefault(); e.stopPropagation(); setMenu({ key: t.key, x: e.clientX, y: e.clientY }) }}>
-                                <span className="thread-state" aria-hidden="true">
-                                    {t.status === "prefilling" || t.status === "researching" ? <span className="thread-state-fade" title="Reading"><EyeIcon size={18} /></span>
-                                    : t.status === "thinking" ? <span className="thread-state-fade" title="Thinking"><BrainIcon size={18} /></span>
-                                    : t.status === "typing" ? <span className="thread-state-fade" title="Typing"><SpeechIcon size={18} /></span>
-                                    : unreadThreads?.has(t.key) ? <span className="thread-unread-dot" title="Unread message" />
-                                    : null}
-                                </span>
+                                {/* The icon's slot (and the indent it brings) is only there while there is an icon to show. */}
+                                {(() => {
+                                    const icon = t.status === "prefilling" || t.status === "researching" ? <span className="thread-state-fade" title="Reading"><EyeIcon size={18} /></span>
+                                        : t.status === "thinking" ? <span className="thread-state-fade" title="Thinking"><BrainIcon size={18} /></span>
+                                        : t.status === "typing" ? <span className="thread-state-fade" title="Typing"><SpeechIcon size={18} /></span>
+                                        : unreadThreads?.has(t.key) ? <span className="thread-unread-dot" title="Unread message" />
+                                        : null
+                                    return icon && <span className="thread-state" aria-hidden="true">{icon}</span>
+                                })()}
                                 <span className="thread-name">
                                     {t.projectName && (
                                         <span className="thread-project">{t.projectName}/</span>
