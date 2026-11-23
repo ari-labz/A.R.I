@@ -1875,7 +1875,18 @@ details.tool-card--report[open] { width: 100%; box-sizing: border-box; }
 .ew-add { background: rgba(127,211,160,.2); color: #7fd3a0; border-radius: 2px; margin-left: 6px; }
 .ew-block { margin-left: 0; }
 .ew-caret { display: inline-block; width: 2px; height: 1.1em; margin-left: 1px; vertical-align: text-bottom; background: #a07ae6; }
-@media (max-width: 640px) { #main.with-windows #chat-col { flex: 1 1 100%; } .edit-pane { display: none; } }
+/* a page Ari showed gets the room it needs: the chat narrows further and the window takes the rest */
+#main.with-page #chat-col { flex-basis: min(42%, calc(var(--col-max) + 48px)); }
+.ari-visual-card { display: inline-flex; align-items: center; gap: 10px; margin: 8px 0; padding: 9px 14px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; font-size: 14px; }
+.ari-visual-card:hover, .ari-visual-card:focus-visible { border-color: #6cc0d0; outline: none; }
+.ari-visual-card-icon { color: #6cc0d0; }
+.ari-visual-card-open { color: var(--text-dim); font-size: 12px; }
+.ew-close { margin-left: 12px; padding: 0 4px; color: #cadde2; font-size: 14px; cursor: pointer; }
+.ew-close:hover { color: #ef8a79; }
+.ew.ew-visual { width: 100%; }
+.ew-page { border-top: 1px solid rgba(108,192,208,.5); }
+@media (max-width: 640px) { #main.with-windows #chat-col { flex: 1 1 100%; } .edit-pane { display: none; }
+    #main.with-page .edit-pane { display: flex; position: fixed; inset: 0; z-index: 50; padding: 12px; background: rgba(13,20,22,.92); } }
 @media (prefers-reduced-motion: reduce) { .ew, .ew-fold, #chat-col { transition: none; } }
 
 /* The title banner's line runs the full width of the screen, over the windows' side too. */

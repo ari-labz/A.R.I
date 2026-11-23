@@ -21,7 +21,7 @@ internal sealed class ShowVisual : Tool
         function = new
         {
             name        = "show_visual",
-            description = "Show a visual right in the chat: a chart, diagram, table, timeline, calculator or small interactive page, as self-contained HTML with inline CSS and JavaScript (outside code only from cdnjs.cloudflare.com or cdn.jsdelivr.net; no network requests). Use a transparent background and currentColor; it is about 700px wide. Chart.js draws into a <canvas>. It is test-run first and errors come back to you. For a chart in a document use make_chart. Afterwards say in one sentence what it shows.",
+            description = "Show the user any page you make: a chart, diagram, table, calculator, animation, game or interactive tool, as self-contained HTML with inline CSS and JavaScript (outside code only from cdnjs.cloudflare.com or cdn.jsdelivr.net; no network requests). It opens in a window beside the chat that they can use straight away, so use this rather than delivering an .html file. Use currentColor for text; the page should fit any width. Chart.js draws into a <canvas>. It is test-run first and errors come back to you. For a chart in a document use make_chart. Afterwards say in one sentence what it shows.",
             parameters = new
             {
                 type       = "object",

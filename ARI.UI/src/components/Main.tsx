@@ -8,7 +8,7 @@ import DropOverlay from "./DropOverlay"
 import BrowserPane, { BrowserButton, BrowserNeedsYou } from "./BrowserPane"
 import { useBrowserSession } from "../hooks/useBrowserSession"
 import Hud, { type HudWindow } from "./Hud"
-import EditWindows, { editWindowsFrom } from "./EditWindows"
+import EditWindows, { editWindowsFrom, pageWindow, type EditWin } from "./EditWindows"
 import type { AppMode, PendingAttachment } from "../App"
 import type { ThreadItem, Attachment, Project } from "../hooks/useThreads"
 import { apiFetch } from "../auth"
@@ -88,7 +88,28 @@ export default function Main({
         [items, speechInCall, speechCallStart, closedWindows])
     // Files Ari edits open as windows beside the chat: the chat slides left and the sidebar folds away, then both
     // come back when the next message clears them.
-    const liveEdits = useMemo(() => speechMode ? [] : editWindowsFrom(items), [items, speechMode])
+    // A page Ari showed opens here rather than in the chat; its card in the message reopens it, and a page window can be closed.
+    // Both are forgotten at the next message, when the windows clear.
+    const [reopened,    setReopened]    = useState<EditWin | null>(null)
+    const [closedPages, setClosedPages] = useState<Set<string>>(new Set())
+    const userTurns = useMemo(() => items.filter(i => i.type === "userMessage").length, [items])
+    useEffect(() => { setReopened(null); setClosedPages(new Set()) }, [userTurns, activeThread])
+    useEffect(() => {
+        const open = (e: Event) => {
+            const card = (e.target as HTMLElement | null)?.closest?.<HTMLElement>(".ari-visual-card")
+            if (!card || (e instanceof KeyboardEvent && e.key !== "Enter")) return
+            const w = pageWindow(card.dataset.visualSrc ?? "", card.dataset.visualName ?? "page")
+            setClosedPages(c => { const n = new Set(c); n.delete(w.id); return n })
+            setReopened(w)
+        }
+        document.addEventListener("click", open); document.addEventListener("keydown", open)
+        return () => { document.removeEventListener("click", open); document.removeEventListener("keydown", open) }
+    }, [])
+    const liveEdits = useMemo(() => {
+        if (speechMode) return []
+        const wins = editWindowsFrom(items).filter(w => !closedPages.has(w.id))
+        return reopened && !closedPages.has(reopened.id) && !wins.some(w => w.id === reopened.id) ? [...wins, reopened] : wins
+    }, [items, speechMode, reopened, closedPages])
     const [shownEdits, setShownEdits] = useState(liveEdits)
     const [leaving, setLeaving] = useState(false)
     useEffect(() => {
@@ -203,6 +224,7 @@ export default function Main({
         codeMode ? "code-mode" : "",
         speechMode ? "speech-mode" : "",
         editsOpen ? "with-windows" : "",
+        editsOpen && shownEdits.some(w => w.visual) ? "with-page" : "",
     ].filter(Boolean).join(" ")
 
     return (
@@ -330,7 +352,8 @@ export default function Main({
                 )}
             </div>
 
-            {shownEdits.length > 0 && <EditWindows windows={shownEdits} leaving={leaving} />}
+            {shownEdits.length > 0 && <EditWindows windows={shownEdits} leaving={leaving}
+                onClose={id => setClosedPages(c => new Set([...c, id]))} />}
 
             <BrowserPane session={browser} />
         </div>

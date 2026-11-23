@@ -11,9 +11,20 @@ export interface EditWin {
     old:    string[]
     neu:    string[]
     after:  string[]
+    visual?: string     // a page Ari showed (show_visual): the address it loads from, shown live instead of a diff
 }
 
 const EDIT_MARK = /<!--ari-edit:([A-Za-z0-9+/=]+)-->/g
+const VISUAL_MARK = /<!--ari-visual:([^:]+):([^>]+?)-->/g
+
+function visualWin(threadKey: string, file: string): EditWin {
+    return pageWindow(`/api/v1/threads/${encodeURIComponent(threadKey)}/files/content?path=${encodeURIComponent(file)}`, file)
+}
+
+/** The window for a page Ari showed, from the address it loads from. */
+export function pageWindow(src: string, file: string): EditWin {
+    return { id: "visual:" + src, version: src, file, line: 0, before: [], old: [], neu: [], after: [], visual: src }
+}
 
 function decode(b64: string): EditWin | null {
     try {
@@ -22,15 +33,16 @@ function decode(b64: string): EditWin | null {
     } catch { return null }
 }
 
-/** The files Ari has edited since the user's last message. A new message clears them. */
+/** The files Ari has edited, and the pages she has shown, since the user's last message. A new message clears them. */
 export function editWindowsFrom(items: ThreadItem[]): EditWin[] {
     const found = new Map<string, EditWin>()
     for (const item of items) {
         if (item.type === "userMessage") { found.clear(); continue }
         if (item.type !== "ariResponse") continue
         const text = [item.content, ...(item.blocks ?? []).map(b => b.text ?? "")].join("\n")
-        for (const [, b64] of text.matchAll(EDIT_MARK)) {
-            const w = decode(b64)
+        const wins = [...text.matchAll(EDIT_MARK)].map(([, b64]) => decode(b64))
+            .concat([...text.matchAll(VISUAL_MARK)].map(([, key, file]) => visualWin(key, file)))
+        for (const w of wins) {
             if (!w) continue
             found.delete(w.id)
             found.set(w.id, w)
@@ -100,11 +112,11 @@ function Body({ w, live }: { w: EditWin; live: boolean }) {
     )
 }
 
-interface Props { windows: EditWin[]; leaving: boolean }
+interface Props { windows: EditWin[]; leaving: boolean; onClose?: (id: string) => void }
 
 // Beside the chat: one window per edited file, in the space the chat leaves. The newest is open and the earlier
 // ones fold to a title strip in a staircase; click a strip to reopen it (the others fold).
-export default function EditWindows({ windows, leaving }: Props) {
+export default function EditWindows({ windows, leaving, onClose }: Props) {
     const [open, setOpen] = useState<string | null>(null)
     const [entered, setEntered] = useState<Set<string>>(new Set())
     const seen = useRef<Set<string> | null>(null)
@@ -137,17 +149,23 @@ export default function EditWindows({ windows, leaving }: Props) {
                 const added = w.neu.length, removed = w.old.length
                 return (
                     <div key={w.id}
-                         className={`ew${folded ? " folded" : ""}${entered.has(w.id) ? " in" : ""}`}
+                         className={`ew${w.visual ? " ew-visual" : ""}${folded ? " folded" : ""}${entered.has(w.id) ? " in" : ""}`}
                          style={{ marginLeft: folded ? order.indexOf(w.id) * 14 : 0, transitionDelay: leaving ? `${(windows.length - 1 - i) * 60}ms` : undefined }}>
                         <button type="button" className="ew-bar" onClick={() => setOpen(folded ? w.id : null)} title={folded ? "Show the changes" : "Fold"}>
                             <span className="ew-name">{w.file}</span>
                             <span className="ew-meta">
-                                {added > 0 && <span className="ew-cnt-add">+{added}</span>}
+                                {w.visual ? <>page{onClose && <span className="ew-close" role="button" tabIndex={0} title="Close"
+                                    onClick={e => { e.stopPropagation(); onClose(w.id) }}
+                                    onKeyDown={e => { if (e.key === "Enter") { e.stopPropagation(); onClose(w.id) } }}>×</span>}</> : <>{added > 0 && <span className="ew-cnt-add">+{added}</span>}
                                 {removed > 0 && <span className="ew-cnt-del"> −{removed}</span>}
-                                <span className="ew-line-no"> · line {w.line}</span>
+                                <span className="ew-line-no"> · line {w.line}</span></>}
                             </span>
                         </button>
-                        <div className="ew-fold"><div className="ew-fold-in"><Body w={w} live={live.has(w.id + w.version)} /></div></div>
+                        <div className="ew-fold"><div className="ew-fold-in">
+                            {w.visual
+                                ? <div className="ew-page"><div className="ari-visual" data-visual-src={w.visual} data-visual-name={w.file} /></div>
+                                : <Body w={w} live={live.has(w.id + w.version)} />}
+                        </div></div>
                     </div>
                 )
             })}

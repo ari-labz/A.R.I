@@ -50,7 +50,7 @@ function renderBrowserMarkers(s: string): string {
     })
 }
 
-// A visual Ari drew (show_visual): an empty frame the page mounts a sandboxed iframe into (see visuals.ts).
+// A visual Ari drew (show_visual): a card in the message; the page itself opens in a window beside the chat (see EditWindows).
 // An edit window's data rides in the text as a marker; the window is drawn beside the chat, so the text shows nothing.
 const EDIT_WINDOW_RE = /<!--ari-(?:edit|review):[^>]*?-->/g
 function hideEditMarkers(s: string): string { return s.replace(EDIT_WINDOW_RE, "") }
@@ -58,7 +58,9 @@ function hideEditMarkers(s: string): string { return s.replace(EDIT_WINDOW_RE, "
 function renderVisualMarkers(s: string): string {
     return s.replace(VISUAL_RE, (_, threadKey, filename) => {
         const src = `/api/v1/threads/${encodeURIComponent(threadKey)}/files/content?path=${encodeURIComponent(filename)}`
-        return `\n\n<div class="ari-visual" data-visual-src="${escHtml(src)}" data-visual-name="${escHtml(filename)}"><span class="ari-visual-loading">Drawing…</span></div>\n\n`
+        const title = filename.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ")
+        return `\n\n<div class="ari-visual-card" role="button" tabindex="0" data-visual-src="${escHtml(src)}" data-visual-name="${escHtml(filename)}" title="Open beside the chat">`
+             + `<span class="ari-visual-card-icon">▣</span><span class="ari-visual-card-name">${escHtml(title)}</span><span class="ari-visual-card-open">open</span></div>\n\n`
     })
 }
 
