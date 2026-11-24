@@ -74,7 +74,17 @@ internal static class DocumentReader
                 string text = p.InnerText;
                 if (text.Length == 0) { sb.AppendLine(); continue; }
                 string style = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? "";
-                sb.AppendLine(style.StartsWith("Heading", StringComparison.OrdinalIgnoreCase) && int.TryParse(style["Heading".Length..], out int level) ? $"{new string('#', Math.Clamp(level, 1, 6))} {text}" : text);
+                // Kept as Markdown, which models read best: headings and the title as #, list items as -, indented by level.
+                if (style.StartsWith("Heading", StringComparison.OrdinalIgnoreCase) && int.TryParse(style["Heading".Length..], out int level))
+                    sb.AppendLine($"{new string('#', Math.Clamp(level, 1, 6))} {text}");
+                else if (style.Equals("Title", StringComparison.OrdinalIgnoreCase))
+                    sb.AppendLine($"# {text}");
+                else if (p.ParagraphProperties?.NumberingProperties is { } num)
+                    sb.AppendLine($"{new string(' ', 2 * Math.Clamp(num.NumberingLevelReference?.Val?.Value ?? 0, 0, 8))}- {text}");
+                else if (style.StartsWith("List", StringComparison.OrdinalIgnoreCase))   // ListBullet, ListNumber2…: the bullet comes from the style
+                    sb.AppendLine($"{new string(' ', 2 * (int.TryParse(style[^1..], out int depth) ? Math.Clamp(depth - 1, 0, 8) : 0))}- {text}");
+                else
+                    sb.AppendLine(text);
             }
             else if (el is Table t)
                 foreach (TableRow row in t.Elements<TableRow>())
@@ -107,7 +117,11 @@ internal static class DocumentReader
             foreach (var shape in slide.Slide.Descendants<DocumentFormat.OpenXml.Presentation.Shape>())
             {
                 string text = string.Join("\n", shape.Descendants<A.Paragraph>().Select(p => p.InnerText).Where(t => t.Length > 0));
-                if (text.Length > 0) sb.AppendLine(text);
+                if (text.Length == 0) continue;
+                // The slide's title as a # heading, so it reads apart from the body.
+                var placeholder = shape.NonVisualShapeProperties?.ApplicationNonVisualDrawingProperties?.PlaceholderShape?.Type?.Value;
+                bool title = placeholder == DocumentFormat.OpenXml.Presentation.PlaceholderValues.Title || placeholder == DocumentFormat.OpenXml.Presentation.PlaceholderValues.CenteredTitle;
+                sb.AppendLine(title ? $"# {text.Replace('\n', ' ')}" : text);
             }
             string notes = slide.NotesSlidePart?.NotesSlide.InnerText ?? "";
             if (notes.Trim().Length > 0) sb.AppendLine($"[speaker notes] {notes.Trim()}");
