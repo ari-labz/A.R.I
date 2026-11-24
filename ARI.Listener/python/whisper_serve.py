@@ -3,12 +3,12 @@
 whisper_serve.py — ARI.Listener's speech-to-text worker.
 
 A tiny WebSocket server that receives raw PCM (16-bit LE, mono, 16 kHz), segments it into utterances with
-VAD (WebRTC VAD, energy fallback), transcribes each finished utterance with faster-whisper, and sends back
+VAD (Silero, the model faster-whisper ships; energy fallback), transcribes each finished utterance with faster-whisper, and sends back
 JSON: {"type": "partial"|"final", "text": "..."} (finals add "clarity" and a "marked" text) (partials every ~0.5 s while speaking). The C# ListenerSession pipes the browser mic to this and forwards
 transcripts to the awareness gate.
 
 Run: python whisper_serve.py --port 8123 --model base.en
-Deps: pip install faster-whisper websockets numpy webrtcvad   (webrtcvad optional; energy VAD used if absent)
+Deps: pip install faster-whisper websockets numpy   (Silero VAD comes with faster-whisper; energy VAD if it can't load)
 """
 import argparse
 import asyncio
@@ -20,18 +20,15 @@ import numpy as np
 import websockets
 from faster_whisper import WhisperModel
 
-try:
-    import webrtcvad
-    HAVE_VAD = True
-except Exception:
-    HAVE_VAD = False
-
 SAMPLE_RATE = 16000
-FRAME_MS = 30
-FRAME_BYTES = int(SAMPLE_RATE * FRAME_MS / 1000) * 2  # 480 samples * 2 bytes = 960
+FRAME_SAMPLES = 512                                   # Silero's window at 16 kHz
+FRAME_MS = FRAME_SAMPLES * 1000 // SAMPLE_RATE        # 32
+FRAME_BYTES = FRAME_SAMPLES * 2
 SILENCE_MS_END = 600      # trailing silence that ends an utterance
 MAX_UTTERANCE_MS = 15000  # hard cap so a long monologue still flushes
 MIN_SPEECH_MS = 350       # require this much actual speech before transcribing (rejects blips/noise)
+PRE_ROLL_FRAMES = 6       # ~200 ms kept from before speech is detected: the VAD needs a frame or two to be sure, and
+                          # without this the start of the first word is clipped and misheard
 
 # Common whisper hallucinations on silence/noise — dropped outright.
 HALLUCINATIONS = {
@@ -40,7 +37,40 @@ HALLUCINATIONS = {
     "please subscribe", "subscribe", "i'm sorry",
 }
 
+# Silero gives a speech probability per frame. Speech starts at SPEECH_ON and only ends once it drops below SPEECH_OFF,
+# so a soft syllable mid-word doesn't count as silence (Silero's own recommended gap).
+SPEECH_ON = 0.5
+SPEECH_OFF = 0.35
+
 model = None
+
+
+class SileroVad:
+    """Streaming Silero VAD: faster-whisper's bundled model, run one 32 ms frame at a time with its memory kept
+    between frames (faster-whisper's own wrapper resets it on every call, which only suits whole files)."""
+    CONTEXT = 64  # samples of the previous frame the model reads with each new one
+
+    def __init__(self):
+        from faster_whisper.vad import get_vad_model
+        self.session = get_vad_model().session
+        self.h = np.zeros((1, 1, 128), dtype=np.float32)
+        self.c = np.zeros((1, 1, 128), dtype=np.float32)
+        self.context = np.zeros(self.CONTEXT, dtype=np.float32)
+
+    def prob(self, frame: bytes) -> float:
+        x = np.frombuffer(frame, dtype=np.int16).astype(np.float32) / 32768.0
+        inp = np.concatenate([self.context, x])[None, :]
+        out, self.h, self.c = self.session.run(None, {"input": inp, "h": self.h, "c": self.c})
+        self.context = x[-self.CONTEXT:]
+        return float(out.reshape(-1)[0])
+
+
+def load_vad():
+    try:
+        return SileroVad()
+    except Exception as e:  # onnxruntime missing or the model file gone: fall back rather than not listen at all
+        log(f"[whisper_serve] Silero VAD unavailable ({e}); using the energy fallback.")
+        return None
 
 
 def log(*a):
@@ -65,7 +95,9 @@ class Segmenter:
     """Frame-by-frame VAD endpointing: accumulate speech, emit an utterance on trailing silence."""
 
     def __init__(self):
-        self.vad = webrtcvad.Vad(3) if HAVE_VAD else None  # 3 = most aggressive: rejects more non-speech
+        self.vad = load_vad()
+        self.in_speech = False    # VAD hysteresis state (see SPEECH_ON / SPEECH_OFF)
+        self.pre_roll = []        # the last few non-speech frames before an utterance starts
         self.buf = bytearray()    # leftover bytes not yet a full frame
         self.utter = bytearray()  # accumulated speech (+ trailing silence)
         self.silence_ms = 0
@@ -77,7 +109,9 @@ class Segmenter:
 
     def _is_speech(self, frame: bytes) -> bool:
         if self.vad is not None:
-            return self.vad.is_speech(frame, SAMPLE_RATE)
+            p = self.vad.prob(frame)
+            self.in_speech = p >= (SPEECH_OFF if self.in_speech else SPEECH_ON)
+            return self.in_speech
         arr = np.frombuffer(frame, dtype=np.int16).astype(np.float32)
         return float(np.sqrt(np.mean(arr * arr))) > 500.0  # energy fallback
 
@@ -89,12 +123,21 @@ class Segmenter:
             frame = bytes(self.buf[:FRAME_BYTES])
             del self.buf[:FRAME_BYTES]
             if self._is_speech(frame):
+                if not self.had_speech:
+                    for f in self.pre_roll:
+                        self.utter.extend(f)
+                        self.utter_ms += FRAME_MS
+                    self.pre_roll.clear()
                 self.utter.extend(frame)
                 self.had_speech = True
                 self.silence_ms = 0
                 self.utter_ms += FRAME_MS
                 self.speech_ms += FRAME_MS
-            elif self.had_speech:
+            elif not self.had_speech:
+                self.pre_roll.append(frame)
+                if len(self.pre_roll) > PRE_ROLL_FRAMES:
+                    self.pre_roll.pop(0)
+            else:
                 self.utter.extend(frame)
                 self.utter_ms += FRAME_MS
                 self.silence_ms += FRAME_MS
@@ -240,7 +283,7 @@ async def handle(ws, *_):
 
 async def main(port: int):
     async with websockets.serve(handle, "127.0.0.1", port, max_size=None):
-        log(f"[whisper_serve] listening on ws://127.0.0.1:{port}/ws  (vad={'webrtc' if HAVE_VAD else 'energy'})")
+        log(f"[whisper_serve] listening on ws://127.0.0.1:{port}/ws  (vad={'silero' if load_vad() else 'energy'})")
         await asyncio.Future()
 
 

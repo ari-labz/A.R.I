@@ -430,7 +430,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         }
         catch (Exception ex)
         {
-            // Listener is optional — a setup failure (e.g. no C++ build tools for webrtcvad) must
+            // Listener is optional — a setup failure (e.g. no network to fetch Python or packages) must
             // not abort the server.
             _logger.LogError("Listener setup failed — continuing without voice input. {Error}", ex.Message);
             if (ex is SetupException { Hint: { } hint }) _logger.LogError("{Hint}", hint);

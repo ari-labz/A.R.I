@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace ARI.Common;
 
 /// <summary>A setup step that failed, optionally carrying a user-facing hint about the missing
@@ -12,61 +10,11 @@ public class SetupException : Exception
 
 public static class SetupDiagnostics
 {
-    private const int PROCESS_PROBE_TIMEOUT_MS = 5000;
-
     /// <summary>User-facing fix line for a missing MSVC toolchain — the dependency several Python
-    /// packages (webrtcvad, monotonic_align) compile against on Windows.</summary>
+    /// packages (such as monotonic_align) compile against on Windows.</summary>
     public const string MsvcBuildToolsHint =
-        "Missing: Microsoft C++ Build Tools (needed to compile a package such as webrtcvad). " +
+        "Missing: Microsoft C++ Build Tools (needed to compile a package such as monotonic_align). " +
         "Install \"Desktop development with C++\" from https://visualstudio.microsoft.com/visual-cpp-build-tools/, then reinstall.";
-
-    /// <summary>True on Windows when no MSVC toolchain is installed, so a setup step that compiles a
-    /// native extension is guaranteed to fail — callers should skip the step rather than wait for it.
-    /// Always false off Windows (mac/Linux use the platform compiler).</summary>
-    public static bool WindowsMissingMsvcBuildTools()
-    {
-        if (!OperatingSystem.IsWindows()) return false;
-
-        // Ask vswhere whether the VC compiler component is installed for any VS/Build Tools instance.
-        string vswhere = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            "Microsoft Visual Studio", "Installer", "vswhere.exe");
-        try
-        {
-            if (File.Exists(vswhere))
-            {
-                using Process? p = Process.Start(new ProcessStartInfo(vswhere,
-                    "-latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath")
-                {
-                    UseShellExecute        = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                });
-                if (p is not null)
-                {
-                    string outp = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit(PROCESS_PROBE_TIMEOUT_MS);
-                    if (!string.IsNullOrWhiteSpace(outp)) return false; // toolchain present
-                }
-            }
-
-            // Fallback: cl.exe resolvable on PATH (e.g. a Developer Command Prompt environment).
-            using Process? where = Process.Start(new ProcessStartInfo("where", "cl.exe")
-            {
-                UseShellExecute        = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-            });
-            if (where is not null)
-            {
-                where.WaitForExit(PROCESS_PROBE_TIMEOUT_MS);
-                if (where.HasExited && where.ExitCode == 0) return false;
-            }
-        }
-        catch { /* treat probe failure as "unknown" → missing, so we skip and hint */ }
-
-        return true;
-    }
 
     /// <summary>Maps known dependency-failure signatures in captured setup output to a
     /// "what's missing and how to fix it" line. Returns null when nothing recognizable matched.</summary>

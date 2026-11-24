@@ -35,7 +35,7 @@ license — A·R·I does not bundle one.
 |-----------|------|---------|
 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | Speech-to-text | MIT |
 | [OpenAI Whisper](https://github.com/openai/whisper) | Underlying STT model | MIT |
-| [py-webrtcvad](https://github.com/wiseman/py-webrtcvad) | Voice activity detection | MIT / BSD |
+| [Silero VAD](https://github.com/snakers4/silero-vad) | Voice activity detection (bundled with faster-whisper) | MIT |
 
 ## Server (.NET)
 
