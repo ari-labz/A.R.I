@@ -21,6 +21,7 @@ license — A·R·I does not bundle one.
 | Component | Role | License |
 |-----------|------|---------|
 | [StyleTTS2](https://github.com/yl4579/StyleTTS2) (via [a fork](https://github.com/Xywren/StyleTTS2)) | Text-to-speech model & training | MIT — © 2023 Aaron (Yinghao) Li |
+| [IndexTTS2](https://github.com/index-tts/index-tts) (via [a fork](https://github.com/ari-labz/IndexTTS2)) | Text-to-speech model | bilibili Model Use License — its own terms, separate from A·R·I's; check them before commercial use |
 | [espeak-ng](https://github.com/espeak-ng/espeak-ng) | Phonemization backend (system binary, called at runtime) | GPL-3.0 |
 | [phonemizer](https://github.com/bootphon/phonemizer) | Python phonemizer wrapper | GPL-3.0 |
 | [PyTorch](https://pytorch.org/) (torch, torchaudio) | ML runtime | BSD-3-Clause |
