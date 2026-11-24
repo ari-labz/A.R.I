@@ -19,6 +19,12 @@ public static class BuildInfo
     public static string Summary =>
         $"A·R·I {Version} — {(InDocker ? "Docker" : "native")} ({RuntimeInformation.RuntimeIdentifier}, {OsName()}), .NET {Environment.Version}";
 
+    /// <summary>
+    /// The author credit logged straight after <see cref="Summary"/> on every run. Required by ADDITIONAL-TERMS.md (Term 3):
+    /// forks must keep it, and may add their own credit after it.
+    /// </summary>
+    public const string Credit = "A·R·I was created by Xywren — the original project: https://github.com/ari-labz/A.R.I";
+
     private static string ReadVersion()
     {
         try

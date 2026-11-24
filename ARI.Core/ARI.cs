@@ -73,6 +73,7 @@ public class ARI : BackgroundService, IModuleLifecycle
     {
         appStoppingToken = stoppingToken;
         _logger.LogInformation("{Build}", BuildInfo.Summary);
+        _logger.LogInformation("{Credit}", BuildInfo.Credit);
         _logger.LogInformation("ARI is starting...");
 
         // Clear any stale ARI instance (and its child servers) before we bind ports — otherwise a

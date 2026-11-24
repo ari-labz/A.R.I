@@ -626,6 +626,7 @@ body.cp-win32 #cp-win-controls { display: flex; }
         <div class="cp-nav-item" data-tab="modules" data-group="system">Modules</div>
         <div class="cp-nav-item" data-tab="plugins" data-group="system" id="nav-plugins">Plugins</div>
         <div class="cp-nav-item" data-tab="debug" data-group="system">Deep Thread Inspection (DTI)</div>
+        <div class="cp-nav-item top-level" data-tab="about">About</div>
       </div>
     </div>
   </aside>
@@ -1003,6 +1004,36 @@ body.cp-win32 #cp-win-controls { display: flex; }
     </div>
 
     <!-- New User tab -->
+    <!-- About: the author credit. ADDITIONAL-TERMS.md (Term 3) requires forks to keep this screen's credit and add their own beneath it. -->
+    <div id="tab-about" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
+      <div class="vs-section">
+        <div class="vs-section-title">About</div>
+        <div style="font-size:22px;font-weight:700;">A·R·I <span id="about-version" style="font-size:14px;font-weight:500;color:var(--text-dim);"></span></div>
+        <div style="font-size:15px;margin-top:10px;">Created by <strong>Xywren</strong>.</div>
+        <div style="font-size:15px;margin-top:6px;">The original project: <a href="https://github.com/ari-labz/A.R.I" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">github.com/ari-labz/A.R.I</a></div>
+      </div>
+      <div class="vs-section">
+        <div class="vs-section-title">Licence</div>
+        <div style="font-size:14px;line-height:1.6;">
+          A·R·I is open source under the GNU AGPL v3, with additional terms that protect credit (see <code>LICENSE</code> and <code>ADDITIONAL-TERMS.md</code>).
+          <ul style="margin:10px 0 0 18px;padding:0;">
+            <li><strong>Tinker freely.</strong> Use, change and experiment with A·R·I, privately, as much as you like.</li>
+            <li><strong>Sharing or selling means open source.</strong> Anything published, distributed, sold or hosted for others must be open source under the AGPL v3.</li>
+            <li><strong>Credit the original, visibly.</strong> "Based on A·R·I by Xywren — https://github.com/ari-labz/A.R.I" in the README, on this screen, on sales and download pages, and in the startup log. Never in fine print.</li>
+            <li><strong>Keep the history.</strong> Upstream commits and their authorship must never be rewritten.</li>
+            <li><strong>Your changes are yours.</strong> Call your version what you like, but don't present it as the original A·R·I.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="vs-section">
+        <div class="vs-section-title">Credit chain</div>
+        <div style="font-size:14px;line-height:1.6;">
+          1. <strong>A·R·I</strong> — the original project, created by Xywren — <a href="https://github.com/ari-labz/A.R.I" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">github.com/ari-labz/A.R.I</a>
+          <!-- Forks: add your own entry below this line. Do not remove or change the entries above it. -->
+        </div>
+      </div>
+    </div>
+
     <div id="tab-users" class="cp-tab" style="display:none;flex:1;overflow-y:auto;padding:24px 28px;">
       <div class="vs-section">
         <div class="vs-section-title" style="display:flex;align-items:center;justify-content:space-between;">
@@ -1814,8 +1845,8 @@ cpGetSettings().then(d => { if (d.userName) window._ariUserName = d.userName; })
 
 const cpTitle  = document.getElementById('cp-title');
 const navItems = document.querySelectorAll('.cp-nav-item[data-tab]');
-const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), plugins: document.getElementById('tab-plugins'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), tools: document.getElementById('tab-tools'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation') };
-const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', tools: 'Tools', brain: 'Brain', plugins: 'Plugins',  llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'ImageGen — Models', 'imagegen-settings': 'ImageGen — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts' };
+const tabs     = { overview: document.getElementById('tab-overview'), servers: document.getElementById('tab-servers'), voices: document.getElementById('tab-voices'), voice: document.getElementById('tab-voice'), dataset: document.getElementById('tab-dataset'), conventions: document.getElementById('tab-conventions'), persona: document.getElementById('tab-persona'), feedback: document.getElementById('tab-feedback'), models: document.getElementById('tab-models'), agents: document.getElementById('tab-agents'), pipelines: document.getElementById('tab-pipelines'),  brain: document.getElementById('tab-brain'), plugins: document.getElementById('tab-plugins'), llmconfigs: document.getElementById('tab-llmconfigs'), debug: document.getElementById('tab-debug'), users: document.getElementById('tab-users'), settings: document.getElementById('tab-settings'), modules: document.getElementById('tab-modules'), 'imagegen-model': document.getElementById('tab-imagegen-model'), 'imagegen-settings': document.getElementById('tab-imagegen-settings'), tools: document.getElementById('tab-tools'), calendar: document.getElementById('tab-calendar'), customisation: document.getElementById('tab-customisation'), about: document.getElementById('tab-about') };
+const TAB_TITLES = { voices: 'Voices', voice: 'Voice Synthesis', dataset: 'Dataset Builder', conventions: 'Coding Conventions', persona: 'Persona', feedback: 'Response Feedback', overview: 'Overview', servers: 'Servers', models: 'Models', agents: 'Agents', pipelines: 'Pipelines', tools: 'Tools', brain: 'Brain', plugins: 'Plugins',  llmconfigs: 'Configurations', debug: 'Deep Thread Inspection (DTI)', users: 'Users', settings: 'Settings', modules: 'Modules', 'imagegen-model': 'ImageGen — Models', 'imagegen-settings': 'ImageGen — Settings', calendar: 'Calendar', customisation: 'Customisation', prompts: 'Prompts', about: 'About' };
 
 let srvPollTimer = null;
 // The streams below are declared further down the page, so they are only touched once the page has finished loading.
@@ -1853,6 +1884,12 @@ function switchTab(name) {
     if (name === 'voices') { closeVoiceDetail(); loadVoicesList(); }
     if (name === 'voice') vsRestoreTraining();
     if (name === 'imagegen-model' || name === 'imagegen-settings') igLoad();
+    if (name === 'about') loadAbout();
+}
+function loadAbout() {
+    cpFetch('/api/v1/info/version').then(r => r.ok ? r.json() : null).then(i => {
+        if (i?.serverVersion) document.getElementById('about-version').textContent = 'v' + i.serverVersion;
+    }).catch(() => {});
 }
 navItems.forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
 
@@ -8635,7 +8672,7 @@ function dbgSentence(label) {
     return t.charAt(0).toUpperCase() + t.slice(1);
 }
 function dbgTidyRecall(text) {
-    // "# Prompt:" then "xywren: AUDIENCE: …": the name is only there for multi-user tracking, so drop it from the view.
+    // "# Prompt:" then "<username>: AUDIENCE: …": the name is only there for multi-user tracking, so drop it from the view.
     text = text.replace(/^((?:#+ Prompt:\s*\n+)?)[^\n:]{1,40}: (?=[A-Z][A-Z' ]{3,}:)/, '$1');
     const out = [];
     let inSection = false;
