@@ -74,21 +74,24 @@ internal class Reflector : Agent
         if (mode == ReflectMode.Chat)
         {
             prompt.AppendLine($"You proofread a chat reply before it is final. {aiName} texts like a quick, casual friend: short replies, plain words.");
-            prompt.AppendLine("Find only real problems:");
+            prompt.AppendLine("Most replies are fine. Edit only where one of these is clearly true:");
             prompt.AppendLine("- it restates, sums up or echoes what the user just said");
-            prompt.AppendLine("- it states a fact that is not in the user's message (an invented detail about what they are doing, where they are, or what happened)");
-            prompt.AppendLine("- it explains or pads where one short line would do");
+            prompt.AppendLine("- it invents what the user is doing, where they are, or what happened to them");
+            prompt.AppendLine("- a casual reply explains or pads where one short line would do");
             prompt.AppendLine("- it gives advice nobody asked for, or tells the user what to do with their day");
             if (bannedHits.Any()) prompt.AppendLine("- it uses a phrase that must never be used: " + string.Join("; ", bannedHits.Select(h => $"\"{h}\"")));
+            prompt.AppendLine("Never touch writing the user asked for (a story, poem, description or letter): its imagery and detail are the point, not padding. Never touch her feelings, warmth or reassurance.");
         }
         else
         {
-            prompt.AppendLine($"You check {aiName}'s finished report on her work for claims that are not verifiable.");
+            prompt.AppendLine($"You check {aiName}'s finished report on her work for claims about the work that the evidence does not support.");
             prompt.AppendLine("Lines starting FACT are certain: treat them as true. If a FACT says nothing was built, tested or run after the changes, then any claim that the change compiles, passes, works or is tested is a problem.");
-            prompt.AppendLine("EVIDENCE below is the tool output from this turn. A claim is fine if the evidence, the user's message, or plain reasoning supports it, or if it is only a plan or an opinion.");
-            prompt.AppendLine("A claim is a problem if it says something was done, built, tested, fixed, found or pushed and the evidence does not show it.");
-            prompt.AppendLine("For each problem, edit the reply: reword that sentence so it says it is not verified (for example \"i haven't run the tests yet\"), or delete it.");
+            prompt.AppendLine("EVIDENCE below is the tool output from this turn. A claim is a problem only if it says something was done, built, tested, fixed, found or pushed and the evidence does not show it.");
+            prompt.AppendLine("Everything else is never a problem: plans, opinions, explanations, feelings, promises, reassurance, and anything she says about the user or the conversation.");
+            prompt.AppendLine("Fix a problem by rewording the sentence so it claims only what was done (for example \"i haven't run the tests yet\"), or by deleting it.");
         }
+        prompt.AppendLine();
+        prompt.AppendLine("Every edit must leave whole, natural sentences in her voice: lowercase and casual like the rest of the reply. To drop a phrase, rewrite the sentence around it rather than leaving a fragment. Never add a tag or note such as \"(not verified)\" or \"(verified)\".");
         prompt.AppendLine();
         prompt.AppendLine("If there is nothing to fix, answer with only: OK");
         prompt.AppendLine($"Otherwise give at most {MaxEdits} edits, each in exactly this form, with old copied exactly from the reply and new empty to delete it:");
@@ -117,6 +120,7 @@ internal class Reflector : Agent
         {
             string old = m.Groups["old"].Value.Trim(), repl = m.Groups["new"].Value.Trim();
             if (old.Length == 0 || old == repl) continue;
+            if (repl.StartsWith(old, StringComparison.Ordinal)) continue;   // only tacks something on, like "(not verified)": never a fix
             int first = reply.IndexOf(old, StringComparison.Ordinal);
             if (first < 0 || reply.IndexOf(old, first + 1, StringComparison.Ordinal) >= 0) continue;   // missing, or ambiguous
             if (edits.Any(e => e.Old.Contains(old) || old.Contains(e.Old))) continue;                   // overlapping edits would fight

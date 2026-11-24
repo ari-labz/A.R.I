@@ -302,8 +302,9 @@ public abstract class Agent
 
         const string AriPrefix = "ARI: ";
         string toolFacts = ToolFacts(turn, out bool changedFiles);
-        // A code thread, or any chat in which she used tools, is a report on work: it is checked against what the tools showed.
-        bool work = thread.Pipeline == ThreadPipeline.Code || toolFacts.Length > 0;
+        // A code thread, or a chat in which she changed files, is a report on work: it is checked against what the tools showed. Only
+        // reading something (an attached file, a web page) leaves a chat a chat, so what she says about it isn't audited like a work report.
+        bool work = thread.Pipeline == ThreadPipeline.Code || changedFiles;
         string whole = turn.ResponseBuilder.ToString();
         // In chat only the part not yet reviewed is read now; a report on work is checked whole, against the evidence.
         string reply = work ? whole : whole[Math.Clamp(turn.ReflectedChars, 0, whole.Length)..];
