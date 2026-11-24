@@ -145,17 +145,12 @@ public class ARI : BackgroundService, IModuleLifecycle
         if (config.modules.LLM.Enabled)
             CreateLlmModule();
 
-        // ── Voice setup ──────────────────────────────────────────────────────────
         voiceSynthesisModule = new VoiceSynthesisModule();
         CommonModules.Register(voiceSynthesis: voiceSynthesisModule);
 
-        if (config.modules.VoiceSynthesis.Enabled)
-            await StartVoiceSynthesisAsync();
-
-        if (config.modules.Voice.Enabled && (voiceSynthesisModule?.IsSetupComplete ?? false))
-            await StartVoiceAsync();
-
         // ── API ──────────────────────────────────────────────────────────────────
+        // Before the optional modules: their first start installs Python packages and can take many minutes, and the
+        // chat and control panel shouldn't wait for that.
         if (config.modules.API.Enabled)
         {
             _logger.LogInformation("Web panel module is enabled. Starting on port {Port}...", config.modules.API.Port);
@@ -174,13 +169,20 @@ public class ARI : BackgroundService, IModuleLifecycle
         if (llmModule is not null)
             await StartLlmServersAsync();
 
-        // ── Listener (audio hub) ───────────────────────────────────────────────────
+        // ── Optional modules, in the background ─────────────────────────────────
+        // Voice, the Listener and ImageGen set up their own Python environments the first time (downloads of hundreds of
+        // megabytes), so they start alongside everything else instead of holding up plugins, the calendar and updates.
+        // Each comes online on its own when ready; a failure is logged and leaves the rest running.
+        if (config.modules.VoiceSynthesis.Enabled || config.modules.Voice.Enabled)
+            InBackground("Voice", async () =>
+            {
+                if (config.modules.VoiceSynthesis.Enabled || config.modules.Voice.Enabled) await StartVoiceSynthesisAsync();
+                if (config.modules.Voice.Enabled && (voiceSynthesisModule?.IsSetupComplete ?? false)) await StartVoiceAsync();
+            });
         if (config.modules.Listener.Enabled && llmModule is not null)
-            await StartListenerAsync();
-
-        // ── ImageGen ─────────────────────────────────────────────────────────────
+            InBackground("Listener", StartListenerAsync);
         if (config.modules.ImageGen.Enabled)
-            await StartImageGenAsync();
+            InBackground("ImageGen", StartImageGenAsync);
 
         // Plugins (Discord, GitHub and the rest) are installed from .ari files; the host gives each one what it needs when it is created.
         CompiledPlugins.Host = new PluginHost(loggerFactory, () => llmModule, () => appStoppingToken, moduleTasks.Add);
@@ -240,6 +242,24 @@ public class ARI : BackgroundService, IModuleLifecycle
         }
     }
 
+    // One gate per optional module, so a start in the background at boot and a switch in the control panel never run the same
+    // setup at once. Voice and VoiceSynthesis share one: the voices run on the speech engines.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> moduleGates = new();
+
+    private async Task Gated(string group, Func<Task> work)
+    {
+        SemaphoreSlim gate = moduleGates.GetOrAdd(group, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
+        try { await work(); }
+        finally { gate.Release(); }
+    }
+
+    private void InBackground(string group, Func<Task> work) => _ = Task.Run(async () =>
+    {
+        try { await Gated(group, work); }
+        catch (Exception ex) { _logger.LogError(ex, "{Module} couldn't start.", group); }
+    });
+
     public async Task<string?> StartModule(string key)
     {
         switch (key)
@@ -252,21 +272,24 @@ public class ARI : BackgroundService, IModuleLifecycle
                 catch (Exception ex) { _logger.LogError(ex, "LLM module failed to start."); llmModule = null; CommonModules.ClearLlm(); return ex.Message; }
                 return null;
             case "VoiceSynthesis":
-                await StartVoiceSynthesisAsync();
+                await Gated("Voice", async () => { if (!(voiceSynthesisModule?.IsSetupComplete ?? false)) await StartVoiceSynthesisAsync(); });
                 return voiceSynthesisModule!.IsSetupComplete ? null : "Setup failed — check the server log for details.";
             case "Voice":
                 // One switch covers the speech engines and the voices that run on them: set the engines up first.
-                if (!(voiceSynthesisModule?.IsSetupComplete ?? false)) await StartVoiceSynthesisAsync();
+                await Gated("Voice", async () =>
+                {
+                    if (!(voiceSynthesisModule?.IsSetupComplete ?? false)) await StartVoiceSynthesisAsync();
+                    if ((voiceSynthesisModule?.IsSetupComplete ?? false) && voiceModule is null) await StartVoiceAsync();
+                });
                 if (!(voiceSynthesisModule?.IsSetupComplete ?? false))
                     return "Setup failed — check the server log for details.";
-                await StartVoiceAsync();
                 return voiceModule is not null ? null : "Could not start — check the server log for details.";
             case "Listener":
                 if (llmModule is null) return "Listener needs the LLM module, which isn't running.";
-                await StartListenerAsync();
+                await Gated("Listener", async () => { if (listenerModule is null) await StartListenerAsync(); });
                 return listenerModule is not null ? null : "Could not start — check the server log for details.";
             case "ImageGen":
-                await StartImageGenAsync();
+                await Gated("ImageGen", async () => { if (imageGenModule is null) await StartImageGenAsync(); });
                 return imageGenModule is not null ? null : "Could not start — check the server log for details.";
             case "Calendar":
                 StartCalendar();

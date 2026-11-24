@@ -1,3 +1,8 @@
+Changes in v0.11.5 (includes v0.11.4):
+
+- Updates: with Update automatically on, ARI now updates herself without the Installer. She downloads the new version, waits until she has been idle for ten minutes with nothing waiting to be saved to memory (dreams don't count), switches over and starts again on her own. If the new version doesn't start, she goes back to the one she was on. Beta (0.x) releases count, so updates now actually arrive.
+- Startup: voice, listening and image generation set themselves up in the background, so the chat and control panel are available straight away instead of waiting for those installs to finish (which on a fresh machine can take many minutes).
+
 Changes in v0.11.3 (includes v0.11.1 and v0.11.2):
 
 - Python: ARI downloads her own Python instead of using the one on the machine, so voice, listening and the document tools set themselves up on a clean computer with no developer tools installed (a fresh Mac used to stop at an "install developer tools" dialog). Parts that need a particular Python version fetch that version and keep their own environment.
