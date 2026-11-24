@@ -49,7 +49,8 @@ internal sealed class DreamLog
     {
         TimeSpan duration = DateTime.Now - sessionStart;
         Append($"[{Now}] Dream session ended");
-        Append($"  Duration: {duration:m\\m\\ ss\\s}");
+        Append($"  Duration: {(int)duration.TotalHours}h {duration.Minutes}m {duration.Seconds}s");
+        Append($"  Tool calls: {toolsCalled.Count}");
         Append($"  Wake: {(woke ? "yes" : "no")}");
     }
 

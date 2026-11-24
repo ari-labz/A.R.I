@@ -28,6 +28,9 @@ internal sealed class DreamOrchestrator : IDisposable
     private DateTime                  lastUserActivity = DateTime.MinValue;
     private int                       consecutiveFailures = 0;
     private DateTime                  nextRetryAt = DateTime.MinValue;
+    // Set when a dream ends with nothing left to look at: the next waits until someone has talked to her again. After a wake, another
+    // dream can follow straight on, and it is told which subjects this quiet stretch has already covered.
+    private bool                      dreamedSinceActivity;
     private readonly CancellationTokenSource shutdownCts = new();
 
     internal DreamOrchestrator(
@@ -45,11 +48,14 @@ internal sealed class DreamOrchestrator : IDisposable
         this.createDreamThread  = createDreamThread;
         this.destroyDreamThread = destroyDreamThread;
         this.log                = new DreamLog();
+        dreamer.ToolCalled      = name => log.RecordToolCall(name);
     }
 
     internal void NotifyUserActivity()
     {
-        lastUserActivity = DateTime.Now;
+        lastUserActivity     = DateTime.Now;
+        dreamedSinceActivity = false;
+        dreamer.ForgetSubjects();
         InterruptDream();
     }
 
@@ -72,6 +78,7 @@ internal sealed class DreamOrchestrator : IDisposable
             }
 
             if (dreamTask is { IsCompleted: false }) continue;
+            if (dreamedSinceActivity) continue;
 
             // Back off after repeated failures (e.g. the LLM servers are stopped) instead of
             // retrying every poll tick forever, spamming the log with the same connection error.
@@ -93,6 +100,7 @@ internal sealed class DreamOrchestrator : IDisposable
             Shared.Logger.LogInformation("[Dream] Session started on thread {Key}.", dreamThread.Key);
         }
 
+        dreamer.BeginDream();
         dreamCts  = CancellationTokenSource.CreateLinkedTokenSource(shutdownCts.Token);
         dreamTask = ExecuteDreamTurn(dreamCts);
     }
@@ -109,15 +117,25 @@ internal sealed class DreamOrchestrator : IDisposable
                 dreamThread!.Key,
                 prompt:          "",
                 username:        "dream",
-                platformContext: DreamAnchor.PullWithGrounding(),
+                platformContext: Anchor(),
                 onDelta:         null,
                 cts:             cts);
             consecutiveFailures = 0;
             nextRetryAt         = DateTime.MinValue;
+            // She woke someone (another dream may follow), or finished her last subject (rest until someone talks to her).
+            bool woke = dreamer.WakeRequest is not null;
+            if (dreamer.WakeRequest is { } wake) log.RecordWake(wake.Text);
+            FinishDream(rest: !woke);
         }
         catch (OperationCanceledException)
         {
             Shared.Logger.LogInformation("[Dream] Turn interrupted — will resume when idle again.");
+        }
+        catch (Exception ex) when (ex.Message.Contains("exceed_context_size", StringComparison.Ordinal))
+        {
+            // Out of room: starting over would only repeat the same reading from scratch, so the dream ends here.
+            Shared.Logger.LogWarning("[Dream] Ran out of context; ending the dream until the next quiet stretch.");
+            FinishDream(rest: true);
         }
         catch (Exception ex)
         {
@@ -138,6 +156,24 @@ internal sealed class DreamOrchestrator : IDisposable
             // InterruptDream/NotifyUserActivity never calls Cancel() on an already-disposed CTS.
             if (ReferenceEquals(dreamCts, cts)) dreamCts = null;
         }
+    }
+
+    /// <summary>The dream's opening context: the time, what recent dreams woke about, a starting point, and the subjects already covered.</summary>
+    private string Anchor()
+    {
+        string anchor = DreamAnchor.PullWithGrounding();
+        return dreamer.CoveredSubjects.Count == 0 ? anchor
+            : anchor + "\n\nEarlier dreams since your master was last here already covered: " + string.Join("; ", dreamer.CoveredSubjects) + ". Pick something else.";
+    }
+
+    /// <summary>Closes a finished dream. With rest, no new one starts until someone talks to her again.</summary>
+    private void FinishDream(bool rest)
+    {
+        if (rest) dreamedSinceActivity = true;
+        dreamTask            = null;
+        dreamCts             = null;   // the pipeline has already disposed it: cancelling it now would throw
+        CloseDream();
+        dreamer.ResetWake();
     }
 
     private void InterruptDream()

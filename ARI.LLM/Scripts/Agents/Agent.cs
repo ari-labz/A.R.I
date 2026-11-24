@@ -751,6 +751,9 @@ public abstract class Agent
             // A Step is one LLM request/response cycle; it streams until the model stops generating.
             while (turn.IsStreaming)
             {
+                // Before taking the slot: summarising runs a request of its own, which needs the slot free.
+                await SummaryCompact(turn, thread);
+
                 // Acquired per step, not once for the whole turn — a long-held lock across a many-step
                 // background turn (Engram, Refactor) would still stall a live reply queued behind it. Per-
                 // step acquisition bounds the worst case to one step's generation time, and is released
@@ -1890,6 +1893,7 @@ public abstract class Agent
             string result;
 
             turn.Trace.Add(new TraceStep { Kind = "tool_call", Name = call.Name, Args = argsJson });
+            if (this is Dreamer dreaming) dreaming.NoteToolCall(call.Name);
             SessionRecorder.ToolCall(turn.Rec, turn.RecStep, call.Id, call.Name, argsJson);
 
             string? guard = null;
@@ -2635,6 +2639,75 @@ public abstract class Agent
         }
         return sb.ToString().Replace("<!--ari-batch-end-->", "").Trim();
     }
+
+    // ── Summary compaction ──────────────────────────────────────────────────
+    // For a turn with no natural end (a dream): once the last request used this share of the context, everything after the
+    // opening system messages is replaced by the agent's own summary of it, the way a long Claude session is compacted.
+    // 0 = never. Stubbing old tool output (SupportsCompaction) is the lighter mechanism for turns that do end.
+    internal virtual int SummaryCompactPct => 0;
+    internal virtual string SummaryCompactInstruction =>
+        "Below is everything you've done so far in this session. Write yourself a summary to carry on from: what you've covered and what you " +
+        "concluded, what you've already read and the facts in it that matter (so you don't read it again), and what you were in the middle of. " +
+        "Plain notes, first person, no preamble.";
+
+    private const int SUMMARY_PART_CHARS = 1500;   // each reasoning block or tool result is clipped to this in the transcript to summarise
+
+    private async Task SummaryCompact(Turn turn, Thread thread)
+    {
+        int pct = SummaryCompactPct;
+        if (pct <= 0 || BudgetContext <= 0 || turn.PromptTokens < (long)BudgetContext * pct / 100) return;
+
+        int keep = 0;
+        while (keep < turn.Messages.Count && RoleOf(turn.Messages[keep]) == "system") keep++;
+        if (turn.Messages.Count - keep < 4) return;
+
+        StringBuilder transcript = new();
+        foreach (object m in turn.Messages.Skip(keep))
+        {
+            try
+            {
+                JsonElement el = JsonSerializer.SerializeToElement(m);
+                string role = el.TryGetProperty("role", out JsonElement r) ? r.GetString() ?? "" : "";
+                string content = el.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
+                if (role == "tool")
+                {
+                    string name = el.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "" : "";
+                    transcript.AppendLine($"[{name} result] {Clip(content)}");
+                    continue;
+                }
+                if (content.Length > 0) transcript.AppendLine($"[{role}] {Clip(content)}");
+                if (el.TryGetProperty("tool_calls", out JsonElement calls) && calls.ValueKind == JsonValueKind.Array)
+                    foreach (JsonElement call in calls.EnumerateArray())
+                        if (call.TryGetProperty("function", out JsonElement f))
+                            transcript.AppendLine($"[called {f.GetProperty("name").GetString()} {(f.TryGetProperty("arguments", out JsonElement a) ? a.ToString() : "")}]");
+            }
+            catch { }
+        }
+        // The summary request has to fit too: keep the most recent part if the transcript alone is too long.
+        int maxChars = BudgetContext * CHARS_PER_TOKEN / 2;
+        string text = transcript.Length > maxChars ? "…" + transcript.ToString()[^maxChars..] : transcript.ToString();
+
+        string summary;
+        try
+        {
+            Thread scratch = new(thread.Pipeline, $"__compact_{Guid.NewGuid():N}") { Internal = true };
+            summary = await Prompt(scratch, SummaryCompactInstruction + "\n\n" + text, new PromptOptions { MaxTokensOverride = 2000, Ct = turn.Ct });
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { Shared.Logger.LogWarning("[{Agent}] ({Thread}) couldn't summarise for compaction: {Err}", Name, thread.Key, ex.Message); return; }
+        if (string.IsNullOrWhiteSpace(summary)) return;
+
+        int before = turn.PromptTokens;
+        turn.Messages.RemoveRange(keep, turn.Messages.Count - keep);
+        turn.Messages.Add(new { role = "system", content = "[The earlier part of this session was compacted to make room. Your own summary of it:]\n" + summary.Trim() });
+        turn.ToolResultSlots.Clear();
+        turn.PromptTokens = 0;
+        Shared.Logger.LogInformation("[{Agent}] ({Thread}) compacted {Tokens} tokens of history into a summary.", Name, thread.Key, before);
+
+        static string Clip(string s) => s.Length <= SUMMARY_PART_CHARS ? s : s[..SUMMARY_PART_CHARS] + "…";
+    }
+
+    private static string RoleOf(object m) => m.GetType().GetProperty("role")?.GetValue(m) as string ?? "";
 
     private static string? ContentOf(object m) => m.GetType().GetProperty("content")?.GetValue(m) as string;
 
