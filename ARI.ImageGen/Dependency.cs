@@ -32,7 +32,7 @@ public static class Dependency
         {
             if (python is null)
             {
-                Status = "Python 3 is required for ComfyUI but was not found.";
+                Status = $"ComfyUI needs Python {PYTHON_VERSION}, which couldn't be downloaded.";
                 Shared.Logger.LogWarning("[ImageGen] {Status}", Status);
                 return;
             }
@@ -130,11 +130,8 @@ public static class Dependency
 
         // Create a venv so ComfyUI's dependencies are isolated from the system Python.
         string venvDir = Path.Combine(installDir, "venv");
-        if (!Directory.Exists(venvDir))
-        {
-            Shared.Logger.LogInformation("[ImageGen] Creating Python venv...");
-            await Run(python, $"-m venv \"{venvDir}\"");
-        }
+        Shared.Logger.LogInformation("[ImageGen] Preparing the Python venv...");
+        await PythonRuntime.EnsureVenv(venvDir, python);
 
         string venvPip = VenvExecutable(venvDir, "pip");
         Shared.Logger.LogInformation("[ImageGen] Installing Python requirements into venv...");
@@ -162,31 +159,17 @@ public static class Dependency
             : Path.Combine(venvDir, "bin", name);
     }
 
+    // ComfyUI recommends this version; ARI fetches it rather than looking for one on the machine.
+    internal const string PYTHON_VERSION = "3.12";
+
     private static async Task<string?> FindPython()
     {
-        // Prefer newer Python versions — ComfyUI requires 3.10+ for some packages.
-        string[] candidates = OperatingSystem.IsWindows()
-            ? new[] { "python3.12", "python3.11", "python3.10", "python3", "python" }
-            : new[] { "python3.12", "python3.11", "python3.10",
-                      "/opt/homebrew/bin/python3.12", "/opt/homebrew/bin/python3.11", "/opt/homebrew/bin/python3.10",
-                      "python3", "python" };
-
-        foreach (string candidate in candidates)
+        try { return await PythonRuntime.Ensure(PYTHON_VERSION); }
+        catch (Exception ex)
         {
-            try
-            {
-                Process p = Process.Start(new ProcessStartInfo(candidate, "--version")
-                {
-                    UseShellExecute        = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                })!;
-                await p.WaitForExitAsync();
-                if (p.ExitCode == 0) return candidate;
-            }
-            catch { }
+            Shared.Logger.LogWarning("[ImageGen] Couldn't fetch Python {Version}: {Error}", PYTHON_VERSION, ex.Message);
+            return null;
         }
-        return null;
     }
 
     private static async Task<string?> FindGit()

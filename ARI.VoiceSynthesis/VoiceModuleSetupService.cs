@@ -14,8 +14,6 @@ namespace ARI.VoiceSynthesis;
 /// </summary>
 public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
 {
-    private static string Python => OperatingSystem.IsWindows() ? "python" : "python3";
-
     public string ModuleDir => Path.Combine(Paths.VoiceModules, moduleName);
 
     private static readonly HttpClient http = new();
@@ -130,9 +128,12 @@ public class VoiceModuleSetupService(string moduleName, ILogger? logger = null)
 
     private async Task RunSetup(string setupScript)
     {
+        // setup.py builds the module's venv from the interpreter running it, so it runs on the version the module asks for.
+        string python = await VoiceModulePython.For(ModuleDir);
+        logger?.LogInformation("[{Module}] Using Python {Version}.", moduleName, VoiceModulePython.VersionFor(ModuleDir));
         ProcessStartInfo info = new()
         {
-            FileName               = Python,
+            FileName               = python,
             Arguments              = $"\"{setupScript}\" install --module-dir \"{ModuleDir}\"",
             RedirectStandardOutput = true,
             RedirectStandardError  = true,

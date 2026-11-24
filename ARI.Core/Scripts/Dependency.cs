@@ -14,20 +14,6 @@ public class Dependency
     private static string ConfigPath => Path.Combine(Paths.PersistentData, "llamacpp.json");
     private const int HEALTH_CHECK_TIMEOUT_SEC = 10;
 
-    public static async Task CheckPython()
-    {
-        try
-        {
-            Process process = Shared.RunCommand("python3", "--version");
-            await process.WaitForExitAsync();
-            Shared.Logger.LogInformation("Python is installed.");
-        }
-        catch
-        {
-            throw new Exception("Python is not installed. Please install Python and try again.");
-        }
-    }
-
     // ── espeak-ng ─────────────────────────────────────────────────────────────
 
     public static async Task CheckEspeakNg()

@@ -111,7 +111,12 @@ public class ARI : BackgroundService, IModuleLifecycle
         // may be read-only / replaced wholesale on update).
         config.modules.VoiceSynthesis.DataDir = Paths.StyleTts2Data;
 
-        await Dependency.CheckPython();
+        // ARI's own Python is fetched in the background so run_code and the document tools don't wait for it later.
+        _ = Task.Run(async () =>
+        {
+            try { await PythonRuntime.Default(); }
+            catch (Exception ex) { _logger.LogWarning("Couldn't fetch ARI's Python yet ({Error}); it will be tried again when something needs it.", ex.Message); }
+        });
         await Dependency.CheckEspeakNg();
         await Dependency.CheckLlamaCpp();
         // gh backs the github tool — only needed once an account is connected, so it's fetched in the
@@ -380,7 +385,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         speechQueue = new SpeechQueue(synthesiser, voiceLogger);
         string modulePy = Path.Combine(Paths.VoiceModules, engine, "venv",
             OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python3");
-        string pythonPath = File.Exists(modulePy) ? modulePy : "python3";
+        string pythonPath = File.Exists(modulePy) ? modulePy : await VoiceModulePython.For(Path.Combine(Paths.VoiceModules, engine));
         void WireAudio(SpeechQueue q) => q.AudioReady += wav => PlayAudio(wav, pythonPath, voiceLogger);
         WireAudio(speechQueue);
 

@@ -14,7 +14,8 @@ namespace ARI.Listener;
 public class ListenerSetupService(ILogger? logger = null)
 {
     private const string VENV_SUBDIR = "venv";
-    private static string Python => ARI.Common.PythonLocator.Find();
+    // faster-whisper's ctranslate2 and webrtcvad publish wheels for this version; the newest Python often lags behind.
+    private const string PYTHON_VERSION = "3.11";
 
     /// <summary>Returns the venv's python interpreter path, provisioning the venv first if needed.</summary>
     public async Task<string> Install()
@@ -32,11 +33,8 @@ public class ListenerSetupService(ILogger? logger = null)
 
         string venvPy = Path.Combine(venv, OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python");
 
-        if (!Directory.Exists(venv))
-        {
-            logger?.LogInformation("Creating Listener virtual environment...");
-            await RunExe(Python, $"-m venv \"{venv}\"", Paths.ListenerData);
-        }
+        logger?.LogInformation("Preparing the Listener virtual environment (Python {Version})...", PYTHON_VERSION);
+        await PythonRuntime.EnsureVenv(venv, await PythonRuntime.Ensure(PYTHON_VERSION));
 
         string pip = Path.Combine(venv, OperatingSystem.IsWindows() ? @"Scripts\pip.exe" : "bin/pip");
         logger?.LogInformation("Installing Listener dependencies...");

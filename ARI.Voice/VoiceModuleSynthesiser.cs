@@ -73,7 +73,7 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
 
         string venvPython = Path.Combine(modulePath, "venv",
             OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python3");
-        string python = File.Exists(venvPython) ? venvPython : FindSystemPython();
+        string python = File.Exists(venvPython) ? venvPython : await VoiceModulePython.For(modulePath, ct);
         string script = Path.Combine(modulePath, "serve.py");
 
         KillPortOwner(serverPort);
@@ -356,21 +356,5 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     private static async Task DrainStream(StreamReader reader)
     {
         while (await reader.ReadLineAsync() != null) { }
-    }
-
-    private static string FindSystemPython()
-    {
-        foreach (string candidate in new[] { "python3", "python" })
-        {
-            try
-            {
-                Process? proc = Process.Start(new ProcessStartInfo(candidate, "--version")
-                    { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false });
-                proc?.WaitForExit(3000);
-                if (proc?.ExitCode == 0) return candidate;
-            }
-            catch { }
-        }
-        return "python3";
     }
 }

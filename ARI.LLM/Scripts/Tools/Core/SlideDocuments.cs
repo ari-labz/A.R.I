@@ -18,10 +18,10 @@ internal static class DocumentVenv
         await gate.WaitAsync();
         try
         {
-            if (File.Exists(Marker)) return Python;
-            Directory.CreateDirectory(Path.GetDirectoryName(Folder)!);
+            if (File.Exists(Marker) && File.Exists(Python)) return Python;
             Shared.Logger.LogInformation("[Documents] Setting up ARI's document tools (one time: a small Python environment with python-pptx)…");
-            if (!File.Exists(Python)) await Run(PythonLocator.Find(), $"-m venv \"{Folder}\"");
+            // Any Python 3 will do here, so this uses ARI's own rather than asking for a version.
+            await PythonRuntime.EnsureVenv(Folder, await PythonRuntime.Default());
             await Run(Python, "-m pip install -q --disable-pip-version-check python-pptx");
             File.WriteAllText(Marker, DateTime.UtcNow.ToString("O"));
             return Python;
@@ -63,7 +63,7 @@ internal static class DocumentVenv
     private static async Task Run(string exe, string args)
     {
         using Process p = Process.Start(new ProcessStartInfo(exe, args) { RedirectStandardOutput = true, RedirectStandardError = true })
-            ?? throw new InvalidOperationException($"Couldn't start {exe}. Install Python 3 (or set ARI_PYTHON) so ARI can set up its document tools.");
+            ?? throw new InvalidOperationException($"Couldn't start {exe} while setting up ARI's document tools.");
         Task<string> err = p.StandardError.ReadToEndAsync(); await p.StandardOutput.ReadToEndAsync();
         await p.WaitForExitAsync();
         if (p.ExitCode != 0) throw new InvalidOperationException($"Setting up the document tools failed: {(await err).Trim()}");

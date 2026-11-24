@@ -185,7 +185,7 @@ public class ImageGenModule : IImageGenModule
         string installDir2 = Dependency.ComfyUiPath ?? Dependency.DefaultInstallPath();
         string? python = Dependency.VenvPython(installDir2) ?? await FindPython();
         if (python is null)
-            throw new Exception("Python 3 not found — cannot start ComfyUI.");
+            throw new Exception($"Python {Dependency.PYTHON_VERSION} couldn't be fetched, so ComfyUI can't start.");
 
         string installDir = Dependency.ComfyUiPath
             ?? Dependency.DefaultInstallPath();
@@ -441,21 +441,7 @@ public class ImageGenModule : IImageGenModule
 
     private static async Task<string?> FindPython()
     {
-        foreach (string candidate in new[] { "python3", "python" })
-        {
-            try
-            {
-                Process p = Process.Start(new ProcessStartInfo(candidate, "--version")
-                {
-                    UseShellExecute        = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                })!;
-                await p.WaitForExitAsync();
-                if (p.ExitCode == 0) return candidate;
-            }
-            catch { }
-        }
-        return null;
+        try { return await PythonRuntime.Ensure(Dependency.PYTHON_VERSION); }
+        catch { return null; }
     }
 }

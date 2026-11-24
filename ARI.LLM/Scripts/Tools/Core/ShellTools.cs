@@ -87,7 +87,7 @@ public class RunCode : Tool
 
         (string exe, string ext) = Language switch
         {
-            "python"     => (ARI.Common.PythonLocator.Find(), ".py"),
+            "python"     => (await ARI.Common.PythonRuntime.Default(Cancelled), ".py"),
             "javascript" => ("node", ".js"),
             _            => ("/bin/bash", ".sh"),
         };

@@ -15,7 +15,8 @@ public class VoiceSynthesisSetupService(ILogger? logger = null)
     private const string MARKER_FILE = ".deps-installed";
     private const int    DEPS_VERSION = 1;
 
-    private static string Python => ARI.Common.PythonLocator.Find();
+    // demucs and faster-whisper publish wheels for this version; the newest Python often lags behind.
+    private const string PYTHON_VERSION = "3.11";
 
     private static readonly string[] Packages =
     [
@@ -41,11 +42,8 @@ public class VoiceSynthesisSetupService(ILogger? logger = null)
             return;
         }
 
-        if (!Directory.Exists(venv))
-        {
-            logger?.LogInformation("Creating VoiceSynthesis virtual environment...");
-            await RunExe(Python, $"-m venv \"{venv}\"");
-        }
+        logger?.LogInformation("Preparing the VoiceSynthesis virtual environment (Python {Version})...", PYTHON_VERSION);
+        await PythonRuntime.EnsureVenv(venv, await PythonRuntime.Ensure(PYTHON_VERSION));
 
         logger?.LogInformation("Installing VoiceSynthesis dependencies...");
         await RunExe(venvPy, "-m pip install -q --upgrade pip");
