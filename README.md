@@ -62,6 +62,16 @@ A·R·I builds on a lot of other people's work — llama.cpp, StyleTTS2, Whisper
 
 ## License & credit
 
-A·R·I is licensed under the [Apache License 2.0](LICENSE). You're free to use, modify, redistribute, and even sell it — including your own forks and derivatives. The only ask: keep the attribution (the `LICENSE` and `NOTICE` files) intact, so the work always traces back to where it came from.
+A·R·I is open source under the [GNU AGPL v3](LICENSE), with [additional terms](ADDITIONAL-TERMS.md) that protect credit. Created by [Xywren](https://github.com/Xywren).
 
-If you build on A·R·I, please **fork** rather than re-upload — it keeps the credit trail and the network graph pointing home. Created by [Xywren](https://github.com/Xywren).
+- **Use it freely.** Run it, change it, experiment with it, keep private copies for yourself or your team.
+- **Share alike.** If you publish, distribute, sell, or host a version of A·R·I for others, it must be open source under the AGPL v3, so improvements flow back to everyone. Local AI is for everyone.
+- **Credit the original, visibly.** Show "Based on A·R·I by Xywren — https://github.com/ari-labz/A.R.I" at the top of your README, on your product's About screen and on any page where it's sold or downloaded, and keep the credit line in the startup log. No fine print.
+- **Keep the history.** Don't rewrite the upstream git history or authorship, and keep the [NOTICE](NOTICE) file's credit chain.
+- **Your changes are yours.** Call your version whatever you like, but don't present it as the original or main A·R·I.
+
+Plugins and voice modules are add-ons, not A·R·I itself, and keep their own licences. Plugins built against `ARI.Sdk` can use any licence you like.
+
+Please **fork** rather than re-upload. It keeps the credit trail and the network graph pointing home.
+
+Releases up to v0.10.0 were published under the Apache License 2.0.
