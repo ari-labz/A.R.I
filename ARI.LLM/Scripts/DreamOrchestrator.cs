@@ -31,6 +31,9 @@ internal sealed class DreamOrchestrator : IDisposable
     // Set when a dream ends with nothing left to look at: the next waits until someone has talked to her again. After a wake, another
     // dream can follow straight on, and it is told which subjects this quiet stretch has already covered.
     private bool                      dreamedSinceActivity;
+    // She asked to sleep: no dream until then, and the next one starts with her note.
+    private DateTime?                 sleepUntil;
+    private string                    sleepNote = "";
     private readonly CancellationTokenSource shutdownCts = new();
 
     internal DreamOrchestrator(
@@ -55,8 +58,12 @@ internal sealed class DreamOrchestrator : IDisposable
     {
         lastUserActivity     = DateTime.Now;
         dreamedSinceActivity = false;
+        sleepUntil           = null;
+        sleepNote            = "";
         dreamer.ForgetSubjects();
         InterruptDream();
+        // They're back: a message she was holding for the morning is said now.
+        try { pipeline.SendHeldWake(now: true); } catch (Exception ex) { Shared.Logger.LogWarning("[Dream] Couldn't send the held wake message: {Err}", ex.Message); }
     }
 
     internal void Start() => Task.Run(WatchLoop);
@@ -66,6 +73,15 @@ internal sealed class DreamOrchestrator : IDisposable
         while (!shutdownCts.IsCancellationRequested)
         {
             await Task.Delay(POLL_INTERVAL_MS, shutdownCts.Token).ConfigureAwait(false);
+
+            // A message she decided on and is holding until a set time: nothing else happens until it's sent. Waiting to say it isn't
+            // idle time, so no new dream starts; once it's sent, the quiet stretch counts from then.
+            if (HeldWake.Current is not null)
+            {
+                try { if (pipeline.SendHeldWake(now: false)) lastUserActivity = DateTime.Now; }
+                catch (Exception ex) { Shared.Logger.LogWarning("[Dream] Couldn't send the held wake message: {Err}", ex.Message); }
+                continue;
+            }
 
             if (!isDreamingEnabled()) continue;
 
@@ -79,6 +95,11 @@ internal sealed class DreamOrchestrator : IDisposable
 
             if (dreamTask is { IsCompleted: false }) continue;
             if (dreamedSinceActivity) continue;
+            if (sleepUntil is { } until)
+            {
+                if (DateTime.Now < until) continue;
+                sleepUntil = null;   // time to carry on: the note goes into this dream's opening, then is cleared
+            }
 
             // Back off after repeated failures (e.g. the LLM servers are stopped) instead of
             // retrying every poll tick forever, spamming the log with the same connection error.
@@ -101,6 +122,7 @@ internal sealed class DreamOrchestrator : IDisposable
         }
 
         dreamer.BeginDream();
+        Sleep.Requested = null;
         dreamCts  = CancellationTokenSource.CreateLinkedTokenSource(shutdownCts.Token);
         dreamTask = ExecuteDreamTurn(dreamCts);
     }
@@ -124,7 +146,16 @@ internal sealed class DreamOrchestrator : IDisposable
             nextRetryAt         = DateTime.MinValue;
             // She woke someone (another dream may follow), or finished her last subject (rest until someone talks to her).
             bool woke = dreamer.WakeRequest is not null;
-            if (dreamer.WakeRequest is { } wake) log.RecordWake(wake.Text);
+            if (dreamer.WakeRequest is { } wake) log.RecordWake(wake.SendAt is { } at ? $"(held until {at:HH:mm}) {wake.Text}" : wake.Text);
+            if (!woke && Sleep.Requested is { } sleep)
+            {
+                // She chose to sleep: not done for the night, just waiting. Carry on at that time with her note.
+                sleepUntil = sleep.Until;
+                sleepNote  = sleep.Note;
+                Shared.Logger.LogInformation("[Dream] Sleeping until {At:HH:mm}.", sleep.Until);
+                FinishDream(rest: false);
+                return;
+            }
             FinishDream(rest: !woke);
         }
         catch (OperationCanceledException)
@@ -162,6 +193,11 @@ internal sealed class DreamOrchestrator : IDisposable
     private string Anchor()
     {
         string anchor = DreamAnchor.PullWithGrounding();
+        if (sleepNote.Length > 0)
+        {
+            anchor += "\n\nYou slept until now. Before you slept you wrote yourself this note: " + sleepNote;
+            sleepNote = "";
+        }
         return dreamer.CoveredSubjects.Count == 0 ? anchor
             : anchor + "\n\nEarlier dreams since your master was last here already covered: " + string.Join("; ", dreamer.CoveredSubjects) + ". Pick something else.";
     }

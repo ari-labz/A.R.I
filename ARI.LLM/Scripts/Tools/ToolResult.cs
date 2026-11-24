@@ -17,9 +17,11 @@ public readonly struct ToolResult
     internal string      Title     { get; }   // set when Kind is Wake — title for the new thread
     internal string      Topic     { get; }   // set when Kind is Wake — the one thing this wake is about
     internal string      VisionNote { get; }  // set when Kind is Image — extra text alongside the image_url part
+    internal DateTime?   SendAt    { get; }   // set when Kind is Wake and the message should wait until then
 
-    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "", string title = "", string topic = "", string visionNote = "")
+    private ToolResult(ContentKind kind, string text, byte[] bytes, string mediaType, string context = "", string title = "", string topic = "", string visionNote = "", DateTime? sendAt = null)
     {
+        SendAt    = sendAt;
         Kind      = kind;
         Text      = text;
         Bytes     = bytes;
@@ -38,8 +40,9 @@ public readonly struct ToolResult
 
     // content = message sent to the user; context = briefing injected into the new thread's system prompt;
     // topic = the one short thing this wake is about, logged so future dreams don't repeat it.
-    internal static ToolResult AsWake(string content, string context, string title = "", string topic = "")
-        => new(ContentKind.Wake, content, System.Array.Empty<byte>(), "", context, title, topic);
+    // sendAt = hold the message until then instead of sending it now.
+    internal static ToolResult AsWake(string content, string context, string title = "", string topic = "", DateTime? sendAt = null)
+        => new(ContentKind.Wake, content, System.Array.Empty<byte>(), "", context, title, topic, sendAt: sendAt);
 
     public static implicit operator ToolResult(string text) => AsText(text);
 }

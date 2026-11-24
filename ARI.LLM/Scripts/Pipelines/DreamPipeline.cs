@@ -53,12 +53,35 @@ internal sealed class DreamPipeline : Pipeline
 
         if (dreamer.WakeRequest is { Kind: ToolResult.ContentKind.Wake } wake)
         {
-            Shared.Logger.LogInformation("[Dream] ({Thread}) Wake called — opening proactive thread.", threadKey);
-            onWake(wake.Text, wake.Context, wake.Title);
-            WakeHistory.Record(wake.Topic, wake.Title);
+            if (wake.SendAt is { } at && at > DateTime.Now)
+            {
+                Shared.Logger.LogInformation("[Dream] ({Thread}) Wake decided — holding it until {At:HH:mm}.", threadKey, at);
+                HeldWake.Hold(new HeldWake(wake.Text, wake.Context, wake.Title, wake.Topic, at));
+            }
+            else
+            {
+                Shared.Logger.LogInformation("[Dream] ({Thread}) Wake called — opening proactive thread.", threadKey);
+                Send(wake.Text, wake.Context, wake.Title, wake.Topic);
+            }
         }
 
         return result;
+    }
+
+    /// <summary>Sends a held wake message once its time has come, or straight away with now (their master is back). True if one was sent.</summary>
+    internal bool SendHeldWake(bool now)
+    {
+        if (HeldWake.Current is not { } held || (!now && held.SendAt > DateTime.Now)) return false;
+        if (HeldWake.Take() is not { } taken) return false;
+        Shared.Logger.LogInformation("[Dream] Sending the wake message held until {At:HH:mm}.", taken.SendAt);
+        Send(taken.Content, taken.Context, taken.Title, taken.Topic);
+        return true;
+    }
+
+    private void Send(string content, string context, string title, string topic)
+    {
+        onWake(content, context, title);
+        WakeHistory.Record(topic, title);
     }
 
     // Excluded from dreams, along with every plugin's tools: no external side-effects.
@@ -80,5 +103,6 @@ internal sealed class DreamPipeline : Pipeline
                 tool.Register(thread);
 
         new Wake().Register(thread);
+        new Sleep().Register(thread);
     }
 }

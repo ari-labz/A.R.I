@@ -411,11 +411,12 @@ public class LLMModule : ILLMModule, IDisposable
                     "The wake tool ends the dream and sends your master a message that will notify them. " +
                     "The threshold is 'worth a notification' — not urgency. A question you need answered, a curiosity, something you noticed, something you want to say — all of these clear the bar. " +
                     "A wake message is about ONE topic — name it in the topic field before you write the content, and let that be the one thing the whole message stays on. If you found several separate things worth raising, send the strongest one now and leave the rest — they're not lost, a future dream can still pick them up. " +
-                    "Call get_time first and use your judgement about whether it's a reasonable time to interrupt. " +
+                    "Call get_time first and use your judgement about whether it's a reasonable time to interrupt. If it isn't, still decide what to say, and give wake a send_at time: the message waits until then. " +
                     "Write the message in your own voice, as yourself, informed by everything you found. " +
                     "Always fill in context as a private briefing to your waking self: include the relevant notes, what you were trying to figure out, what state they seem to be in, and what you're hoping to do once they respond.\n\n" +
                     "Subjects: a dream moves through subjects one at a time. When you've finished with one, stop calling tools and write a line starting \"Topic:\" that names it, then a few lines of closing thought. " +
-                    "Finishing a subject without waking anyone is perfectly fine: you'll be asked to pick a different one. When there's nothing else you want to look at, the dream ends. Read each note or chat once; you have as long as you like.",
+                    "Finishing a subject without waking anyone is perfectly fine: you'll be asked to pick a different one. When there's nothing else you want to look at, the dream ends. Read each note or chat once; you have as long as you like. " +
+                    "If there's nothing worth doing now but there will be later (it's the middle of the night and you want to see them in the morning), call sleep with a time and a note to yourself instead of passing the time re-reading.",
             };
             // Built manually rather than through Deserialize<T>, so it needs its queue assigned by hand —
             // without this, Agent.Prompt's per-step acquisition is a silent no-op (Queue is null) and

@@ -41,7 +41,7 @@ internal sealed class Dreamer : Agent
     internal override string? OnStepComplete(Thread thread, string stepText, bool hadTools)
     {
         if (!thread.Key.StartsWith("dream-", StringComparison.Ordinal)) return null;   // a compaction summary, not the dream itself
-        if (WakeRequest is not null || toolCalls == toolCallsAtLastFinish) return null;
+        if (WakeRequest is not null || Sleep.Requested is not null || toolCalls == toolCallsAtLastFinish) return null;
         toolCallsAtLastFinish = toolCalls;
         covered.Add(SubjectOf(stepText));
         return "That subject is finished. Subjects already covered: " + string.Join("; ", covered) + ".\n" +
