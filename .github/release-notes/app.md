@@ -1,3 +1,9 @@
+Changes in v0.11.3 (includes v0.11.1 and v0.11.2):
+
+- Python: ARI downloads her own Python instead of using the one on the machine, so voice, listening and the document tools set themselves up on a clean computer with no developer tools installed (a fresh Mac used to stop at an "install developer tools" dialog). Parts that need a particular Python version fetch that version and keep their own environment.
+- Listening: speech is detected with the Silero model that comes with faster-whisper instead of webrtcvad, so nothing has to be compiled during setup (no C++ build tools needed on Windows). Turns are split the same as before, and steady hum or a door slam no longer counts as speech.
+- Dreams: a Dreamer entry in the Agents tab chooses which server and slot dreams run on, so they can use a different model from chat. Without it, dreams run where Dialogue does, as before.
+
 Changes in v0.11.0:
 
 - Dreams: Ari can decide at night what to tell you and hold it until a sensible time (wake with send_at): nothing else runs while it waits, and if you talk to her first she tells you straight away. A new sleep tool lets a dream go quiet until a set time and carry on from a note to itself, instead of passing the night re-reading.
