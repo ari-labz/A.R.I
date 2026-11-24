@@ -441,7 +441,7 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
-/.idea
+.idea/
 
 # Voice module submodule runtime dirs
 External/StyleTTS2/venv/

@@ -68,13 +68,6 @@
   		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   		<LinkBase>wwwroot</LinkBase>
   	</Content>
-  	<Content Update="..\ARI.API\wwwroot\images\Black Code .png">
-  	  <Link>wwwroot\images\Black Code .png</Link>
-  	</Content>
-  	<Content Include="..\External\Orpheus\**\*" Exclude="..\External\Orpheus\venv\**;..\External\Orpheus\__pycache__\**">
-  	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  	  <LinkBase>External\Orpheus</LinkBase>
-  	</Content>
   	<!-- Listener's whisper-server script; its venv is gitignored/generated and never copied. -->
   	<Content Include="..\ARI.Listener\python\whisper_serve.py;..\ARI.Listener\python\requirements.txt">
   	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
