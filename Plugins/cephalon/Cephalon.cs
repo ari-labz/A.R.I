@@ -1,4 +1,4 @@
-[Plugin("Cephalon", "Slowly learns its owner from their own words and their brain, and keeps a Cephalon persona that speaks as them: their voice, their mind, their stories and their people. Everything it learns stays in this plugin's folder.")]
+[Plugin("Cephalon", "Learns from its owner: how they type, how they interact, what they like and what they dislike. Slowly, over time, it tries to replicate their psyche and consciousness as a Cephalon persona that speaks as them. Everything it learns stays in this plugin's folder.")]
 public class CephalonPlugin : ScriptPlugin
 {
     public override IReadOnlyList<PluginSetting> Settings { get; } =

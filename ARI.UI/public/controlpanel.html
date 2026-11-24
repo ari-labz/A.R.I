@@ -4060,6 +4060,14 @@ function plFields(p) {
             inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
             row.appendChild(inp); row.appendChild(add); f.appendChild(row);
             readers[s.key] = () => { commit(); return ids; };
+        } else if (s.type === 'toggle') {
+            // A checkbox, saved as true/false: the server only counts a JSON true as on.
+            const lab = plEl('label', 'pl-row'); lab.style.cssText = 'gap:8px;cursor:pointer;font-size:13px;';
+            const cb = plEl('input'); cb.type = 'checkbox'; cb.checked = value === true;
+            lab.appendChild(cb); lab.appendChild(plEl('span', '', cb.checked ? 'On' : 'Off'));
+            cb.addEventListener('change', () => { lab.lastChild.textContent = cb.checked ? 'On' : 'Off'; });
+            f.appendChild(lab);
+            readers[s.key] = () => cb.checked;
         } else {
             const inp = plEl('input', 'vs-input');
             inp.style.cssText = 'width:100%;max-width:420px;';
