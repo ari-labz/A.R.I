@@ -1713,6 +1713,9 @@ public class LLMModule : ILLMModule, IDisposable
     // work (Dream) runs only while this holds, and yields the moment Ari is busy.
     public bool IsIdle => processingThreads.IsEmpty;
 
+    /// <summary>Nothing is waiting to be saved to the brain (see Engram.HasWork). Dreams don't count.</summary>
+    public bool MemoryQueueEmpty => engram is null || !engram.HasWork;
+
     /// <summary>Sets the persona a conversation speaks in. False if there is no such conversation.</summary>
     public bool SetThreadPersona(string threadKey, string personaId)
     {

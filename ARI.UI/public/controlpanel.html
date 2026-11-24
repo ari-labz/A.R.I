@@ -1415,7 +1415,7 @@ body.cp-win32 #cp-win-controls { display: flex; }
       <div class="vs-section" style="margin-top:24px;">
         <div class="vs-section-title">Updates</div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;"><input type="checkbox" id="au-enabled"> Update automatically</label>
-        <p style="color:var(--text-dim);font-size:13px;margin:6px 0 0;">When a new version is out, ARI waits until nothing has been happening for ten minutes, installs it and starts again on her own.</p>
+        <p style="color:var(--text-dim);font-size:13px;margin:6px 0 0;">When a new version is out, ARI downloads it, waits until she has been idle for ten minutes with nothing waiting to be saved to memory (dreams don't count), switches over and starts again on her own. If the new version doesn't start, she goes back to the old one.</p>
         <div id="au-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;"></div>
       </div>
     

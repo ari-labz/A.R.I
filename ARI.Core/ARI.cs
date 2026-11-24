@@ -194,7 +194,7 @@ public class ARI : BackgroundService, IModuleLifecycle
         if (config.modules.Calendar.Enabled)
             StartCalendar();
 
-        AutoUpdate.Start(() => llmModule, lifetime, _logger, stoppingToken);
+        AutoUpdate.Start(() => llmModule, lifetime, config.modules.API.Port, _logger, stoppingToken);
 
         _logger.LogInformation("ARI is ready.");
 

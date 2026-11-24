@@ -5,11 +5,10 @@ using System.Text.Json;
 namespace ARI.API;
 
 /// <summary>
-/// Checks whether a newer stable server release exists on GitHub. The result is cached and
-/// refreshed at most once every <see cref="CheckInterval"/>, so it's safe to call on every
-/// request. GitHub's releases/latest endpoint already excludes pre-releases and drafts, so a
-/// pre-release never triggers the outdated banner. Any failure (offline, rate-limited, private
-/// repo without a token) leaves the previous state untouched — we never nag on a failed check.
+/// Checks whether a newer server release exists on GitHub. A release counts if it is stable, or a pre-release of a 0.x
+/// version (every 0.x release is published as a pre-release while ARI is in beta); drafts never count. The result is cached
+/// and refreshed at most once every <see cref="CheckInterval"/>, so it's safe to call on every request. Any failure
+/// (offline, rate-limited, private repo without a token) leaves the previous state untouched — we never nag on a failed check.
 /// </summary>
 public static class UpdateCheck
 {
@@ -24,25 +23,31 @@ public static class UpdateCheck
     public  static string? LatestVersion { get; private set; }
     public  static bool    Outdated      { get; private set; }
     private static DateTime _lastChecked = DateTime.MinValue;
+    private static IReadOnlyDictionary<string, string> _latestAssets = new Dictionary<string, string>();
 
-    public static async Task EnsureCheckedAsync()
+    /// <summary>The download link of one of the latest release's files, by name (e.g. ARI_Server_v0.11.4_mac.zip).</summary>
+    public static string? AssetUrl(string name) => _latestAssets.GetValueOrDefault(name);
+
+    /// <param name="force">Ask GitHub now instead of using a result up to <see cref="CheckInterval"/> old.</param>
+    public static async Task EnsureCheckedAsync(bool force = false)
     {
-        if (DateTime.UtcNow - _lastChecked < CheckInterval)
+        if (!force && DateTime.UtcNow - _lastChecked < CheckInterval)
             return;
 
         await Gate.WaitAsync();
         try
         {
-            if (DateTime.UtcNow - _lastChecked < CheckInterval)
+            if (!force && DateTime.UtcNow - _lastChecked < CheckInterval)
                 return;
 
-            string? latest = await FetchLatestAsync();
+            (string Version, Dictionary<string, string> Assets)? latest = await FetchLatestAsync();
             _lastChecked = DateTime.UtcNow;
             if (latest is null)
                 return;   // check failed — keep the last known state
 
-            LatestVersion = latest;
-            Outdated      = CompareVersions(latest, ServerVersion) > 0;
+            LatestVersion = latest.Value.Version;
+            _latestAssets = latest.Value.Assets;
+            Outdated      = CompareVersions(LatestVersion, ServerVersion) > 0;
         }
         finally
         {
@@ -50,12 +55,13 @@ public static class UpdateCheck
         }
     }
 
-    private static async Task<string?> FetchLatestAsync()
+    /// <summary>The newest release that counts (see the class summary) and its files, or null if the check failed.</summary>
+    private static async Task<(string Version, Dictionary<string, string> Assets)?> FetchLatestAsync()
     {
         try
         {
             using HttpRequestMessage req = new(HttpMethod.Get,
-                $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest");
+                $"https://api.github.com/repos/{Owner}/{Repo}/releases?per_page=30");
             req.Headers.UserAgent.ParseAdd("ARI-Server/1.0");
             req.Headers.Accept.ParseAdd("application/vnd.github+json");
 
@@ -70,9 +76,25 @@ public static class UpdateCheck
 
             await using Stream stream = await res.Content.ReadAsStreamAsync();
             using JsonDocument doc = await JsonDocument.ParseAsync(stream);
-            return doc.RootElement.TryGetProperty("tag_name", out JsonElement tag)
-                ? tag.GetString()?.TrimStart('v', 'V')
-                : null;
+
+            (string Version, Dictionary<string, string> Assets)? best = null;
+            foreach (JsonElement r in doc.RootElement.EnumerateArray())
+            {
+                if (r.TryGetProperty("draft", out JsonElement draft) && draft.GetBoolean()) continue;
+                string? version = r.TryGetProperty("tag_name", out JsonElement tag) ? tag.GetString()?.TrimStart('v', 'V') : null;
+                if (string.IsNullOrEmpty(version)) continue;
+                bool pre = r.TryGetProperty("prerelease", out JsonElement p) && p.GetBoolean();
+                if (pre && !version.StartsWith("0.", StringComparison.Ordinal)) continue;
+                if (best is not null && CompareVersions(version, best.Value.Version) <= 0) continue;
+
+                Dictionary<string, string> assets = new(StringComparer.OrdinalIgnoreCase);
+                if (r.TryGetProperty("assets", out JsonElement list))
+                    foreach (JsonElement a in list.EnumerateArray())
+                        if (a.GetProperty("name").GetString() is { } n && a.GetProperty("browser_download_url").GetString() is { } u)
+                            assets[n] = u;
+                best = (version, assets);
+            }
+            return best;
         }
         catch
         {
@@ -81,7 +103,7 @@ public static class UpdateCheck
     }
 
     // Returns >0 if a is newer than b.
-    private static int CompareVersions(string a, string b)
+    public static int CompareVersions(string a, string b)
     {
         int[] pa = Parse(a), pb = Parse(b);
         for (int i = 0; i < Math.Max(pa.Length, pb.Length); i++)

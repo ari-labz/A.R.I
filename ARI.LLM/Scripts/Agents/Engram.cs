@@ -380,6 +380,17 @@ internal class Engram : MemoryAgent, IDisposable
         }
     }
 
+    /// <summary>True while anything is waiting to go into the brain: a sweep or quick save running now, a conversation waiting
+    /// for Engram to be switched back on, or a queued snapshot not yet swept. An update waits for this to clear.</summary>
+    internal bool HasWork
+    {
+        get
+        {
+            lock (pendingQueue) if (pendingQueue.Count > 0) return true;
+            return !sweepingThreads.IsEmpty || !reflexDraining.IsEmpty || (Directory.Exists(QueueDir) && QueuedSnapshots().Count > 0);
+        }
+    }
+
     /// <summary>The queued snapshots, oldest first.</summary>
     internal static List<string> QueuedSnapshots() =>
         Directory.EnumerateFiles(QueueDir, "*.jsonl").Order(StringComparer.Ordinal).ToList();

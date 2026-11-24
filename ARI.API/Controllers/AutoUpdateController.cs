@@ -16,7 +16,7 @@ public class AutoUpdateController : ControllerBase
         await UpdateCheck.EnsureCheckedAsync();
         AutoUpdateStore.State s = AutoUpdateStore.Get();
         string? blocked = Shared.DevMode ? "This is a dev run, so it never updates itself."
-            : Environment.GetEnvironmentVariable("APP_INSTALL_ROOT") is null ? "This server wasn't started by the Installer, so there's nothing for it to update."
+            : Environment.GetEnvironmentVariable("APP_INSTALL_ROOT") is null ? "This server runs from source rather than an install, so there's nothing for it to update."
             : null;
         return Ok(new
         {
