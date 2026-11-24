@@ -379,17 +379,19 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null)
         {
+            // Dreams run where Dialogue runs, unless Agents.json has a Dreamer entry naming its own server/slot.
+            Agent dreamHost = rawAgents.TryGetValue("Dreamer", out JsonElement dreamerEl) ? Deserialize<TextingAgent>(dreamerEl) : textingAgent;
             dreamer = new Dreamer
             {
                 Name         = "Dreamer",
                 Priority     = (int)InferencePriority.Dream,   // background: any real prompt queues ahead of it
-                ServerName   = textingAgent.ServerName,
-                Endpoint     = textingAgent.Endpoint,
-                Server       = textingAgent.Server,
-                SlotName               = textingAgent.SlotName,
-                Slot                   = textingAgent.Slot,
-                Floating               = textingAgent.Floating,
-                Think                  = textingAgent.Think,
+                ServerName   = dreamHost.ServerName,
+                Endpoint     = dreamHost.Endpoint,
+                Server       = dreamHost.Server,
+                SlotName               = dreamHost.SlotName,
+                Slot                   = dreamHost.Slot,
+                Floating               = dreamHost.Floating,
+                Think                  = dreamHost.Think,
                 ReasoningEffortOverride = "xhigh",
                 UsePersona             = true,
                 AgentPrompt =

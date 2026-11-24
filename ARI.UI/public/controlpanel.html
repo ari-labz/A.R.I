@@ -5364,7 +5364,10 @@ const AG_INFO = [
     ['Recall',    'Recalls what the conversation needs from the brain: it is given the names of notes that might matter, opens them with tools, follows their links, and writes the memory block Dialogue reads. It keeps its own sub-thread under each chat.'],
     ['Engram',    'Writes new memories after conversations (reflection). Off makes the brain read-only.'],
     ['Subagent',  'Runs the side tasks she starts with spawn_agent.'],
+    ['Dreamer',   'Explores and reflects while she is idle (dreaming). Choose which server and slot it runs on; what it does is built in. Without this entry it runs where Dialogue does.'],
 ];
+// Agents whose behaviour is built in: their row only chooses where they run, so it has no switch, settings or prompt.
+const AG_LOCATION_ONLY = new Set(['Dreamer']);
 
 function agSpec(name) {
     let found = null;
@@ -5386,14 +5389,16 @@ function agRenderAgents() {
         const info = (AG_INFO.find(x => x[0] === agent.name) || [])[1] || '';
         const card = agEl('div', 'border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--main-bg);');
         const row  = agEl('div', 'display:flex;align-items:center;gap:14px;padding:14px 16px;flex-wrap:wrap;');
-        const sw   = buildToggle(agent.enabled !== false, on => { agent.enabled = on; paint(); agDirty(); });
+        const locationOnly = AG_LOCATION_ONLY.has(agent.name);
+        const sw   = locationOnly ? agEl('div', 'width:40px;flex:none;') : buildToggle(agent.enabled !== false, on => { agent.enabled = on; paint(); agDirty(); });
         const text = agEl('div', 'flex:1;min-width:220px;');
         const name = agEl('div', 'font-size:14px;font-weight:600;', agent.name);
         const desc = agEl('div', 'font-size:12.5px;color:var(--text-dim);line-height:1.45;margin-top:2px;', info);
         text.append(name, desc);
         const gear = agEl('button', 'border:0;background:none;cursor:pointer;font-size:12px;color:var(--text-dim);padding:4px 6px;', 'Settings ▸');
         gear.type = 'button';
-        row.append(sw, text, agBindingPickers(agent), gear);
+        row.append(sw, text, agBindingPickers(agent));
+        if (!locationOnly) row.append(gear);
 
         const body = agEl('div', 'display:none;padding:6px 16px 14px;border-top:1px solid var(--border);');
         agBuildThinking(body, agent);
@@ -5484,7 +5489,7 @@ function prRenderList() {
     // Everything ARI runs from its own code, then the agents you make yourself.
     const isOwn = a => a.custom && !a.system;
     group('System Agents');
-    ordered.filter(a => !isOwn(a) && a.name !== 'Memory').forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
+    ordered.filter(a => !isOwn(a) && a.name !== 'Memory' && !AG_LOCATION_ONLY.has(a.name)).forEach(a => item('agent:' + a.name, a.name, a.enabled === false));
     group('Your agents');
     const add = agEl('div', 'color:var(--text-dim);'); add.className = 'pr-item'; add.append(agEl('span', '', '+ New agent'));
     add.onclick = async () => {
