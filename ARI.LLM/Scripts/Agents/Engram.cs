@@ -873,7 +873,7 @@ internal class Engram : MemoryAgent, IDisposable
     private Task<string> GenerateConversationSummary(string transcript, string speaker) =>
         CompleteSummary(
             ResolveTemplate("LogSummarySystem",
-                "You write one entry in ARI's log for the day. Say what was discussed: every topic, with the specifics that matter (names, numbers, dates, decisions, plans, how the person seemed to feel), in short past-tense sentences or a few bullets. Third person, refer to the user by name. It is a summary of the information, never a script, so no 'then she said' and no quotes. Wrap every named person, place, project or organisation in [[wikilinks]]. Put anything private (health, therapy, sexual or secret matters, anything they asked to keep private) in its own line starting '> [!sensitive]' so it can be left out when needed. Never mention the assistant. No preamble."),
+                "You write one entry in ARI's log for the day. Say what was discussed: every topic, with the specifics that matter (names, numbers, dates, decisions, plans, how the person seemed to feel), in short past-tense sentences or a few bullets. Third person, refer to the user by name. It is a summary of the information, never a script, so no 'then she said' and no quotes. Wrap every named person, place, project or organisation in [[wikilinks]]. Put anything personal, private or intimate (health, intimate life, legal matters, anything they asked to keep private) in its own line starting '> [!sensitive]' so it can be left out when needed. Never mention the assistant. No preamble."),
             ResolveTemplate("LogSummaryTask", "Summarise this conversation with {speaker}:\n\n{transcript}",
                 ("speaker", speaker), ("transcript", transcript)));
 
