@@ -1,3 +1,10 @@
+Changes in v0.11.0:
+
+- Dreams: Ari can decide at night what to tell you and hold it until a sensible time (wake with send_at): nothing else runs while it waits, and if you talk to her first she tells you straight away. A new sleep tool lets a dream go quiet until a set time and carry on from a note to itself, instead of passing the night re-reading.
+- Documents: Word lists, Word titles and PowerPoint slide titles reach Ari as Markdown, so she sees a document's structure instead of flat lines.
+- Licence: ARI is now licensed under AGPLv3 with credit terms (see LICENSE and ADDITIONAL-TERMS.md). The startup log and a new About tab in the control panel credit the original author, and third-party components (including IndexTTS2) are listed in THIRD_PARTY.md.
+- Agents: the default Engram and Subagent prompts are the newer ones.
+
 Changes in v0.10.0 (replaces v0.9.7 and v0.9.8):
 
 - Dreams: a dream runs as long as Ari likes and moves through subjects one at a time; finishing a subject without waking you moves her on to a new one. Long dreams are compacted into her own summary instead of running out of room, and the dream log shows the real duration and every tool call.
