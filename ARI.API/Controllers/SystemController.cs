@@ -100,7 +100,7 @@ public class SystemController(SystemInfo systemInfo) : ControllerBase
         }
 
         var breakdown = systemInfo.GetRamBreakdown()
-            .Select(s => new { label = s.Label, serverName = s.ServerName, mb = Math.Round(s.Bytes / 1024.0 / 1024.0, 1) })
+            .Select(s => new { label = s.Label, serverName = s.ServerName, kind = s.Kind, mb = Math.Round(s.Bytes / 1024.0 / 1024.0, 1) })
             .ToList();
 
         double swapMb = systemInfo.GetSwapMb();

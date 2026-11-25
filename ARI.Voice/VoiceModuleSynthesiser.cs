@@ -24,6 +24,9 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
     private DateTime lastUsedUtc = DateTime.UtcNow;
     private int inFlight;
     private Process? server;
+    // True once the engine answers on its port. The process exists well before that (it may be loading or downloading its
+    // models), and a request sent in that window is refused, so callers wait for this rather than for the process.
+    private volatile bool ready;
 
     private string? engineName;
     private List<EngineParameter> parameters = [];
@@ -35,6 +38,7 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
 
     /// <summary>Whether the engine process is loaded right now.</summary>
     public bool IsRunning => server is { HasExited: false };
+    private bool IsReady => ready && server is { HasExited: false };
     public float Speed { get; private set; } = 1.0f;
     public float PauseScale { get; private set; } = 1.0f;
 
@@ -65,12 +69,13 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
         // needed up front so the UI can show them.
         if (LoadsOnDemand) return;
 
-        await LaunchAsync(ct);
+        // Always loaded: start now, and keep waiting if the first start has models to download.
+        await Prime(ct);
     }
 
     private async Task LaunchAsync(CancellationToken ct)
     {
-
+        ready = false;
         string venvPython = Path.Combine(modulePath, "venv",
             OperatingSystem.IsWindows() ? @"Scripts\python.exe" : "bin/python3");
         string python = File.Exists(venvPython) ? venvPython : await VoiceModulePython.For(modulePath, ct);
@@ -97,9 +102,17 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
         _ = Task.Run(() => StreamStderr(server.StandardError), ct);
         _ = Task.Run(() => DrainStream(server.StandardOutput), ct);
 
+        await FinishStarting(ct);
+    }
+
+    // Waits for the engine to answer, reads what it offers and starts the idle timer. Also used for an engine that was started
+    // earlier but wasn't answering yet (still loading, or downloading its models the first time).
+    private async Task FinishStarting(CancellationToken ct)
+    {
         await WaitUntilReady(ct);
         await FetchInfo(ct);
         SaveCachedInfo();
+        ready = true;
 
         lastUsedUtc = DateTime.UtcNow;
         if (LoadsOnDemand)
@@ -107,16 +120,40 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
         logger?.LogInformation("[{Engine}] Voice engine started.", EngineName);
     }
 
+    /// <summary>Starts the engine once so anything it fetches on first use (model weights) is downloaded now rather than in the
+    /// middle of a conversation. Keeps waiting while it is still loading, for up to half an hour. An on-demand engine unloads
+    /// again after its idle time.</summary>
+    public async Task Prime(CancellationToken ct = default)
+    {
+        DateTime giveUp = DateTime.UtcNow.AddMinutes(30);
+        while (true)
+        {
+            try { await EnsureRunning(ct); return; }
+            catch (TimeoutException) when (DateTime.UtcNow < giveUp && server is { HasExited: false })
+            {
+                logger?.LogInformation("[{Engine}] Still loading (it may be downloading its models); waiting.", EngineName);
+            }
+        }
+    }
+
     private async Task EnsureRunning(CancellationToken ct)
     {
         lastUsedUtc = DateTime.UtcNow;
-        if (server is { HasExited: false }) return;
+        if (IsReady) return;
 
+        // Whoever starts the engine holds the gate until it answers, so everyone else waits here instead of sending a request
+        // to a port that isn't open yet.
         await launchGate.WaitAsync(ct);
         try
         {
-            if (server is { HasExited: false }) return;
-            logger?.LogInformation("[{Engine}] Starting voice engine on demand.", EngineName);
+            if (IsReady) return;
+            if (server is { HasExited: false })
+            {
+                // Started earlier and not answering yet: wait for it rather than killing it and starting another.
+                await FinishStarting(ct);
+                return;
+            }
+            logger?.LogInformation("[{Engine}] Starting voice engine.", EngineName);
             await LaunchAsync(ct);
         }
         finally { launchGate.Release(); }
@@ -131,6 +168,7 @@ public class VoiceModuleSynthesiser : ITtsSynthesiser
         {
             if (server is null || Volatile.Read(ref inFlight) > 0) return;
             logger?.LogInformation("[{Engine}] Stopping idle voice engine after {Minutes} min.", EngineName, idleStop.TotalMinutes);
+            ready = false;
             try { server.Kill(entireProcessTree: true); } catch { }
             server.Dispose();
             server = null;

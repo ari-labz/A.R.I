@@ -247,9 +247,13 @@ public class ImageGenModule : IImageGenModule
         }
     }
 
+    /// <summary>Starts ComfyUI now. Used at startup when image generation is set to stay loaded (IdleSeconds 0).</summary>
+    public Task WarmAsync(CancellationToken ct = default) => EnsureRunning(ct);
+
     private void ResetIdleTimer()
     {
         if (config.IsRemote) return;   // never stop a ComfyUI that isn't ours
+        if (config.IdleSeconds <= 0) return;   // set to stay loaded
         lock (_lock)
         {
             _idleTimer?.Dispose();

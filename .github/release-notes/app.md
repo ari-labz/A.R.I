@@ -1,3 +1,9 @@
+Changes in v0.11.7:
+
+- Voice and image generation: a "Load when first needed" switch on the servers page. Off means it loads when ARI starts and stays loaded; on means it loads on first use and unloads after the idle time, as before.
+- Voice: a first-time voice model download now happens while ARI starts up instead of during your first spoken reply, and a reply that arrives while the voice engine is still starting waits for it instead of staying silent.
+- Memory: the memory chart and the servers page's memory bar show measured numbers for running servers (model weights and KV cache per server), and the chart adds up to the total in use.
+
 Changes in v0.11.5 (includes v0.11.4):
 
 - Updates: with Update automatically on, ARI now updates herself without the Installer. She downloads the new version, waits until she has been idle for ten minutes with nothing waiting to be saved to memory (dreams don't count), switches over and starts again on her own. If the new version doesn't start, she goes back to the one she was on. Beta (0.x) releases count, so updates now actually arrive.

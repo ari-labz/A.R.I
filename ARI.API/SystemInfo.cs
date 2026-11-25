@@ -7,7 +7,8 @@ using System.Text.RegularExpressions;
 
 namespace ARI.API;
 
-public record RamSegment(string Label, string ServerName, long Bytes);
+/// <param name="Kind">weights, kv, python or other.</param>
+public record RamSegment(string Label, string ServerName, long Bytes, string Kind);
 
 /// <summary>Provides system RAM telemetry for the control panel.</summary>
 public class SystemInfo
@@ -69,15 +70,14 @@ public class SystemInfo
         catch { return Process.GetCurrentProcess().WorkingSet64; }
     }
 
+    /// <summary>What the memory in use is made of, measured. A llama server's model (and vision) file is memory-mapped, so its weights are
+    /// the files' size; its own footprint (phys_footprint, which leaves out mapped files) is the KV cache plus working buffers. Python services
+    /// are each process's footprint, counting a process once even when its workers are also Python. Whatever is left of the total is
+    /// "Other apps and file cache", so the segments always add up to <see cref="GetTotalRamBytes"/>.</summary>
     public List<RamSegment> GetRamBreakdown()
     {
         long totalSystem = GetTotalRamBytes();
-        long accounted   = 0;
-
-        List<(string Name, long FileBytes, int ContextSize)> serverEntries = new List<(string Name, long FileBytes, int ContextSize)>();
-
-        // PID-keyed: servers whose RAM we've already measured via PhysFootprint
-        List<RamSegment> pidMeasuredSegments = new List<RamSegment>();
+        List<RamSegment> segments = new List<RamSegment>();
 
         if (_llm is not null)
         {
@@ -86,71 +86,64 @@ public class SystemInfo
                 if (server.Status != ServerStatus.Online || server.Pid <= 0 || server.ActiveModel is null)
                     continue;
 
-                string modelFile = Path.Combine(modelsPath, server.ActiveModel.Path);
-                long   fileBytes = File.Exists(modelFile) ? new FileInfo(modelFile).Length : 0;
+                long weights = FileBytes(server.ActiveModel.Path);
+                if (server.VisionEnabled) weights += FileBytes(server.ActiveModel.MmprojPath);
+                long working = PhysFootprint(server.Pid);
 
-                if (fileBytes > 0)
-                {
-                    serverEntries.Add((server.Name, fileBytes, server.ContextSize));
-                    accounted += fileBytes;
-                }
-                else
-                {
-                    // File path unknown — measure the process directly (model + KV combined)
-                    long pidBytes = PhysFootprint(server.Pid);
-                    if (pidBytes > 0)
-                    {
-                        pidMeasuredSegments.Add(new RamSegment(server.Name, server.Name, pidBytes));
-                        accounted += pidBytes;
-                    }
-                }
+                if (weights > 0) segments.Add(new RamSegment(server.Name, server.Name, weights, "weights"));
+                if (working > 0) segments.Add(new RamSegment(weights > 0 ? $"{server.Name} KV cache" : server.Name, server.Name, working, weights > 0 ? "kv" : "weights"));
             }
         }
 
-        // Take the largest Python process only — DataLoader workers fork from the main process
-        // and each independently reports the same Metal/MPS allocations in phys_footprint.
-        long pythonBytes = 0;
-        foreach (Process p in Process.GetProcessesByName("python")
-            .Concat(Process.GetProcessesByName("python3"))
-            .Concat(Process.GetProcessesByName("Python")))
-            try { long fp = PhysFootprint(p.Id); if (fp > pythonBytes) pythonBytes = fp; } catch { }
-        accounted += pythonBytes;
+        long pythonBytes = PythonServicesBytes();
+        if (pythonBytes > 0) segments.Add(new RamSegment("Python services (voice, listener, images)", "Python", pythonBytes, "python"));
 
-        const long OsBaselineBytes = 2_684_354_560L;
-        long kvPool   = Math.Max(0, totalSystem - accounted - OsBaselineBytes);
-        long totalCtx = serverEntries.Sum(e => (long)e.ContextSize);
-
-        List<RamSegment> segments = new List<RamSegment>();
-
-        // File-size tracked servers: split kvPool proportionally by context size
-        foreach ((string Name, long FileBytes, int ContextSize) e in serverEntries)
-        {
-            segments.Add(new RamSegment(e.Name, e.Name, e.FileBytes));
-            if (kvPool > 0 && totalCtx > 0)
-            {
-                long kvBytes = kvPool * e.ContextSize / totalCtx;
-                if (kvBytes > 0) segments.Add(new RamSegment($"{e.Name} KV cache", e.Name, kvBytes));
-            }
-        }
-
-        // PID-measured servers: process footprint = model weights; split remaining kvPool equally
-        if (pidMeasuredSegments.Count > 0)
-        {
-            long kvPerPidServer = kvPool > 0 ? kvPool / pidMeasuredSegments.Count : 0;
-            foreach (RamSegment seg in pidMeasuredSegments)
-            {
-                segments.Add(seg);
-                if (kvPerPidServer > 0)
-                    segments.Add(new RamSegment($"{seg.ServerName} KV cache", seg.ServerName, kvPerPidServer));
-            }
-        }
-        else if (kvPool > 0 && serverEntries.Count == 0)
-        {
-            segments.Add(new RamSegment("KV cache", "System", kvPool));
-        }
-
-        if (pythonBytes > 0) segments.Add(new RamSegment("StyleTTS2", "StyleTTS2", pythonBytes));
+        long rest = totalSystem - segments.Sum(x => x.Bytes);
+        if (rest > 0 && segments.Count > 0) segments.Add(new RamSegment("Other apps and file cache", "System", rest, "other"));
         return segments;
+    }
+
+    private long FileBytes(string relative)
+    {
+        if (string.IsNullOrEmpty(relative)) return 0;
+        try { string full = Path.Combine(modelsPath, relative); return File.Exists(full) ? new FileInfo(full).Length : 0; }
+        catch { return 0; }
+    }
+
+    // Sum of the top-level Python processes. Forked workers (e.g. DataLoader) report the parent's Metal allocations again, so a Python process
+    // whose parent is also Python is skipped.
+    private static long PythonServicesBytes()
+    {
+        List<Process> pythons = Process.GetProcessesByName("python")
+            .Concat(Process.GetProcessesByName("python3"))
+            .Concat(Process.GetProcessesByName("Python")).ToList();
+        if (pythons.Count == 0) return 0;
+        HashSet<int> ids = pythons.Select(p => p.Id).ToHashSet();
+        Dictionary<int, int> parents = ParentIds();
+        long total = 0;
+        foreach (Process p in pythons)
+            try { if (!(parents.TryGetValue(p.Id, out int parent) && ids.Contains(parent))) total += PhysFootprint(p.Id); } catch { }
+        return total;
+    }
+
+    private static Dictionary<int, int> ParentIds()
+    {
+        Dictionary<int, int> map = new Dictionary<int, int>();
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return map;
+        try
+        {
+            ProcessStartInfo psi = new ProcessStartInfo("/bin/ps", "-axo pid=,ppid=") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            using Process ps = Process.Start(psi)!;
+            string output = ps.StandardOutput.ReadToEnd();
+            ps.WaitForExit();
+            foreach (string line in output.Split('\n'))
+            {
+                string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2 && int.TryParse(parts[0], out int pid) && int.TryParse(parts[1], out int ppid)) map[pid] = ppid;
+            }
+        }
+        catch { }
+        return map;
     }
 
     public double GetSwapMb()

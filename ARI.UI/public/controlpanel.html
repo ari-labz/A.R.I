@@ -1314,7 +1314,7 @@ body.cp-win32 #cp-win-controls { display: flex; }
       <div class="vs-section" style="margin-top:24px;">
         <div class="vs-section-title">Loads when needed</div>
         <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px;">These start the first time they are used and are unloaded after sitting idle, which frees their memory. Voice picks up a new time when ARI next starts.</p>
-        <div id="lazy-table" style="display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(90px,.8fr) minmax(150px,1fr) auto;gap:8px 14px;align-items:center;font-size:13px;"></div>
+        <div id="lazy-table" style="display:grid;grid-template-columns:minmax(120px,1.2fr) minmax(90px,.8fr) minmax(130px,1fr) minmax(150px,1fr) auto;gap:8px 14px;align-items:center;font-size:13px;"></div>
         <span id="lazy-status" style="font-size:12px;color:var(--text-dim);"></span>
       </div>
     </div>
@@ -4779,18 +4779,14 @@ function updateRamPie(breakdown) {
     lastBreakdownJson = json;
 
     // All unique server names in stable order (excluding generic 'System' fallback)
-    const allServers = [...new Set(breakdown.map(s => s.serverName).filter(n => n !== 'System'))];
+    const allServers = [...new Set(breakdown.filter(s => s.kind === 'weights' || s.kind === 'kv').map(s => s.serverName))];
     buildServerHues(allServers);
 
     const labels = [], values = [], colors = [];
-    const serverSegCount = {};
     breakdown.forEach(seg => {
-        const segIdx = serverSegCount[seg.serverName] ?? 0;
-        serverSegCount[seg.serverName] = segIdx + 1;
-        const isKv = segIdx > 0; // first segment per server = model weights, subsequent = KV cache
         labels.push(seg.label);
         values.push(seg.mb);
-        colors.push(hslForServer(seg.serverName, isKv));
+        colors.push(seg.kind === 'other' ? 'hsl(200,8%,45%)' : seg.kind === 'python' ? 'hsl(200,14%,62%)' : hslForServer(seg.serverName, seg.kind === 'kv'));
     });
 
     ramPieChart.data.labels = labels;
@@ -4800,9 +4796,7 @@ function updateRamPie(breakdown) {
 
     ramPieLegend.innerHTML = '';
     breakdown.forEach((seg, i) => {
-        const isKv = colors[i] === hslForServer(seg.serverName, true) && i > 0;
-        const segIdx = breakdown.slice(0, i).filter(s => s.serverName === seg.serverName).length;
-        const kvRow  = segIdx > 0;
+        const kvRow  = seg.kind === 'kv';
         const row = document.createElement('div');
         row.className = 'pie-legend-row';
         if (kvRow) row.style.cssText = 'padding-left:4px;';
@@ -5990,18 +5984,24 @@ async function loadLazyServices() {
     try { const r = await cpFetch('/api/v1/admin/lazyServices'); if (r.ok) rows = await r.json(); } catch {}
     if (!rows.length) { box.innerHTML = '<span style="color:var(--text-dim);">Nothing here on this install.</span>'; return; }
     const head = t => `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);">${t}</div>`;
-    box.innerHTML = head('Service') + head('Now') + head('Unload after idle for') + '<div></div>' + rows.map(r => {
+    box.innerHTML = head('Service') + head('Now') + head('Load when first needed') + head('Unload after idle for') + '<div></div>' + rows.map(r => {
         const state = !r.enabled ? 'Off' : r.running ? 'Loaded' : 'Unloaded';
         const col = r.running ? 'var(--accent)' : 'var(--text-dim)';
         return `<div>${escHtml(r.name)}</div>
           <div style="color:${col};font-weight:600;">${state}</div>
-          <div><input type="number" min="1" max="1440" value="${r.idleMinutes}" data-lazy="${r.id}" style="width:80px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"> minutes</div>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" data-lazy-ondemand="${r.id}" ${r.onDemand ? 'checked' : ''}> <span style="color:var(--text-dim);font-size:12px;">${r.onDemand ? 'Yes' : 'No, stays loaded'}</span></label>
+          <div><input type="number" min="1" max="1440" value="${r.idleMinutes}" data-lazy="${r.id}" ${r.onDemand ? '' : 'disabled'} style="width:80px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"> minutes</div>
           <button class="vs-btn-primary" type="button" data-lazy-save="${r.id}" style="font-size:12px;padding:4px 12px;">Save</button>`;
     }).join('');
+    box.querySelectorAll('[data-lazy-ondemand]').forEach(c => c.addEventListener('change', () => {
+        box.querySelector(`[data-lazy="${c.dataset.lazyOndemand}"]`).disabled = !c.checked;
+        c.nextElementSibling.textContent = c.checked ? 'Yes' : 'No, stays loaded';
+    }));
     box.querySelectorAll('[data-lazy-save]').forEach(b => b.addEventListener('click', async () => {
         const id = b.dataset.lazySave, v = parseInt(box.querySelector(`[data-lazy="${id}"]`).value, 10);
+        const onDemand = box.querySelector(`[data-lazy-ondemand="${id}"]`).checked;
         const st = document.getElementById('lazy-status');
-        const r = await cpFetch('/api/v1/admin/lazyServices', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, idleMinutes: v }) });
+        const r = await cpFetch('/api/v1/admin/lazyServices', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, idleMinutes: v, onDemand }) });
         st.textContent = r.ok ? 'Saved. Applies when ARI next starts.' : ((await r.json().catch(() => ({}))).error || 'Save failed.');
         setTimeout(() => st.textContent = '', 5000);
     }));
@@ -6471,8 +6471,20 @@ function renderRamEstimate(box, draft) {
 }
 
 // ── Machine memory bar, lanes, logs, import/export, sampler profiles ──
-let srvUsableMb = null, srvHwTried = false, srvAgentList = null;
+let srvUsableMb = null, srvHwTried = false, srvAgentList = null, srvMeasured = {};
 async function srvLoadExtras() {
+    // Measured weights and KV cache of the servers that are running, by server name; the rest of the bar stays an estimate.
+    try {
+        const r = await cpFetch('/api/v1/admin/system/ram');
+        if (r.ok) {
+            const b = (await r.json()).breakdown ?? [];
+            srvMeasured = {};
+            b.filter(x => x.kind === 'weights' || x.kind === 'kv').forEach(x => {
+                const m = srvMeasured[x.serverName] ??= { weightsMb: 0, kvMb: 0 };
+                if (x.kind === 'weights') m.weightsMb += x.mb; else m.kvMb += x.mb;
+            });
+        }
+    } catch {}
     if (!srvHwTried) {
         srvHwTried = true;
         try { const r = await cpFetch('/api/v1/admin/system/hardware'); if (r.ok) srvUsableMb = Math.round((await r.json()).usableBytes / 1048576); } catch {}
@@ -6489,23 +6501,26 @@ function renderMachinePanel(servers) {
     const local = servers.filter(srvIsLocal);
     if (!local.length) { box.innerHTML = ''; return; }
     const parts = [];
-    local.forEach((s, i) => {
-        const { weightsMb, kvMb } = srvRamParts(s);
-        buildServerHues(local.map(x => x.name));
+    buildServerHues(local.map(x => x.name));
+    let measuredCount = 0;
+    local.forEach(s => {
+        const measured = srvMeasured[s.name];
+        if (measured) measuredCount++;
+        const { weightsMb, kvMb } = measured ?? srvRamParts(s);
         if (weightsMb > 0) parts.push({ label: s.name + ' weights', mb: weightsMb, color: hslForServer(s.name, false) });
         if (kvMb) parts.push({ label: s.name + ' KV cache', mb: kvMb, color: hslForServer(s.name, true) });
-        if (s.cacheRamMib > 0) parts.push({ label: s.name + ' prompt cache', mb: s.cacheRamMib, color: 'var(--border)' });
+        if (!measured && s.cacheRamMib > 0) parts.push({ label: s.name + ' prompt cache', mb: s.cacheRamMib, color: 'var(--border)' });
     });
     const used = parts.reduce((a, p) => a + p.mb, 0);
     const limit = srvUsableMb ?? 0;
     const scale = Math.max(limit, used) || 1;
     const over = limit > 0 && used > limit * 0.9;
-    const unknown = local.filter(s => !srvRamParts(s).weightsMb).map(s => s.name);
+    const unknown = local.filter(s => !srvMeasured[s.name] && !srvRamParts(s).weightsMb).map(s => s.name);
     box.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;">
         <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;"><b>Memory this machine can use for models</b><span style="color:var(--text-dim);">${limit ? fmtRamMb(limit) : 'unknown'}</span></div>
         <div style="display:flex;height:24px;border-radius:6px;overflow:hidden;border:1px solid var(--border);">${parts.map(p => `<i title="${escHtml(p.label)} ${fmtRamMb(p.mb)}" style="display:block;height:100%;width:${(p.mb / scale * 100).toFixed(2)}%;background:${p.color};"></i>`).join('')}</div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--text-dim);">${parts.map(p => `<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;background:${p.color};"></span>${escHtml(p.label)} ${fmtRamMb(p.mb)}</span>`).join('')}<span>${limit ? 'free ' + fmtRamMb(Math.max(0, limit - used)) : ''}</span></div>
-        <div style="font-size:12px;color:${over ? 'var(--col-control-panel-line-4234-colour)' : 'var(--text-dim)'};">${over ? `<b>This probably won't fit.</b> The servers add up to about ${fmtRamMb(used)}, over 90% of the ${fmtRamMb(limit)} available. Lower a context size, use a smaller KV precision or a smaller model, or stop a server. ` : ''}An estimate from model file size and context, not a measurement.${unknown.length ? ' No size known for: ' + escHtml(unknown.join(', ')) + '.' : ''}</div></div>`;
+        <div style="font-size:12px;color:${over ? 'var(--col-control-panel-line-4234-colour)' : 'var(--text-dim)'};">${over ? `<b>This probably won't fit.</b> The servers add up to about ${fmtRamMb(used)}, over 90% of the ${fmtRamMb(limit)} available. Lower a context size, use a smaller KV precision or a smaller model, or stop a server. ` : ''}${measuredCount === local.length ? 'Measured from the running servers.' : measuredCount ? 'Measured for running servers; estimated from model file size and context for the others.' : 'An estimate from model file size and context, not a measurement.'}${unknown.length ? ' No size known for: ' + escHtml(unknown.join(', ')) + '.' : ''}</div></div>`;
 }
 
 // Each slot as a lane, with the agents that use it.

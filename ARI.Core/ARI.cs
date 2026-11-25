@@ -398,11 +398,20 @@ public class ARI : BackgroundService, IModuleLifecycle
             return;
         }
         synthesiser = engineSynthesiser;
-        // An on-demand engine isn't running yet; warming it up here would start it and defeat the point.
         if (!synthesiser.LoadsOnDemand)
         {
             try { await synthesiser.Warmup(appStoppingToken); }
             catch (Exception ex) { _logger.LogError("Voice warmup failed (model may have corrupt weights): {Error}", ex.Message); }
+        }
+        else if (synthesiser is VoiceModuleSynthesiser onDemand)
+        {
+            // Start it once in the background so anything it downloads on first use arrives now, not mid-conversation; it
+            // unloads again after its idle time.
+            _ = Task.Run(async () =>
+            {
+                try { await onDemand.Prime(appStoppingToken); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { _logger.LogWarning("Voice engine couldn't be prepared at startup: {Error}", ex.Message); }
+            });
         }
 
         speechQueue = new SpeechQueue(synthesiser, voiceLogger);
@@ -415,8 +424,8 @@ public class ARI : BackgroundService, IModuleLifecycle
         voiceModule = new VoiceModule(synthesiser, speechQueue, modelName, SynthFactory, WireAudio, voiceLogger);
         CommonModules.Register(voice: voiceModule);
         _logger.LogInformation(synthesiser.LoadsOnDemand
-            ? "Voice ready (engine loads on first use, stops after {Minutes} min idle)."
-            : "Voice ready.", config.modules.Voice.IdleStopMinutes);
+            ? "Voice ready (engine loads when needed, stops after {Minutes} min idle; preparing it once now)."
+            : "Voice ready (engine stays loaded).", config.modules.Voice.IdleStopMinutes);
     }
 
     private void StopVoice()
@@ -483,7 +492,12 @@ public class ARI : BackgroundService, IModuleLifecycle
             {
                 imageGenModule = new ImageGenModule(config.modules.ImageGen);
                 CommonModules.Register(imageGen: imageGenModule);
-                _logger.LogInformation("ImageGen ready.");
+                if (!config.modules.ImageGen.IsRemote && config.modules.ImageGen.IdleSeconds <= 0)
+                {
+                    await imageGenModule.WarmAsync(appStoppingToken);
+                    _logger.LogInformation("ImageGen ready (ComfyUI stays loaded).");
+                }
+                else _logger.LogInformation("ImageGen ready (ComfyUI loads when needed).");
             }
             else
             {
