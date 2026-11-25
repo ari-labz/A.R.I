@@ -9,7 +9,8 @@ using System.IO.Compression;
 namespace ARI.Core;
 
 /// <summary>
-/// Updates ARI on her own, with no Installer and no one at the machine. Five minutes after start and then each hour, when
+/// Updates ARI on her own, with no Installer and no one at the machine. Five minutes after start and then each hour (or at once
+/// after "Check now" in the control panel), when
 /// "Update automatically" is on, this isn't a dev run and the server runs from an install ({base}/server/{version}), it
 /// looks for a newer release (stable, or a 0.x pre-release). It downloads and unpacks it next to the running version, then
 /// waits until nothing has been generating and nothing is waiting to be saved to the brain for ten minutes (dreams don't
@@ -44,16 +45,18 @@ internal static class AutoUpdate
         {
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(5), stop);
+                await AutoUpdateStore.WaitForNextCheck(TimeSpan.FromMinutes(5), stop);
                 while (!stop.IsCancellationRequested)
                 {
+                    AutoUpdateStore.Busy = true;
                     try { if (await TryUpdate(llm, lifetime, apiPort, log, stop)) return; }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         log.LogWarning("[AutoUpdate] {Err}", ex.Message);
                         AutoUpdateStore.Update(s => { s.LastResult = $"Update failed: {ex.Message}"; s.LastAt = DateTime.UtcNow; });
                     }
-                    await Task.Delay(CheckEvery, stop);
+                    finally { AutoUpdateStore.Busy = false; }
+                    await AutoUpdateStore.WaitForNextCheck(CheckEvery, stop);   // "Check now" in the control panel cuts this short
                 }
             }
             catch (OperationCanceledException) { }

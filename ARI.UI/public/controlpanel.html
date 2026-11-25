@@ -1415,7 +1415,8 @@ body.cp-win32 #cp-win-controls { display: flex; }
       <div class="vs-section" style="margin-top:24px;">
         <div class="vs-section-title">Updates</div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;"><input type="checkbox" id="au-enabled"> Update automatically</label>
-        <p style="color:var(--text-dim);font-size:13px;margin:6px 0 0;">When a new version is out, ARI downloads it, waits until she has been idle for ten minutes with nothing waiting to be saved to memory (dreams don't count), switches over and starts again on her own. If the new version doesn't start, she goes back to the old one.</p>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;"><button class="vs-btn-primary" type="button" id="au-check" style="font-size:12px;padding:4px 12px;">Check now</button><span id="au-check-status" style="font-size:12px;color:var(--text-dim);"></span></div>
+        <p style="color:var(--text-dim);font-size:13px;margin:6px 0 0;">She checks for a new version five minutes after starting and then every hour; Check now looks straight away. When a new version is out, ARI downloads it, waits until she has been idle for ten minutes with nothing waiting to be saved to memory (dreams don't count), switches over and starts again on her own. If the new version doesn't start, she goes back to the old one.</p>
         <div id="au-status" style="font-size:12px;color:var(--text-dim);margin-top:6px;"></div>
       </div>
     
@@ -6022,6 +6023,16 @@ async function loadAutoUpdate() {
         box.dataset.wired = '1';
         box.addEventListener('change', async () => {
             await cpFetch('/api/v1/admin/autoUpdate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: box.checked }) });
+            loadAutoUpdate();
+        });
+        const btn = document.getElementById('au-check'), cst = document.getElementById('au-check-status');
+        btn.addEventListener('click', async () => {
+            btn.disabled = true; cst.textContent = 'Checking…';
+            try {
+                const r = await cpFetch('/api/v1/admin/autoUpdate/check', { method: 'POST' });
+                cst.textContent = r.ok ? (await r.json()).message : 'Check failed.';
+            } catch { cst.textContent = 'Check failed.'; }
+            btn.disabled = false;
             loadAutoUpdate();
         });
     }
