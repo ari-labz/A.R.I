@@ -468,7 +468,7 @@ public abstract class Agent
     /// <summary>The phase while a tool runs.</summary>
     private static ThreadPhase ToolPhase(string name, string argsJson) => name switch
     {
-        "search_web" or "fetch_page" => ThreadPhase.Researching,
+        _ when WebRoles.IsWeb(name)  => ThreadPhase.Researching,
         "generate_image"             => ThreadPhase.Generating,
         "wait_for_agent"             => ThreadPhase.Waiting,
         _ when PluginTools.Find(name)?.Tool.Waits?.Invoke(argsJson) == true => ThreadPhase.Waiting,
@@ -533,9 +533,9 @@ public abstract class Agent
         internal int ToolCallCount;
         // Searching and reading are budgeted apart — see the research gate in ExecuteTools.
         internal int  ProductiveSearches;    // searches that actually returned something usable
-        internal int  PagesRead;             // fetch_page calls this turn
+        internal int  PagesRead;             // page reads (fetch_page) this turn
         internal bool SearchSoftGateFired;
-        internal bool SearchBlocked;         // search_web withdrawn from the schema
+        internal bool SearchBlocked;         // web search tools withdrawn from the schema
         internal bool ReadBlocked;           // fetch_page withdrawn from the schema
         internal int ParseFailures;
         internal int ConsecutiveFallbacks;
@@ -1052,8 +1052,8 @@ public abstract class Agent
             {
                 // Hard research gate: withdraw whichever half of the web tools is spent, so reading
                 // survives a search block and she can still finish the job from what she already found.
-                if (turn.SearchBlocked && name == "search_web") continue;
-                if (turn.ReadBlocked   && name == "fetch_page") continue;
+                if (turn.SearchBlocked && WebRoles.IsSearch(name)) continue;
+                if (turn.ReadBlocked   && WebRoles.IsRead(name)) continue;
                 if (!MayUse(thread, name)) continue;
                 schemas.Add(tool.Schema);
             }
@@ -1885,7 +1885,7 @@ public abstract class Agent
 
         bool productiveBatch   = false;
         bool batchRevealedCard = false;
-        turn.ReadingWebResults = turn.PendingCalls.Values.Any(c => c.Name is "search_web" or "fetch_page");
+        turn.ReadingWebResults = turn.PendingCalls.Values.Any(c => WebRoles.IsWeb(c.Name));
 
         foreach ((int callIndex, (string Id, string Name, StringBuilder Args) call) in turn.PendingCalls)
         {
@@ -1958,11 +1958,11 @@ public abstract class Agent
                 }
 
                 // Collect web sources for DTI display.
-                if (call.Name is "search_web" or "fetch_page")
+                if (WebRoles.IsWeb(call.Name))
                 {
                     string? sourceUrl = null;
                     string? sourceContent = null;
-                    if (call.Name == "fetch_page")
+                    if (WebRoles.IsRead(call.Name))
                     {
                         try
                         {
@@ -1972,7 +1972,7 @@ public abstract class Agent
                         }
                         catch (Exception ex) { Shared.Logger.LogDebug("[{Agent}] Could not parse fetch_page args for web source: {Error}", Name, ex.Message); }
                     }
-                    else if (call.Name == "search_web")
+                    else
                     {
                         try
                         {
@@ -1980,10 +1980,10 @@ public abstract class Agent
                             string? searchQuery = searchArgsDoc.RootElement.TryGetProperty("query", out JsonElement queryProp) ? queryProp.GetString() : null;
                             if (searchQuery is not null) sourceUrl = $"search: {searchQuery}";
                         }
-                        catch (Exception ex) { Shared.Logger.LogDebug("[{Agent}] Could not parse search_web args for web source: {Error}", Name, ex.Message); }
+                        catch (Exception ex) { Shared.Logger.LogDebug("[{Agent}] Could not parse {Tool} args for web source: {Error}", Name, call.Name, ex.Message); }
 
                         // Only count searches that returned something — empty or irrelevant results don't burn the budget.
-                        if (!result.StartsWith(SearchWeb.NoRelevantPrefix, StringComparison.Ordinal)
+                        if (!result.StartsWith(WebRoles.NoRelevantPrefix, StringComparison.Ordinal)
                             && !result.StartsWith("Search unavailable", StringComparison.Ordinal)
                             && !result.StartsWith("No results", StringComparison.Ordinal))
                             turn.ProductiveSearches++;
@@ -2143,7 +2143,7 @@ public abstract class Agent
         // ── Research confidence gate ─────────────────────────────────────────────
         // Searching is kept tight because that is what gets rate limited and what she spirals on.
         // Reading is left generous because that is how answers actually get built.
-        int readsThisBatch = turn.PendingCalls.Values.Count(c => c.Name == "fetch_page");
+        int readsThisBatch = turn.PendingCalls.Values.Count(c => WebRoles.IsRead(c.Name));
         turn.PagesRead += readsThisBatch;
 
         if (!turn.SearchBlocked && turn.ProductiveSearches >= ResearchGate.SEARCH_HARD_LIMIT)
@@ -2154,7 +2154,7 @@ public abstract class Agent
                 "You may still read pages you have already found. Answer from what you have gathered; say plainly which parts " +
                 "you could not confirm rather than apologising or padding. Writing to the user ends the turn, so give the " +
                 "whole answer now — do not stall for time or promise to finish later, because there is no later." });
-            Shared.Logger.LogInformation("[{Agent}] ({Thread}) search hard gate fired ({N} productive searches) — search_web withdrawn.",
+            Shared.Logger.LogInformation("[{Agent}] ({Thread}) search hard gate fired ({N} productive searches) — web search withdrawn.",
                 Name, thread.Key, turn.ProductiveSearches);
         }
         else if (!turn.SearchBlocked && turn.ProductiveSearches >= ResearchGate.SEARCH_SOFT_LIMIT && !turn.SearchSoftGateFired)

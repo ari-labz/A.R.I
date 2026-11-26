@@ -92,12 +92,12 @@ public static class ToolRegistry
     private static readonly HashSet<string> DefaultPinned = new(StringComparer.OrdinalIgnoreCase)
     {
         "read_file", "write_file", "edit_file", "list_directory", "search_files", "find_files", "deliver_file", "jobs",
-        "search_web", "fetch_page", "shell", "run_code", "todo", "show_visual", "search_brain", "recall_memory", "ask_memory",
+        "fetch_page", "shell", "run_code", "todo", "show_visual", "search_brain", "recall_memory", "ask_memory",
     };
 
     internal static bool IsPinned(string name)
     {
-        lock (Lock) return Load().TryGetValue(name, out ToolSetting? s) && s.Pinned is { } p ? p : DefaultPinned.Contains(name);
+        lock (Lock) return Load().TryGetValue(name, out ToolSetting? s) && s.Pinned is { } p ? p : DefaultPinned.Contains(name) || WebRoles.IsSearch(name);
     }
 
     /// <summary>Pinned tools, in a fixed order so the prompt Ari starts with is the same every time and stays cached.</summary>

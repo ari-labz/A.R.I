@@ -38,12 +38,14 @@ internal static class SubagentManager
         "plan_proposed", "start_build", "replan", "wake",
     };
 
-    // Given when spawn_agent names no tools: look, don't touch.
+    // Given when spawn_agent names no tools: look, don't touch. Plus any web search tool a plugin provides (see DefaultToolsNow).
     private static readonly string[] DefaultTools =
     {
         "read_file", "preview_file", "list_directory", "search_files", "find_files",
-        "search_web", "fetch_page", "search_brain", "recall_memory", "get_time",
+        "fetch_page", "search_brain", "recall_memory", "get_time",
     };
+
+    private static string[] DefaultToolsNow => DefaultTools.Concat(WebRoles.SearchTools()).ToArray();
 
     internal sealed class Run
     {
@@ -136,7 +138,7 @@ internal static class SubagentManager
     private static (List<string> Given, List<string> Refused) InheritTools(Thread parent, Thread child, IReadOnlyList<string>? requested)
     {
         bool explicitList = requested is { Count: > 0 };
-        IEnumerable<string> wanted = explicitList ? requested! : DefaultTools;
+        IEnumerable<string> wanted = explicitList ? requested! : DefaultToolsNow;
         List<string> given = new(), refused = new();
         foreach (string name in wanted.Distinct(StringComparer.Ordinal))
         {

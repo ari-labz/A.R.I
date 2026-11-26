@@ -76,9 +76,8 @@
       ]
     },
     "web_tools": {
-      "Description": "Search the web and read web pages. Use for current events, factual lookups, or anything time-sensitive.",
+      "Description": "Read web pages and fetch from the web. To search the web, use the Web Search plugin's search_web.",
       "Tools": [
-        "search_web",
         "fetch_page",
         "http_request",
         "download_file"

@@ -22,6 +22,10 @@ public sealed class ToolAttribute(string name, string description) : Attribute
     /// <summary>Replace the built-in tool of the same name. A forked copy of a built-in sets this; delete the file to get the original back.</summary>
     public bool Overrides { get; set; }
 
+    /// <summary>How the chat draws a call, for a tool that does a job ARI knows about. "web_search": a web search; it gets the search card,
+    /// counts against the search budget and its results become sources (start a result with "No relevant results for" when nothing matched).</summary>
+    public string? Card { get; set; }
+
     /// <summary>Stop a call that takes longer than this. Ignored for async tools.</summary>
     public int TimeoutSeconds { get; set; } = 120;
 }

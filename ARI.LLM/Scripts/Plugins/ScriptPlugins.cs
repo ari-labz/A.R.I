@@ -383,17 +383,18 @@ public static class ScriptPlugins
             ToolAttribute attr = t.GetCustomAttribute<ToolAttribute>()!;
             object schema = ToolParams.Schema(attr.Name, attr.Description, ToolParams.Describe(t));
             int timeout = Math.Clamp(attr.TimeoutSeconds, 1, 3600);
-            plugin.ProvidedTools.Add(new ProvidedTool(attr.Name, attr.Description, thread => new PluginToolHost(attr.Name, t, schema, attr.Access, timeout, thread)));
+            plugin.ProvidedTools.Add(new ProvidedTool(attr.Name, attr.Description, thread => new PluginToolHost(attr.Name, t, schema, attr.Access, timeout, thread, attr.Card), attr.Card));
         }
         return (new Loaded { Plugin = plugin, Alc = alc, Hash = hash }, diags);
     }
 
     /// <summary>What gets registered on a thread for a plugin's tool: it makes a fresh instance of the tool's class for every call, so calls never share fields.</summary>
-    private sealed class PluginToolHost(string name, Type type, object schema, ToolAccess access, int timeoutSeconds, Thread thread) : Tool
+    private sealed class PluginToolHost(string name, Type type, object schema, ToolAccess access, int timeoutSeconds, Thread thread, string? card = null) : Tool
     {
         internal override string Name => name;
         internal override object Schema => schema;
         internal override ToolAccess Access => access;
+        internal override Func<string, string>? Display => card == WebRoles.SearchCard ? args => WebSearching.Starting(name, args) : null;
 
         internal override Task<ToolResult> Execute(string argsJson)
         {

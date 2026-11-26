@@ -5,7 +5,6 @@ using CommonModules = ARI.Common.Modules;
 using ARI.Core.Scripts;
 using Dependency    = ARI.Core.Scripts.Dependency;
 using ARI.LLM;
-using LLMDependency = ARI.LLM.Dependency;
 using ARI.Voice;
 using ARI.VoiceSynthesis;
 using ARI.API;
@@ -216,8 +215,6 @@ public class ARI : BackgroundService, IModuleLifecycle
 
     private void CreateLlmModule()
     {
-        LLMDependency.StartSearXng();
-
         BrainConfig? brainConfig = config.modules.Brain?.Enabled == true ? config.modules.Brain : null;
 
         _logger.LogInformation("Loading agents...");
@@ -676,7 +673,6 @@ public class ARI : BackgroundService, IModuleLifecycle
         Step("calendar",     () => calendarModule?.Dispose());
         Step("LLM servers",  () => { llmModule?.StopAllServersAsync(); llmModule?.Dispose(); });
         Step("image generation", () => imageGenModule?.Shutdown());
-        Step("SearXNG",      LLMDependency.StopSearXng);
 
         if (apiModule is not null)
             await apiModule.Stop(cancellationToken);

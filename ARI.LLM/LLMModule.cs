@@ -404,7 +404,7 @@ public class LLMModule : ILLMModule, IDisposable
                     "- Recall your memories (facts, people, past conversations): search_brain to find notes by title/content (returns title — path), then recall_memory to read the full note\n" +
                     "- Browse your projects: list_projects, then bind_project — filesystem tools (read_file, list_directory, search_files, etc.) unlock in the same step\n" +
                     "- Switch projects freely: call bind_project again with a different id\n" +
-                    "- Search the web: search_web, fetch_page\n" +
+                    "- Read web pages: fetch_page (and search the web with search_web, when the Web Search plugin is on)\n" +
                     "- Search an Obsidian note vault: search_vault — only useful if the bound project is an Obsidian graph, not a code repo; calling it on code will return nothing\n" +
                     "- Check the current time: get_time — the time was already given to you at the start of this dream, but call this again if the dream has run long and you want a fresh read before waking\n" +
                     "- Check when your master actually last messaged you: recent_activity — reads real conversation timestamps, not your memory notes (which can lag hours behind an actual conversation). Your memory notes going quiet does NOT mean your owner has gone quiet — call recent_activity before saying or implying 'you've been quiet' or 'it's been a while,' and only use that framing if it confirms a real gap\n\n" +

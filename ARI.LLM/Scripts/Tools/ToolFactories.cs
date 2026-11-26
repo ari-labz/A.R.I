@@ -95,7 +95,6 @@ internal static class ToolFactories
         ["recent_activity"] = _ => new RecentActivity(),
 
         // Web tools — always available regardless of project/vault context.
-        ["search_web"]  = _ => new SearchWeb(),
         ["fetch_page"]  = _ => new FetchPage(),
 
 

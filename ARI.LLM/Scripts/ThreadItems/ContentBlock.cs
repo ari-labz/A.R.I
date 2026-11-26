@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
@@ -199,7 +200,6 @@ public abstract class ContentBlock
         "preview_file"   => new Previewing(),
         "list_directory" => new Listing(),
         "search_files"   => new Searching(),
-        "search_web"     => new WebSearching(),
         "fetch_page"     => new Browsing(),
         "edit_file"      => new Editing(),
         "edit_files"     => new Editing(),
@@ -219,9 +219,11 @@ public abstract class ContentBlock
 
     private static Card? FromPlugin(string name) => PluginTools.Find(name)?.Tool.Card switch
     {
-        "messaging" => new MessagingUser { Tool = name },
-        "closing"   => new ClosingDm { Tool = name },
-        _           => null
+        "messaging"          => new MessagingUser { Tool = name },
+        "closing"            => new ClosingDm { Tool = name },
+        WebRoles.SearchCard  => new WebSearching { Tool = name },
+        // search_web was built in before web search became a plugin: saved threads still show its card when the plugin isn't installed.
+        _                    => name == "search_web" ? new WebSearching { Tool = name } : null
     };
 
     private static Card? FromVerb(string verb) => verb switch
@@ -365,8 +367,22 @@ public sealed class WebSearching : Card
     public int    Results         { get; set; } = -1;   // -1 = not known yet (still streaming)
     public int    EnginesDown     { get; set; }
     public bool   NothingRelevant { get; set; }
+    public string Tool            { get; set; } = "search_web";
 
-    protected override string ToolName => "search_web";
+    protected override string ToolName => Tool;
+
+    /// <summary>The streaming marker for a search tool's call, from its arguments ({"query": …}).</summary>
+    internal static string Starting(string tool, string argsJson)
+    {
+        string query = "";
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
+            if (doc.RootElement.TryGetProperty("query", out JsonElement q)) query = q.GetString() ?? "";
+        }
+        catch { }
+        return new WebSearching { Tool = tool, Query = query }.Render();
+    }
     protected override (string, string) Verbs => ("Searching the web", "Searched");
     protected override string Label => Query;
 
@@ -385,7 +401,7 @@ public sealed class WebSearching : Card
 
     public override void Flip(string result)
     {
-        NothingRelevant = result.StartsWith(SearchWeb.NoRelevantPrefix, StringComparison.Ordinal);
+        NothingRelevant = result.StartsWith(WebRoles.NoRelevantPrefix, StringComparison.Ordinal);
 
         // Results are numbered "[1] Title" — count the markers rather than re-parsing the whole payload.
         int count = 0;
