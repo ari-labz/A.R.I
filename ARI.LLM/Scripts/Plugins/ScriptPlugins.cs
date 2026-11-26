@@ -293,7 +293,7 @@ public static class ScriptPlugins
             if (loaded is null)
             {
                 failed[id] = diags;   // keep the last good version running, if there was one
-                Shared.Logger.LogWarning("[ScriptPlugins] {Id} didn't compile: {First}", id, diags.FirstOrDefault()?.Message ?? "unknown");
+                Shared.Logger.LogWarning("[ScriptPlugins] {Id} didn't compile: {First}", id, (diags.FirstOrDefault(d => d.Severity == "Error") ?? diags.FirstOrDefault())?.Message ?? "unknown");
                 return;
             }
             failed.TryRemove(id, out _);
