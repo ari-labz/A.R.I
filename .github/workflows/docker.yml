@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Only SmartReader is needed to build; the voice-engine submodules are ~1 GB and stay out of the image.
-      - run: git submodule update --init --depth 1 Submodules/SmartReader
+      - run: git submodule update --init --depth 1 Submodules/WebReader
 
       # A release tag's number wins over manifest.json, and is written into it so the server inside reports it too.
       - id: meta

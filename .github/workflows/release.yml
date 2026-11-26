@@ -53,7 +53,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: git submodule update --init --depth 1 Submodules/SmartReader
+      - run: git submodule update --init --depth 1 Submodules/WebReader
 
       - name: Sync tag version into the build file
         run: |

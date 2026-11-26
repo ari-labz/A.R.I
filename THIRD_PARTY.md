@@ -44,6 +44,7 @@ license — A·R·I does not bundle one.
 | [.NET](https://github.com/dotnet/runtime) | Runtime | MIT |
 | [Discord.Net](https://github.com/discord-net/Discord.Net) | Discord integration | MIT |
 | [Serilog](https://github.com/serilog/serilog) | Logging | Apache-2.0 |
+| [SmartReader](https://github.com/Strumenta/SmartReader) (via [a fork](https://github.com/ari-labz/WebReader)), a C# port of Mozilla [Readability](https://github.com/mozilla/readability) | Reads the article text out of a web page | Apache-2.0 |
 | [YamlDotNet](https://github.com/aaubry/YamlDotNet) | YAML parsing | MIT |
 | [Cronos](https://github.com/HangfireIO/Cronos) | Cron scheduling | MIT |
 | [WebPush](https://github.com/web-push-libs/web-push-csharp) | Web Push notifications | MPL-2.0 |
