@@ -166,7 +166,9 @@ public class Server : IDisposable
     [JsonPropertyName("cacheRamMib")]
     public int CacheRamMib { get; set; } = 8192;
 
-    /// <summary>MTP drafting: most tokens to draft per step (--spec-draft-n-max). Only used for MTP models.</summary>
+    /// <summary>MTP drafting: most tokens to draft per step (--spec-draft-n-max). Only used for MTP models. 0 turns MTP off for this
+    /// server even when the model file has an MTP head (some models carry one that doesn't work, and drafting with two slots can crash
+    /// llama-server).</summary>
     [JsonPropertyName("mtpDraftMax")]
     public int MtpDraftMax { get; set; } = 3;
 
@@ -269,6 +271,7 @@ public class Server : IDisposable
 
         StartError = null;
         Status = ServerStatus.Starting;
+        Interlocked.Increment(ref lifecycle);
         _modelsPath = modelsPath;
         _serverDir  = Paths.PersistentData;
         ActiveModel = model;
@@ -315,11 +318,63 @@ public class Server : IDisposable
 
         Status = ServerStatus.Online;
         Log.LogInformation("[{Server}] Online (PID {Pid}, K{K}/V {V}).", Name, Pid, KvQuantLabel(KvCacheQuantK), KvQuantLabel(bootedV));
+        if (_process is { } running) _ = WatchForCrashAsync(running);
+    }
+
+    // ── Crash recovery ───────────────────────────────────────────────────────────
+
+    private static readonly TimeSpan[] CrashBackoff = [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2)];
+    private const int MAX_CRASHES = 5;                                       // within CRASH_WINDOW, then it stays down
+    private static readonly TimeSpan CRASH_WINDOW = TimeSpan.FromMinutes(15);
+    private readonly List<DateTime> crashes = new();
+    private int lifecycle;                                                   // bumped by every start and stop, so a pending restart can tell it was overtaken
+
+    /// <summary>Restarts llama-server when it dies on its own (a crash inside llama.cpp, killed for memory), never when ARI stopped
+    /// it: <see cref="Stop"/> replaces <see cref="_process"/> and moves the status off Online first, so an exit then is ignored. Waits
+    /// longer after each crash, and after <see cref="MAX_CRASHES"/> in <see cref="CRASH_WINDOW"/> leaves it down with the reason on
+    /// its card, so a model that can't run doesn't restart forever.</summary>
+    private async Task WatchForCrashAsync(Process watched)
+    {
+        try { await watched.WaitForExitAsync(); } catch { return; }
+        if (!ReferenceEquals(watched, _process) || Status != ServerStatus.Online) return;   // stopped, restarted or changed on purpose
+
+        int code = -1;
+        try { code = watched.ExitCode; } catch { }
+        Model? model = ActiveModel;
+        Log.LogError("[{Server}] llama-server exited unexpectedly (exit code {Code}); see Logs/llama-{Server}.log.", Name, code, Name);
+        KillProcess();
+        Status = ServerStatus.Offline;
+
+        DateTime now = DateTime.UtcNow;
+        crashes.RemoveAll(t => now - t > CRASH_WINDOW);
+        crashes.Add(now);
+        if (crashes.Count > MAX_CRASHES || model is null)
+        {
+            StartError = $"llama-server crashed {crashes.Count} times in {CRASH_WINDOW.TotalMinutes:0} minutes; not restarting. See Logs/llama-{Name}.log.";
+            Log.LogError("[{Server}] {Reason}", Name, StartError);
+            return;
+        }
+
+        TimeSpan wait = CrashBackoff[Math.Min(crashes.Count - 1, CrashBackoff.Length - 1)];
+        StartError = $"llama-server crashed (exit code {code}); restarting in {wait.TotalSeconds:0} s.";
+        Log.LogWarning("[{Server}] Restarting in {Seconds} s (crash {N} in the last {Minutes} min).", Name, wait.TotalSeconds, crashes.Count, CRASH_WINDOW.TotalMinutes);
+        int before = lifecycle;
+        await Task.Delay(wait);
+        if (lifecycle != before || Status != ServerStatus.Offline) return;   // someone started, stopped or changed it meanwhile
+
+        try { await StartAsync(model, _modelsPath); }
+        catch (Exception ex)
+        {
+            StartError = $"Restart after a crash failed: {ex.Message}";
+            Status = ServerStatus.Offline;
+            Log.LogError("[{Server}] {Reason}", Name, StartError);
+        }
     }
 
     public void Stop()
     {
         Status = ServerStatus.Stopping;
+        Interlocked.Increment(ref lifecycle);
         Log.LogInformation("[{Server}] Stopping...", Name);
 
         KillProcess();
@@ -495,7 +550,7 @@ public class Server : IDisposable
         string kvQuantV = KvQuantLabel(vQuantOverride ?? KvCacheQuantV);
 
         bool jinja = model?.Jinja ?? true;
-        bool mtp = model?.MTP ?? false;
+        bool mtp = (model?.MTP ?? false) && MtpDraftMax > 0;
         // llama-server deprecated repeating --dry-sequence-breaker (comma-separated now); the default
         // set itself contains raw '"' and '\n', which mangle a shell-joined argument string either way.
         // Cheapest correct fix: omit the flag entirely for the default set (llama.cpp's own built-in
