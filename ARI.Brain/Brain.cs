@@ -136,6 +136,8 @@ public static class Brain
 
     public static List<string> GetPaths() => Database.AllPaths();
 
+    public static IEnumerable<Note> AllNotes() => Database.AllNotes();
+
     public static List<string> GetTitlesByFolder(string folderPath) => Database.TitlesInFolder(folderPath);
 
     public static Dictionary<string, List<string>> GetAliases()
@@ -219,6 +221,30 @@ public static class Brain
     }
 
     // ── Thoughts (margin annotations) ───────────────────────────────────────────────
+
+    /// <summary>A note body with every margin thought taken out (and the "needs re-anchoring" list they fall into), plus the thoughts,
+    /// each with the text it was anchored to. For moving text between notes: the caller puts each thought back beside its fact.</summary>
+    public static (string Body, List<ThoughtRecord> Thoughts) TakeThoughts(string body)
+    {
+        (string stripped, List<Note.ParsedThought> removed) = Note.StripThoughts(body);
+        stripped = Regex.Replace(stripped, @"(?m)^\s*- Was anchored to: "".*""\s*\n?", "");
+        stripped = Regex.Replace(stripped, @"(?m)^## Ari's Thoughts \(needs re-anchoring\)\s*\n?", "");
+        Regex orphan = new(@"^Was anchored to: ""(.*)""$");
+        return (Regex.Replace(stripped, @"\n{3,}", "\n\n").Trim(),
+                removed.Select(t => new ThoughtRecord(t.Kind, orphan.Match(t.SpanText) is { Success: true } m ? m.Groups[1].Value : t.SpanText, t.Comment, t.Confidence, t.Created)).ToList());
+    }
+
+    /// <summary>Puts one margin thought back under the line holding its anchor text, or in the "needs re-anchoring" list when that text isn't there.</summary>
+    public static string PlaceThought(string body, ThoughtRecord t) => Note.InsertThought(body, new Note.ParsedThought(t.Kind, t.SpanText, t.Comment, t.Confidence, t.Created));
+
+    /// <summary>Replaces a note's body exactly as given: its metadata stays, and thoughts are NOT carried over from the old body
+    /// (the caller has already placed them). Only for code that moved thoughts itself.</summary>
+    public static void ReplaceBody(string name, string body)
+    {
+        if (GetNote(name) is not { } n) return;
+        Note.Write(n.Path, StripSelfLinks(NormaliseLinks(body), n.Name), n.Aliases, null);
+        Index();
+    }
 
     public static void AddThought(string noteName, string spanText, string comment, string confidence, string kind) =>
         GetNote(noteName)?.AddThought(spanText, comment, confidence, kind);

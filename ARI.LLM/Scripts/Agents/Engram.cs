@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ARI.LLM;
 
-internal class Engram : MemoryAgent, IDisposable
+internal partial class Engram : MemoryAgent, IDisposable
 {
     // ── Constants ────────────────────────────────────────────────────────────────
     private const int    EXTRACT_MAX_TOKENS   = 6000;
@@ -90,6 +90,37 @@ internal class Engram : MemoryAgent, IDisposable
     }
 
     internal bool IsEnabled { get; private set; } = true;
+
+    // ── Model server outage backoff ─────────────────────────────────────────────
+    // Each failed answer doubles the pause before any sweep tries again (30 s, 1 min, 2 min … capped at 30 min);
+    // the first answer after an outage clears it. The outage is logged once when it starts and once when it ends.
+    private static readonly TimeSpan BackoffFirst = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan BackoffMax   = TimeSpan.FromMinutes(30);
+    private int      serverFailures;
+    private DateTime serverRetryAt = DateTime.MinValue;
+    private readonly object serverLock = new();
+
+    private bool ServerDownUntil(out TimeSpan wait)
+    {
+        lock (serverLock) { wait = serverRetryAt - DateTime.UtcNow; return wait > TimeSpan.Zero; }
+    }
+
+    private void NoteServerAnswer(bool answered)
+    {
+        lock (serverLock)
+        {
+            if (answered)
+            {
+                if (serverFailures > 0) Shared.Logger.LogInformation("[Engram] Model server answering again after {N} failed tries; sweeps resume.", serverFailures);
+                serverFailures = 0; serverRetryAt = DateTime.MinValue;
+                return;
+            }
+            serverFailures++;
+            double secs = Math.Min(BackoffMax.TotalSeconds, BackoffFirst.TotalSeconds * Math.Pow(2, serverFailures - 1));
+            serverRetryAt = DateTime.UtcNow.AddSeconds(secs);
+            if (serverFailures == 1) Shared.Logger.LogWarning("[Engram] Model server isn't answering; sweeps pause and retry with a growing wait (up to {Max} min).", BackoffMax.TotalMinutes);
+        }
+    }
 
     internal void Enable()
     {
@@ -245,15 +276,23 @@ internal class Engram : MemoryAgent, IDisposable
             //     Stage 3 (not this step) is what checks the vault and decides new/duplicate/updated. One
             //     tool-free call, so it can't wander; the excerpt it captures per entity is what keeps
             //     Stage 3 faithful to what was actually said without needing one continuous thread. ---
+            // While the model server is down, sweeps wait out a growing pause instead of each hitting it again at once.
+            if (ServerDownUntil(out TimeSpan wait))
+            {
+                outcome = $"waiting — the model server is down; next try in {wait.TotalSeconds:0}s";
+                Shared.Logger.LogDebug("[Engram] [{ThreadKey}] sweep held: model server down, next try in {Wait:0}s.", threadKey, wait.TotalSeconds);
+                return processed;
+            }
             Shared.Logger.LogInformation("[Engram] [{ThreadKey}] extracting entities...", threadKey);
             List<ExtractedEntity>? extracted = await ExtractAsync(transcript, contextSummary, code, project);
+            NoteServerAnswer(extracted is not null);
 
             // The model server couldn't answer (stopped, restarting, out of memory). That is not "nothing to remember":
             // these messages stay unswept and the thread stays unprocessed, so the delete gate's retry sweeps them again.
             if (extracted is null)
             {
                 outcome = "failed — the model server didn't answer; the messages stay unswept for the next try";
-                Shared.Logger.LogWarning("[Engram] [{ThreadKey}] sweep failed — extraction got no answer; will try again.", threadKey);
+                Shared.Logger.LogDebug("[Engram] [{ThreadKey}] sweep failed — extraction got no answer; will try again.", threadKey);
                 return processed;
             }
             List<ExtractedEntity> entities = extracted;
@@ -535,7 +574,8 @@ internal class Engram : MemoryAgent, IDisposable
         }
         catch (Exception ex)
         {
-            Shared.Logger.LogWarning("[Engram] Extraction failed ({Error}).", ex.Message);
+            if (serverFailures == 0) Shared.Logger.LogWarning("[Engram] Extraction failed ({Error}).", ex.Message);
+            else                     Shared.Logger.LogDebug("[Engram] Extraction failed ({Error}).", ex.Message);
             return null;
         }
     }
@@ -587,7 +627,7 @@ internal class Engram : MemoryAgent, IDisposable
             ? string.Join(", ", inv.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()))
             : Text("involves");
         bool correction = el.TryGetProperty("correction", out JsonElement cor) && cor.ValueKind == JsonValueKind.True;
-        string kind = Text("kind").ToLowerInvariant() is "event" or "relationship" ? Text("kind").ToLowerInvariant() : "entity";
+        string kind = Text("kind").ToLowerInvariant() is "event" or "relationship" or "topic" ? Text("kind").ToLowerInvariant() : "entity";
         return entity.Length > 0 && excerpt.Length > 0 ? new ExtractedEntity(entity, isNew, excerpt, sensitive, kind, Text("theme"), involves, Text("date"), correction, Text("thought")) : null;
     }
 
@@ -728,15 +768,9 @@ internal class Engram : MemoryAgent, IDisposable
 
     private static string NoMd(string path) => path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path;
 
-    /// <summary>After a sweep: any link that points at nothing becomes plain words, so the graph only holds links someone can follow.</summary>
-    private static void CleanLinks()
-    {
-        try
-        {
-            if (Brain.StripUnresolvedLinks() > 0) { AriGit.Run(Brain.VaultRoot, ["add", "-A"]); AriGit.Commit(Brain.VaultRoot, "Turn links to notes that don't exist into plain words"); }
-        }
-        catch (Exception ex) { Shared.Logger.LogWarning("[Engram] link cleanup failed: {Error}", ex.Message); }
-    }
+    /// <summary>After a sweep: a link to a note that doesn't exist is kept (it marks what the brain is missing); a misspelt one is pointed at
+    /// the note it meant, a name linked from two or more notes gets a topic note of its own, and plain mentions of notes become links.</summary>
+    private static void CleanLinks() { Shape("Link up notes after a conversation"); MaybeQueueCurate(); }
 
     // ── Reflex: one fact, one note, right now ───────────────────────────────────────────
 
@@ -884,7 +918,7 @@ internal class Engram : MemoryAgent, IDisposable
     private Task<string> GenerateConversationSummary(string transcript, string speaker) =>
         CompleteSummary(
             ResolveTemplate("LogSummarySystem",
-                "You write one entry in ARI's log for the day. Say what was discussed: every topic, with the specifics that matter (names, numbers, dates, decisions, plans, how the person seemed to feel), in short past-tense sentences or a few bullets. Third person, refer to the user by name. It is a summary of the information, never a script, so no 'then she said' and no quotes. Wrap every named person, place, project or organisation in [[wikilinks]]. Put anything personal, private or intimate (health, intimate life, legal matters, anything they asked to keep private) in its own line starting '> [!sensitive]' so it can be left out when needed. Never mention the assistant. No preamble."),
+                "You write one entry in ARI's log for the day. Say what was discussed: every topic, with the specifics that matter (names, numbers, dates, decisions, plans, how the person seemed to feel), in short past-tense sentences or a few bullets. Third person, refer to the user by name. It is a summary of the information, never a script, so no 'then she said' and no quotes. Link only the three to five main subjects of the conversation with [[wikilinks]], each once; other names stay plain words. Put anything personal, private or intimate (health, intimate life, legal matters, anything they asked to keep private) in its own line starting '> [!sensitive]' so it can be left out when needed. Never mention the assistant. No preamble."),
             ResolveTemplate("LogSummaryTask", "Summarise this conversation with {speaker}:\n\n{transcript}",
                 ("speaker", speaker), ("transcript", transcript)));
 

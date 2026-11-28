@@ -102,6 +102,7 @@ internal sealed class CreateMemory : Tool
 
         content = Brain.StripAccidentalFrontmatter(content, name);
         if (content.Length == 0) return Task.FromResult<ToolResult>("Error: 'content' is required.");
+        if (string.IsNullOrWhiteSpace(type)) type = FolderType(name);
 
         Note note;
         try { note = Brain.AddNote(name, content, aliases, type, keywords.Count > 0 ? keywords : null, isSensitive); }
@@ -110,4 +111,12 @@ internal sealed class CreateMemory : Tool
         string commitResult = BrainGit.Commit(Brain.VaultRoot, commitMessage, note.Path);
         return Task.FromResult<ToolResult>($"Created '{note.Title}' at {note.Path}.\n{commitResult}");
     }
+
+    // A note made without a type takes the one its folder implies, so the brain view and the rework can still tell what it is.
+    private static string? FolderType(string name) => name.Split('/')[0].ToLowerInvariant() switch
+    {
+        "people" => name.Contains("'s ") ? "facet" : "person",
+        "places" => "place", "events" => "event", "relationships" => "relationship", "topics" => "topic", "groups" => "group",
+        _ => null,
+    };
 }

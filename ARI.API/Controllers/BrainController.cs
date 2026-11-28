@@ -41,6 +41,45 @@ public class BrainController : ControllerBase
         return Ok(Brain.GetPaths().Select(p => p.EndsWith(".md") ? p[..^3] : p).OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
     }
 
+    /// <summary>The whole brain as a graph for the Brain page: every note (name, title, top folder, type, length) and every link
+    /// between two notes. Titles and links only; a note's text is fetched one at a time from <see cref="Note"/>. Read-only.</summary>
+    [HttpGet("graph")]
+    public IActionResult Graph()
+    {
+        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
+        Brain.IndexIfChanged();
+        List<Note> notes = Brain.GetTitles().Select(t => Brain.GetNote(t)).OfType<Note>().ToList();
+        Dictionary<string, int> id = new(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < notes.Count; i++) id.TryAdd(notes[i].Name, i);
+        Dictionary<string, int> byTitle = new(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < notes.Count; i++) byTitle.TryAdd(notes[i].Title, i);
+        HashSet<(int, int)> links = new();
+        for (int i = 0; i < notes.Count; i++)
+            foreach (Note to in notes[i].GetLinks())
+                if (id.TryGetValue(to.Name, out int j) && j != i) links.Add((Math.Min(i, j), Math.Max(i, j)));
+        return Ok(new
+        {
+            nodes = notes.Select((n, i) => new
+            {
+                id = i, name = n.Name, title = n.Title, type = n.Type, real = true,
+                folder = n.Folder.Length == 0 ? "Core" : n.Folder.Split('/')[0],
+                size = SizeOf(n),
+                group = IsGroup(n),   // a group's note anchors its neighbourhood in the view, however many links it has
+                groups = GroupsOf(n).Select(g => id.TryGetValue(g, out int j) ? j : byTitle.TryGetValue(g, out int k) ? k : -1).Where(j => j >= 0 && j != i).Distinct(),
+            }),
+            links = links.Select(l => new[] { l.Item1, l.Item2 }),
+        });
+
+        static int SizeOf(Note n) { try { return n.Content.Length; } catch { return 0; } }
+        static IEnumerable<string> GroupsOf(Note n)
+        {
+            string body; try { body = n.Content; } catch { return []; }
+            System.Text.RegularExpressions.Match line = System.Text.RegularExpressions.Regex.Match(body, @"(?m)^\*\*Groups:\*\*(.*)$");
+            return line.Success ? System.Text.RegularExpressions.Regex.Matches(line.Groups[1].Value, @"\[\[([^\]|#]+)").Select(m => m.Groups[1].Value.Trim()).ToList() : [];
+        }
+        static bool IsGroup(Note n) { try { return n.Type == "group" || n.Content.Contains("**Members:**"); } catch { return false; } }
+    }
+
     /// <summary>One note to read: its title, type, whether it's private, and its text. Read-only.</summary>
     [HttpGet("note")]
     public IActionResult Note([FromQuery] string path)
@@ -49,6 +88,20 @@ public class BrainController : ControllerBase
         if (Brain.GetNote(path ?? "") is not { } n) return NotFound(new { error = "No such note." });
         return Ok(new { name = n.Name, title = n.Title, type = n.Type, sensitive = n.IsSensitive, aliases = n.Aliases, keywords = n.Keywords, content = n.Content });
     }
+
+    public sealed record ReworkRequest(List<string>? Scope, string? Instructions);
+
+    /// <summary>Asks Engram to reshape the brain: split notes that hold many subjects into small linked ones, give shared names notes of
+    /// their own and group notes into theme hubs. It runs while ARI is idle and commits every step, so it can be undone with git.</summary>
+    [HttpPost("rework")]
+    public IActionResult Rework([FromBody] ReworkRequest? r)
+    {
+        if (Llm is null || !Llm.BrainAvailable) return BadRequest(new { error = "Brain is not available." });
+        return Ok(new { message = Llm.QueueBrainRework(r?.Scope, r?.Instructions), queued = Llm.QueuedBrainReworks });
+    }
+
+    [HttpGet("rework")]
+    public IActionResult ReworkStatus() => Ok(new { queued = Llm?.QueuedBrainReworks ?? 0 });
 
     /// <summary>The curator's pending suggestions for the brain (merge, type, link).</summary>
     [HttpGet("proposals")]

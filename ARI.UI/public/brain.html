@@ -1,0 +1,485 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brain · A.R.I</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500&display=swap">
+<style>
+:root{--ink:#05040c;--sky:#e9e4ff;--mist:#a49cc9;--panel:rgba(20,16,40,.78);--line:#3a3266;--display:"Space Grotesk",Arial,sans-serif;--body:"Inter",system-ui,sans-serif;color-scheme:dark}
+html,body{height:100%;margin:0;background:var(--ink);color:var(--sky);font-family:var(--body);overflow:hidden}
+canvas{display:block;cursor:grab;touch-action:none}
+.title{position:fixed;top:14px;left:50%;transform:translateX(-50%);font:700 13px var(--display);letter-spacing:.08em;padding:6px 14px;border-radius:999px;background:var(--panel);border:1px solid var(--line)}
+.label{position:fixed;pointer-events:none;transform:translate(-50%,-50%);text-align:center;font:700 12px var(--display);color:var(--sky);text-shadow:0 0 8px #000,0 0 3px #000;white-space:nowrap}
+.label small{display:block;font:500 10px var(--body);color:var(--mist)}
+.pill{font-size:12px;padding:2px 9px;border-radius:999px;background:var(--panel);border:1px solid var(--line)}
+.bar{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);display:flex;gap:4px;padding:5px;border-radius:999px;background:var(--panel);border:1px solid var(--line)}
+.bar button{width:32px;height:28px;border:0;border-radius:999px;background:transparent;color:var(--sky);font:600 15px var(--body);cursor:pointer}
+.bar button:hover{background:#2a2350}
+#tip{position:fixed;pointer-events:none;background:var(--sky);color:#120e26;font:12px var(--body);padding:3px 8px;border-radius:4px;transform:translate(10px,-26px)}
+#info{position:fixed;right:16px;top:60px;width:260px;max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12px}
+#info h3{margin:0 0 4px;font:700 14px var(--display)} #info ul{margin:4px 0 0;padding-left:16px;color:var(--mist);line-height:1.5}
+#left{position:fixed;top:12px;bottom:12px;left:12px;width:300px;display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:16px;background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(8px);transition:transform .45s cubic-bezier(.65,0,.35,1);z-index:5}
+#left.closed{transform:translateX(calc(-100% - 24px))}
+#back{font:500 13px var(--body);color:var(--mist);text-decoration:none;padding:2px 4px;border-radius:6px;align-self:flex-start}
+#back:hover{color:var(--sky)}
+#rework{display:flex;flex-direction:column;gap:6px;font:12px var(--body);color:var(--mist)}
+#rework button{all:unset;cursor:pointer;align-self:flex-start;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--sky);font:500 12px var(--body)}
+#rework button:hover{background:#2a2350}
+#rework .ask{display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:10px;border:1px solid var(--line);background:rgba(5,4,12,.5)}
+#rework .row{display:flex;gap:6px}
+#rework [hidden]{display:none}
+.bar a{display:grid;place-items:center;width:32px;height:28px;border-radius:999px;color:var(--sky);text-decoration:none;font:600 15px var(--body)}
+.bar a:hover{background:#2a2350}
+#left input{width:100%;box-sizing:border-box;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(5,4,12,.6);color:var(--sky);font:14px var(--body);outline:none}
+#left input:focus{border-color:#7f72d8}
+#count{font:11px var(--body);color:var(--mist)}
+#results{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+#results button{all:unset;cursor:pointer;padding:7px 9px;border-radius:8px;font:13px var(--body);color:var(--sky);display:block}
+#results button:hover,#results button.top{background:#2a2350}
+#results small{display:block;color:var(--mist);font-size:11px;margin-top:1px}
+.tab{position:fixed;top:12px;z-index:6;width:30px;height:30px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--sky);cursor:pointer;font:600 14px var(--body)}
+#ltab{left:12px;transition:left .45s cubic-bezier(.65,0,.35,1)} #ltab.open{left:326px}
+#right{position:fixed;top:12px;bottom:12px;right:12px;width:340px;padding:16px 18px;border-radius:18px;background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(8px);overflow-y:auto;transform:translateX(calc(100% + 24px));transition:transform .45s cubic-bezier(.65,0,.35,1);z-index:5;font-size:13px}
+#right.open{transform:none}
+#right h2{margin:0 26px 6px 0;font:700 18px var(--display);line-height:1.25}
+#right .meta{color:var(--mist);font-size:12px;line-height:1.5}
+#right h4{margin:16px 0 6px;font:600 11px var(--body);letter-spacing:.08em;text-transform:uppercase;color:var(--mist)}
+#right .crumbs{display:flex;flex-wrap:wrap;gap:4px}
+#right .crumbs button,#right .links button{all:unset;cursor:pointer;padding:3px 8px;border-radius:999px;border:1px solid var(--line);font-size:12px}
+#right .links{display:flex;flex-direction:column;gap:3px}
+#right .links button{border-radius:8px;padding:5px 8px}
+#right .crumbs button:hover,#right .links button:hover{background:#2a2350}
+#right .body{line-height:1.6;color:var(--sky);white-space:pre-wrap}
+#rclose{position:absolute;top:12px;right:12px;width:26px;height:26px;border-radius:8px;border:0;background:transparent;color:var(--mist);cursor:pointer;font-size:16px}
+#stats{position:fixed;left:50%;transform:translateX(-50%);bottom:64px;bottom:18px;font:11px var(--body);color:var(--mist)}
+</style></head><body>
+<button class="tab open" id="ltab" title="Hide search">‹</button>
+<aside id="left"><a id="back" href="/">‹ Back to A.R.I</a><div id="rework"><button id="rw-open" title="Ask Engram to re-file the brain into small linked notes">Reshape brain…</button><div class="ask" id="rw-ask" hidden><span>Engram re-files every note into small, linked notes and groups them into themes while ARI is idle. Facts are moved word for word, never rewritten, and every step is a git commit you can undo.</span><div class="row"><button id="rw-go">Start</button><button id="rw-no">Cancel</button></div></div><span id="rw-msg"></span></div><input id="q" type="search" placeholder="Search notes and clusters" autocomplete="off"><div id="count"></div><div id="results"></div></aside>
+<aside id="right"><button id="rclose" title="Close">×</button><div id="rbody"></div></aside>
+<div class="bar"><a id="home" href="/" title="Back to A.R.I">⌂</a><button id="out" title="Zoom out">−</button><button id="in" title="Zoom in">+</button><button id="reset" title="Reset view">↺</button><button id="pause" title="Pause">❚❚</button></div>
+<div id="tip" hidden></div><div id="info" hidden><h3 id="it"></h3><div id="ik"></div><ul id="il"></ul></div>
+<div id="stats"></div>
+<script type="module">
+import * as THREE from "/js/three.module.min.js";
+THREE.ColorManagement.enabled = false;   // the look was tuned without colour management; keep it identical
+const fail = msg => { document.body.insertAdjacentHTML("beforeend", `<div style="position:fixed;inset:0;display:grid;place-items:center;font:15px Inter,system-ui,sans-serif;color:#a49cc9">${msg}</div>`); throw new Error(msg); };
+const res = await fetch("/api/v1/admin/brain/graph");
+if (res.status === 401) { location.href = "/"; fail("Signing in…"); }
+if (res.status === 403) fail("The Brain page is for admins only.");
+if (!res.ok) fail("The brain isn't available right now.");
+window.BRAIN = await res.json();
+if (!window.BRAIN.nodes.length) fail("The brain is empty: nothing has been remembered yet.");
+
+const rndDir = v => { const u = Math.random() * 2 - 1, t = Math.random() * 6.283, s = Math.sqrt(1 - u * u); return v.set(s * Math.cos(t), u, s * Math.sin(t)); };
+const { nodes, links } = window.BRAIN;
+const N = nodes.length, L = links.length;
+const la = new Int32Array(L), lb = new Int32Array(L); links.forEach(([a, b], k) => { la[k] = a; lb[k] = b; });
+const nb = nodes.map(() => []); for (let k = 0; k < L; k++) { nb[la[k]].push(lb[k]); nb[lb[k]].push(la[k]); }
+const deg = nb.map(x => x.length);
+// bridges: notes that were heavily linked in the real brain (counting only links between real notes)
+const realDeg = new Int32Array(N); for (let k = 0; k < L; k++) if (nodes[la[k]].real && nodes[lb[k]].real) { realDeg[la[k]]++; realDeg[lb[k]]++; }
+const isLog = n => n.type === "discussion" || n.folder === "Conversations";   // day logs link everything said that day: they should not glue subjects together
+const bridge = new Set(nodes.map((_, i) => i).filter(i => realDeg[i] >= 8 && !nodes[i].group));   // a group's own note is its anchor, never a bridge; day logs are ordinary notes (in a big brain they are the chains between galaxies)
+
+// neighbourhoods by label propagation (bridges left out so they don't merge everything)
+const comm = new Int32Array(N).map((_, i) => i);
+const order = [...Array(N).keys()];
+for (let it = 0; it < 15; it++) {
+  for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  let changed = 0;
+  for (const i of order) { if (!deg[i] || bridge.has(i) || nodes[i].group) continue; const c = new Map();   // a group's note keeps its own label: it is the seed its members gather round
+    for (const j of nb[i]) if (!bridge.has(j)) c.set(comm[j], (c.get(comm[j]) || 0) + (nodes[j].group ? 4 : 1));   // belonging to a group outweighs a passing link
+    let best = comm[i], bv = -1; c.forEach((v, k) => { if (v > bv || (v === bv && k < best)) { bv = v; best = k; } });
+    if (best !== comm[i]) { comm[i] = best; changed++; } }
+  if (changed < N * 0.002) break;
+}
+// a brain that names its groups is grouped by them: a note's neighbourhood is its first group, and a group's own note is that neighbourhood's centre
+if (nodes.some(n => n.groups && n.groups.length)) for (let i = 0; i < N; i++) { if (nodes[i].group) comm[i] = i; else if (nodes[i].groups && nodes[i].groups.length) comm[i] = nodes[i].groups[0]; }
+const gm = new Map(); for (let i = 0; i < N; i++) if (deg[i] && !bridge.has(i)) { if (!gm.has(comm[i])) gm.set(comm[i], []); gm.get(comm[i]).push(i); }
+const hoods = [...gm.values()].filter(g => g.length >= 3).sort((a, b) => b.length - a.length);
+const hoodOf = new Int32Array(N).fill(-1); hoods.forEach((g, h) => g.forEach(i => hoodOf[i] = h));
+for (const i of bridge) { const c = new Map(); nb[i].forEach(j => hoodOf[j] >= 0 && c.set(hoodOf[j], (c.get(hoodOf[j]) || 0) + 1)); let best = -1, bv = 0; c.forEach((n, k) => { if (n > bv) { bv = n; best = k; } }); if (best >= 0) { hoodOf[i] = best; hoods[best].push(i); } }
+bridge.clear();   // from here on they are just notes
+const H = hoods.length;
+const pairCount = new Map(); for (let k = 0; k < L; k++) { const a = hoodOf[la[k]], b = hoodOf[lb[k]]; if (a < 0 || b < 0 || a === b) continue; const key = Math.min(a, b) * H + Math.max(a, b); pairCount.set(key, (pairCount.get(key) || 0) + 1); }
+const pairs = [...pairCount].map(([key, n]) => [Math.floor(key / H), key % H, n]);
+const hoodR = hoods.map(g => .9 * Math.cbrt(g.length));
+// ── the hierarchy: notes → clusters → clusters of clusters → … merged by their links until nothing more merges ──
+const C = hoods.map(g => ({ level: 0, kids: null, notes: g, parent: -1 }));
+let layer = hoods.map((_, k) => k), edges = pairs.map(([a, b, n]) => [a, b, n]);
+for (let lev = 1; lev < 16 && layer.length > 5; lev++) {
+  const idx = new Map(layer.map((c, k) => [c, k])), adj = layer.map(() => new Map());
+  for (const [a, b, n] of edges) { const x = idx.get(a), y = idx.get(b); adj[x].set(y, (adj[x].get(y) || 0) + n); adj[y].set(x, (adj[y].get(x) || 0) + n); }
+  const lab = layer.map((_, k) => k), ord = layer.map((_, k) => k);
+  for (let it = 0; it < 20; it++) { ord.sort(() => Math.random() - .5); let moved = 0;
+    for (const k of ord) { if (!adj[k].size) continue; const t = new Map(); adj[k].forEach((n, j) => t.set(lab[j], (t.get(lab[j]) || 0) + n));
+      let best = lab[k], bv = -1; t.forEach((n, l) => { if (n > bv) { bv = n; best = l; } }); if (best !== lab[k]) { lab[k] = best; moved++; } }
+    if (!moved) break; }
+  const groups = new Map(); layer.forEach((c, k) => { if (!groups.has(lab[k])) groups.set(lab[k], []); groups.get(lab[k]).push(k); });
+  if (groups.size > layer.length * .9) break;                    // nothing much merges any more: this is the top
+  const up = new Map(), next = [];
+  groups.forEach(ms => { if (ms.length === 1) { up.set(layer[ms[0]], layer[ms[0]]); next.push(layer[ms[0]]); return; }
+    const id = C.length; C.push({ level: lev, kids: ms.map(k => layer[k]), notes: ms.flatMap(k => C[layer[k]].notes), parent: -1 });
+    ms.forEach(k => { C[layer[k]].parent = id; up.set(layer[k], id); }); next.push(id); });
+  const agg = new Map(); for (const [a, b, n] of edges) { const x = up.get(a), y = up.get(b); if (x === y) continue; const key = Math.min(x, y) + "," + Math.max(x, y); agg.set(key, (agg.get(key) || 0) + n); }
+  edges = [...agg].map(([key, n]) => { const [x, y] = key.split(",").map(Number); return [x, y, n]; });
+  layer = next;
+}
+let roots = layer; while (roots.length === 1 && C[roots[0]].kids) { const top = roots[0]; roots = C[top].kids; roots.forEach(k => C[k].parent = -1); }   // a single top cluster says nothing: start at its children
+const CN = C.length;
+// a cluster is named after its group note when it has one, else its most-linked subject; a day log never names one
+const NAME_RANK = { group: 4, hub: 3, facet: 2, person: 1, project: 1 };   // a group's own note names its cluster before any member does
+const namePick = ms => { const s = ms.filter(i => !isLog(nodes[i])), from = s.length ? s : ms, rank = i => (nodes[i].group ? 9 : NAME_RANK[nodes[i].type] || 0) * 1e6 + deg[i]; return from.reduce((a, b) => rank(b) > rank(a) ? b : a, from[0]); };
+const cName = c => nodes[namePick(C[c].notes)].title;
+const cR = C.map(c => .9 * Math.cbrt(c.notes.length) * (1 + c.level * .6));
+const cCent = C.map(() => new THREE.Vector3());
+console.log("levels:", Math.max(...C.map(c => c.level)) + 1, "clusters:", CN, "top:", roots.length);
+
+const PALETTE = [0xd58bff, 0xff8fc8, 0x6ff0c8, 0x8fb4ff, 0xffc98f, 0xb69bff, 0x7fe0ff, 0xff9f9f, 0xc6ff8f, 0xf0a0ff];
+const baseCol = nodes.map((n, i) => new THREE.Color(bridge.has(i) ? 0xffffff : hoodOf[i] < 0 ? 0x4a4866 : PALETTE[hoodOf[i] % PALETTE.length]));
+
+// ── scene ──
+const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.outputColorSpace = THREE.LinearSRGBColorSpace; renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x05040c);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
+const glowTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 64; const g = c.getContext("2d");
+  const r = g.createRadialGradient(32,32,0,32,32,32); r.addColorStop(0,"rgba(255,255,255,1)"); r.addColorStop(.2,"rgba(255,255,255,.7)"); r.addColorStop(.5,"rgba(255,255,255,.12)"); r.addColorStop(1,"rgba(255,255,255,0)");
+  g.fillStyle = r; g.fillRect(0,0,64,64); return new THREE.CanvasTexture(c); })();
+// the backdrop is a skybox: it travels with the camera, so every direction has the same faint dust and glow
+const sky = new THREE.Group(); scene.add(sky);
+{ const g = new THREE.BufferGeometry(), p = new Float32Array(8000 * 3);
+  for (let i = 0; i < p.length; i += 3) { const v = rndDir(new THREE.Vector3()).multiplyScalar(300 + Math.random() * 500); p.set([v.x, v.y, v.z], i); }
+  g.setAttribute("position", new THREE.BufferAttribute(p, 3)); sky.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x5fb8c8, size: 1.4, transparent: true, opacity: .35 })));
+  const tints = [0x123a5a, 0x2a1f6a, 0x0f4a5a, 0x1f1a50, 0x18305a];
+  for (let k = 0; k < 14; k++) {   // spread evenly over the whole sphere (a golden-angle spiral), not bunched on one side
+    const y = 1 - (k + .5) / 7, r = Math.sqrt(Math.max(0, 1 - y * y)), t = k * 2.39996;
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: tints[k % tints.length], transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false }));
+    m.position.set(Math.cos(t) * r * 520, y * 520, Math.sin(t) * r * 520); const sc = 600 + (k * 137) % 300; m.scale.set(sc, sc, 1); sky.add(m); } }
+
+const pos = new Float32Array(N * 3), vel = new Float32Array(N * 3);
+// start each neighbourhood in its own patch of space so settling is quick
+const SPACE = Math.max(.22, Math.min(1, Math.cbrt(N / 20000)));   // the space a brain spreads into grows with it: a small brain is a smaller universe, not a sparse one
+const hoodSeed = hoods.map(() => new THREE.Vector3((Math.random() - .5) * 220 * SPACE, (Math.random() - .5) * 110 * SPACE, (Math.random() - .5) * 160 * SPACE));
+for (let i = 0; i < N; i++) { const c = hoodOf[i] >= 0 ? hoodSeed[hoodOf[i]] : new THREE.Vector3(); const v = rndDir(new THREE.Vector3()).multiplyScalar(hoodOf[i] >= 0 ? 4 : 120 * SPACE * Math.cbrt(Math.random()));   // a loose star lands anywhere in the space, evenly: unlinked ideas are scattered, never piled in the middle
+  pos[i*3] = c.x + v.x; pos[i*3+1] = c.y + v.y; pos[i*3+2] = c.z + v.z; }
+
+const dotGeo = new THREE.BufferGeometry(); dotGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+const colArr = new Float32Array(N * 3); dotGeo.setAttribute("color", new THREE.BufferAttribute(colArr, 3));
+const dotTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 64; const g = c.getContext("2d");
+  const r = g.createRadialGradient(32,32,0,32,32,32); r.addColorStop(0,"rgba(255,255,255,1)"); r.addColorStop(.3,"rgba(255,255,255,.95)"); r.addColorStop(.5,"rgba(255,255,255,.25)"); r.addColorStop(.75,"rgba(255,255,255,.04)"); r.addColorStop(1,"rgba(255,255,255,0)");
+  g.fillStyle = r; g.fillRect(0,0,64,64); return new THREE.CanvasTexture(c); })();
+// each note's glow grows with its size (how long it is); hubs glow most
+const sizeArr = new Float32Array(N); for (let i = 0; i < N; i++) sizeArr[i] = .2;
+const crowd = new Float32Array(N);   // how many notes are packed close around each one: drives its size and brightness
+dotGeo.setAttribute("size", new THREE.BufferAttribute(sizeArr, 1));
+const dots = new THREE.Points(dotGeo, new THREE.ShaderMaterial({ uniforms: { map: { value: dotTex } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
+  vertexShader: "attribute float size; varying vec3 vC; void main(){ vC = color; vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = clamp(size * 700.0 / -mv.z, 1.2, 40.0); gl_Position = projectionMatrix * mv; }",
+  fragmentShader: "uniform sampler2D map; varying vec3 vC; void main(){ vec4 t = texture2D(map, gl_PointCoord); gl_FragColor = vec4(vC * t.rgb, t.a); }" }));
+dots.frustumCulled = false; scene.add(dots);   // notes move after load, so the bounds three.js measured once are wrong: never cull them
+const isHub = nodes.map((_, i) => !bridge.has(i) && deg[i] >= 6), hubIds = nodes.map((_, i) => i).filter(i => isHub[i]);
+const hubPos = new Float32Array(hubIds.length * 3), hubGeo = new THREE.BufferGeometry(); hubGeo.setAttribute("position", new THREE.BufferAttribute(hubPos, 3));
+const hubCol = new Float32Array(hubIds.length * 3); hubIds.forEach((i, k) => { const c = baseCol[i].clone().lerp(new THREE.Color(1, 1, 1), .65); hubCol.set([c.r, c.g, c.b], k * 3); }); hubGeo.setAttribute("color", new THREE.BufferAttribute(hubCol, 3));
+const hubPts = new THREE.Points(hubGeo, new THREE.PointsMaterial({ map: glowTex, vertexColors: true, size: 4.5, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })); // hubs now glow through their own size
+// (no stardust: every dot in the space is a note)
+// bridges get a bigger glow of their own
+const bridgeSprites = [].map(i => { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xf3eaff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })); s.scale.set(5, 5, 1); s.userData.i = i; scene.add(s); return s; });
+const linePos = new Float32Array(L * 6), lineCol = new Float32Array(L * 6);
+const lineGeo = new THREE.BufferGeometry(); lineGeo.setAttribute("position", new THREE.BufferAttribute(linePos, 3)); lineGeo.setAttribute("color", new THREE.BufferAttribute(lineCol, 3));
+const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: .22, blending: THREE.AdditiveBlending, depthWrite: false })); lines.frustumCulled = false; scene.add(lines);
+
+const flows = []; for (let k = 0; k < L; k++) if (hoodOf[la[k]] !== hoodOf[lb[k]] && hoodOf[la[k]] >= 0 && hoodOf[lb[k]] >= 0 && Math.random() < .5) flows.push({ k, t: Math.random(), s: .0008 + Math.random() * .0015 });
+const flowPos = new Float32Array(flows.length * 3), flowGeo = new THREE.BufferGeometry(); flowGeo.setAttribute("position", new THREE.BufferAttribute(flowPos, 3));
+const flowPts = (new THREE.Points(flowGeo, new THREE.PointsMaterial({ color: 0x9fe8ff, size: .35, transparent: true, opacity: .8, blending: THREE.AdditiveBlending, depthWrite: false })));
+// black holes only at the heart of truly dense neighbourhoods
+const DENSE = Math.max(20, Math.min(150, Math.round(N * .08)));   // a neighbourhood holding this share of the brain gets a black hole: relative, so a small brain still has them
+const PULSAR = Infinity, GIANT = Infinity;   // no rings or stars any more: only black holes
+const SPIRAL = Math.max(6, Math.round(DENSE * .3));   // a neighbourhood this big, but short of a black hole, is a small spiral galaxy round a star
+const stageOf = hoods.map(g => g.length >= DENSE ? 3 : g.length >= SPIRAL ? 4 : g.length >= PULSAR ? 2 : g.length >= GIANT ? 1 : 0);
+const orbiting = new Set(hoods.flatMap((g, h) => stageOf[h] >= 3 ? g : []));   // the black hole's notes orbit it
+const sprite = (c, s, o) => { const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: c, transparent: true, opacity: o, blending: THREE.AdditiveBlending, depthWrite: false })); m.scale.set(s, s, 1); return m; };
+const ringMat = c => new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: .22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+const bodies = hoods.map((g, h) => { if (stageOf[h] === 0 || stageOf[h] >= 3) return null; const grp = new THREE.Group(), R = hoodR[h] * 1.6, col = baseCol[g[0]];
+  const rings = (stageOf[h] === 2 ? [0, 1.1] : [0]).map((tilt, k) => { const m = new THREE.Mesh(new THREE.RingGeometry(R * (1 + k * .25), R * (1 + k * .25) + .08, 128), ringMat(col)); m.rotation.x = Math.PI / 2 + tilt; m.rotation.y = k * .7; grp.add(m); return m; });
+  grp.userData = { h, rings }; scene.add(grp); return grp; }).filter(Boolean);
+const holes = hoods.map((g, hh) => [g, hh]).filter(([g]) => g.length >= SPIRAL).map(([g, hh]) => { const grp = new THREE.Group(), spiral = g.length < DENSE;
+  if (spiral) {   // a galaxy: a small bright star with a faint blue glow, its notes on slow spiral arms; quieter than a black hole
+    const k = .3 * Math.sqrt(SPACE) * Math.cbrt(g.length / SPIRAL);
+    grp.add(new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xfff4e6, transparent: true, opacity: .95, blending: THREE.AdditiveBlending, depthWrite: false })));
+    grp.children[0].scale.set(2.4 * k, 2.4 * k, 1);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0x7f9dff, transparent: true, opacity: .22, blending: THREE.AdditiveBlending, depthWrite: false })); glow.scale.set(9 * k, 9 * k, 1); grp.add(glow);
+    const tilt = (Math.random() - .5) * 1.6;
+    grp.userData = { g, h: hh, k, spiral: true, ct: Math.cos(tilt), st: Math.sin(tilt), centre: new THREE.Vector3(), notes: [], rMax: 0 }; scene.add(grp); return grp; }
+  const k = Math.max(.45, Math.cbrt(g.length / (2 * DENSE))) * Math.sqrt(SPACE);
+  grp.add(new THREE.Mesh(new THREE.SphereGeometry(1.6 * k, 32, 24), new THREE.MeshBasicMaterial({ color: 0 })));
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xf0d8ff, transparent: true, opacity: .55, blending: THREE.AdditiveBlending, depthWrite: false })); halo.scale.set(7 * k, 7 * k, 1); grp.add(halo);
+  grp.userData = { g, h: hh, k, centre: new THREE.Vector3(), notes: [], rMax: 0 }; scene.add(grp); return grp; });
+
+// labels: the biggest neighbourhoods and the bridges
+const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const mk = html => { const d = document.createElement("div"); d.className = "label"; d.innerHTML = html; document.body.appendChild(d); return d; };
+const hoodName = g => { const top = g.reduce((a, b) => deg[b] > deg[a] ? b : a, g[0]); return nodes[top].title.replace(/ ·.*| part .*|: .*/, ""); };
+const BIG_LABEL = 150; let hoverHood = -1;
+const hoodLabels = [].map((g, h) => ({ h, el: mk(`${esc(hoodName(g))}<small>${g.length.toLocaleString()} notes</small>`) }));
+const bridgeLabels = [].map(i => ({ i, el: mk(`<span class="pill">${esc(nodes[i].title)}</span>`) }));
+document.getElementById("stats").textContent = `${N.toLocaleString()} notes · ${L.toLocaleString()} links · ${H.toLocaleString()} neighbourhoods`;
+
+// ── forces, with a grid so the short-range push only checks nearby notes ──
+const P = { rest: .45, spring: .06, push: .03, range: 1.4, hoodPush: 900, cohesion: .016, damp: .85 };
+const acc = new Float32Array(N * 3), cent = new Float32Array(H * 3), hacc = new Float32Array(H * 3);
+const cell = P.range, grid = new Map();
+const key = (x, y, z) => (x * 73856093) ^ (y * 19349663) ^ (z * 83492791);
+let crowdTick = 0;
+function measureCrowd() {
+  for (let i = 0; i < N; i++) { const cx = Math.floor(pos[i*3] / cell), cy = Math.floor(pos[i*3+1] / cell), cz = Math.floor(pos[i*3+2] / cell); let n = 0;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) { const b = grid.get(key(cx + dx, cy + dy, cz + dz)); if (b) n += b.length; }
+    crowd[i] = crowd[i] ? crowd[i] * .7 + n * .3 : n;
+    if (!orbiting.has(i)) sizeArr[i] = .16 + Math.log2(1 + crowd[i]) * .07 + Math.max(0, Math.log10((nodes[i].size || 300) / 300)) * .05; }
+  dotGeo.attributes.size.needsUpdate = true; paint(); }
+let heat = 1;   // the layout cools as it settles, so a finished brain rests and only its slow orbits move
+function step() {
+  heat = Math.max(.04, heat * .996);
+  acc.fill(0); grid.clear();
+  for (let i = 0; i < N; i++) { const k = key(Math.floor(pos[i*3] / cell), Math.floor(pos[i*3+1] / cell), Math.floor(pos[i*3+2] / cell)); let b = grid.get(k); if (!b) grid.set(k, b = []); b.push(i); }
+  for (let i = 0; i < N; i++) { const cx = Math.floor(pos[i*3] / cell), cy = Math.floor(pos[i*3+1] / cell), cz = Math.floor(pos[i*3+2] / cell);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) { const b = grid.get(key(cx + dx, cy + dy, cz + dz)); if (!b) continue;
+      for (const j of b) { if (j <= i) continue; const x = pos[i*3] - pos[j*3], y = pos[i*3+1] - pos[j*3+1], z = pos[i*3+2] - pos[j*3+2], r = Math.sqrt(x*x + y*y + z*z);
+        if (r > P.range || r < 1e-4) continue; const f = P.push * (1 - r / P.range) / r;
+        acc[i*3] += x*f; acc[i*3+1] += y*f; acc[i*3+2] += z*f; acc[j*3] -= x*f; acc[j*3+1] -= y*f; acc[j*3+2] -= z*f; } } }
+  for (let k = 0; k < L; k++) { const a = la[k], b = lb[k], br = bridge.has(a) || bridge.has(b);
+    const x = pos[b*3] - pos[a*3], y = pos[b*3+1] - pos[a*3+1], z = pos[b*3+2] - pos[a*3+2], r = Math.max(Math.sqrt(x*x + y*y + z*z), 1e-4);
+    const cross = hoodOf[a] !== hoodOf[b], f = P.spring * (r - (br ? 3 : cross ? 2 : P.rest)) / r * (br ? .05 : cross ? .25 : 1);
+    acc[a*3] += x*f; acc[a*3+1] += y*f; acc[a*3+2] += z*f; acc[b*3] -= x*f; acc[b*3+1] -= y*f; acc[b*3+2] -= z*f; }
+  // neighbourhoods push each other apart as wholes (weighted by size), so they spread into separate places
+  cent.fill(0); hacc.fill(0);
+  for (let h = 0; h < H; h++) { const g = hoods[h]; for (const i of g) { cent[h*3] += pos[i*3]; cent[h*3+1] += pos[i*3+1]; cent[h*3+2] += pos[i*3+2]; } cent[h*3] /= g.length; cent[h*3+1] /= g.length; cent[h*3+2] /= g.length; }
+  const push = (a, b, f, x, y, z) => { hacc[a*3] += x*f; hacc[a*3+1] += y*f; hacc[a*3+2] += z*f; hacc[b*3] -= x*f; hacc[b*3+1] -= y*f; hacc[b*3+2] -= z*f; };
+  for (const [a, b, n] of pairs) { const x = cent[b*3] - cent[a*3], y = cent[b*3+1] - cent[a*3+1], z = cent[b*3+2] - cent[a*3+2], r = Math.max(Math.sqrt(x*x + y*y + z*z), .1);
+    const rest = (hoodR[a] + hoodR[b]) * (1.3 + 1.5 / n), f = Math.min(.02, .002 * n) * (r - rest) / r;   // one stray link barely pulls   // many links: close and firmly held
+    push(a, b, f, x, y, z); }
+  // neighbourhoods keep a little space round themselves (a grid of centres, so it stays cheap in a big brain): small linked ones string out into chains instead of piling into one cloud
+  { const hc = 6 * SPACE + 2, hg = new Map(), hk = (x, y, z) => x + "," + y + "," + z;
+    for (let a = 0; a < H; a++) { const k = hk(Math.floor(cent[a*3] / hc), Math.floor(cent[a*3+1] / hc), Math.floor(cent[a*3+2] / hc)); let b = hg.get(k); if (!b) hg.set(k, b = []); b.push(a); }
+    for (let a = 0; a < H; a++) { const cx = Math.floor(cent[a*3] / hc), cy = Math.floor(cent[a*3+1] / hc), cz = Math.floor(cent[a*3+2] / hc);
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) { const b = hg.get(hk(cx + dx, cy + dy, cz + dz)); if (!b) continue;
+        for (const o of b) { if (o <= a) continue; const x = cent[o*3] - cent[a*3], y = cent[o*3+1] - cent[a*3+1], z = cent[o*3+2] - cent[a*3+2], r = Math.max(Math.sqrt(x*x + y*y + z*z), .2);
+          const reach = Math.min(hc, 2.2 * (hoodR[a] + hoodR[o])); if (r < reach) push(a, o, -.01 * (1 - r / reach) / r, x, y, z); } } } }
+  // a black hole moves as a whole under the same pull as any neighbourhood, so it settles where its links are comfortable instead of staying where it began
+  holes.forEach(hg => { const h = hg.userData.h, c = hg.userData.centre, v = hg.userData.v || (hg.userData.v = new THREE.Vector3());
+    v.set((v.x + hacc[h*3] * heat) * P.damp, (v.y + hacc[h*3+1] * heat) * P.damp, (v.z + hacc[h*3+2] * heat) * P.damp).clampLength(0, .4); c.add(v); });
+  for (let i = 0; i < N; i++) { const h = hoodOf[i]; if (h >= 0) { acc[i*3] += hacc[h*3] + (cent[h*3] - pos[i*3]) * P.cohesion; acc[i*3+1] += hacc[h*3+1] + (cent[h*3+1] - pos[i*3+1]) * P.cohesion; acc[i*3+2] += hacc[h*3+2] + (cent[h*3+2] - pos[i*3+2]) * P.cohesion; }
+    const pull = -.000004;   // barely any pull to the middle: unlinked neighbourhoods are left where they are
+    if (orbiting.has(i)) continue;   // a black hole's notes are its disc: they follow their orbits
+    const loose = !deg[i], damp = loose ? .99 : orbiting.has(i) ? .97 : P.damp;
+    for (let c = 0; c < 3; c++) { acc[i*3+c] += pos[i*3+c] * pull + (loose ? (Math.random() - .5) * .004 : 0);
+      vel[i*3+c] = (vel[i*3+c] + acc[i*3+c] * heat) * damp; vel[i*3+c] = Math.max(-.4, Math.min(.4, vel[i*3+c])); pos[i*3+c] += vel[i*3+c]; } }
+}
+const GALAXY_SPIN = .00025, HOOD_SPIN = .0025;
+function orbit() {
+  const cg = Math.cos(GALAXY_SPIN), sg = Math.sin(GALAXY_SPIN);
+  for (let i = 0; i < N; i++) { const x = pos[i*3], z = pos[i*3+2]; pos[i*3] = x * cg - z * sg; pos[i*3+2] = x * sg + z * cg; }
+  holes.forEach(hg => { const c = hg.userData.centre, x = c.x, z = c.z; c.x = x * cg - z * sg; c.z = x * sg + z * cg; });
+  for (let h = 0; h < H; h++) { if (stageOf[h] === 3) continue; const a = HOOD_SPIN / Math.sqrt(hoodR[h]), c = Math.cos(a), s = Math.sin(a), cx = cent[h*3], cz = cent[h*3+2];
+    for (const i of hoods[h]) { const x = pos[i*3] - cx, z = pos[i*3+2] - cz; pos[i*3] = cx + x * c - z * s; pos[i*3+2] = cz + x * s + z * c; } }
+}
+const t0 = performance.now(); for (let s = 0; s < 200; s++) step(); console.log("settled in", Math.round(performance.now() - t0), "ms");
+const TILT = .35, ct = Math.cos(TILT), st = Math.sin(TILT);
+holes.forEach(hg => { if (!hg.userData.spiral) return; const { g, k } = hg.userData, c = g.reduce((s, i) => s.add(new THREE.Vector3(pos[i*3], pos[i*3+1], pos[i*3+2])), hg.userData.centre.set(0, 0, 0)).multiplyScalar(1 / g.length), rIn = .8 * k, rMax = rIn + 7.5 * k * Math.cbrt(g.length / SPIRAL);
+  hg.userData.rMax = rMax;
+  [...g].sort((a, b) => deg[b] - deg[a]).forEach((i, n) => { const t = Math.pow(Math.random(), .8) * (.3 + .7 * n / g.length), r = rIn + t * (rMax - rIn), arm = n % 2,
+      a = arm * Math.PI + Math.log(r / rIn + 1) * 3.2 + (Math.random() - .5) * .55, y = (Math.random() - .5) * .05 * r;   // two log-spiral arms, a little scatter
+    hg.userData.notes.push({ i, r, a, y, w: .00035 / Math.pow(r / rIn + 1, .8) });   // far slower than a black hole's disc
+    const col = new THREE.Color().setHSL(.6 + t * .06, .75, .9 - t * .28); baseCol[i].copy(col);
+    sizeArr[i] = .3 + Math.min(deg[i], 20) * .015; }); });
+holes.forEach(hg => { if (hg.userData.spiral) return; const { g, k } = hg.userData, c = g.reduce((s, i) => s.add(new THREE.Vector3(pos[i*3], pos[i*3+1], pos[i*3+2])), hg.userData.centre.set(0, 0, 0)).multiplyScalar(1 / g.length), rIn = 2.2 * k, rMax = rIn + 4.5 * k * Math.cbrt(g.length / DENSE);
+  hg.userData.rMax = rMax;
+  [...g].sort((a, b) => deg[b] - deg[a]).forEach((i, n) => { const r = rIn + Math.pow(Math.random(), 2.4) * (rMax - rIn) * (.35 + .65 * n / g.length), a = Math.random() * 6.283, y = (Math.random() - .5) * .07 * r;
+    hg.userData.notes.push({ i, r, a, y, w: .0016 / Math.pow(r / rIn, 1.5) });   // inner notes orbit faster, like a real disc
+    const col = new THREE.Color().setHSL(.78 - (r - rIn) / (rMax - rIn) * .12, .8, .86 - (r - rIn) / (rMax - rIn) * .32); baseCol[i].copy(col);
+    sizeArr[i] = .38 + Math.min(deg[i], 20) * .02; }); });
+function spinHoles(dt) { holes.forEach(hg => { const c = hg.userData.centre, tc = hg.userData.ct ?? ct, ts = hg.userData.st ?? st; for (const o of hg.userData.notes) { o.a += o.w * dt;
+  const x = Math.cos(o.a) * o.r, z = Math.sin(o.a) * o.r, y = o.y; pos[o.i*3] = c.x + x; pos[o.i*3+1] = c.y + y * tc - z * ts; pos[o.i*3+2] = c.z + y * ts + z * tc; vel[o.i*3] = vel[o.i*3+1] = vel[o.i*3+2] = 0; } }); }
+spinHoles(0); dotGeo.attributes.size.needsUpdate = true;
+
+// ── view ──
+let HOME_DIST = Math.max(40, Math.min(140, 10 * Math.cbrt(N)));   // a small brain starts close, a huge one far out
+const target = new THREE.Vector3(); let goalDist = HOME_DIST, dist = HOME_DIST, yaw = .5, pitch = .35, paused = false, drag = false, lx = 0, ly = 0, moved = 0, sel = -1;
+const resize = () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }; addEventListener("resize", resize); resize();
+const cv = renderer.domElement;
+cv.onpointerdown = e => { drag = true; moved = 0; lx = e.clientX; ly = e.clientY; cv.setPointerCapture(e.pointerId); };
+let mx = innerWidth / 2, my = innerHeight / 2;
+cv.onpointermove = e => { mx = e.clientX; my = e.clientY; if (drag) { yaw -= (e.clientX - lx) * .005; pitch = Math.max(-1.3, Math.min(1.3, pitch + (e.clientY - ly) * .005)); moved += Math.abs(e.clientX - lx) + Math.abs(e.clientY - ly); lx = e.clientX; ly = e.clientY; } else hover(e); };
+cv.onpointerup = e => { drag = false; if (moved < 5) pick(e); };
+cv.addEventListener("wheel", e => { e.preventDefault(); zoomedByHand = true; goalDist = Math.max(2, Math.min(600, goalDist * (1 + Math.sign(e.deltaY) * .1))); }, { passive: false });
+document.getElementById("in").onclick = () => goalDist = Math.max(2, goalDist * .75);
+document.getElementById("out").onclick = () => goalDist = Math.min(600, goalDist * 1.33);
+document.getElementById("reset").onclick = () => { yaw = .5; pitch = .35; focus(-1); };
+document.getElementById("pause").onclick = e => { paused = !paused; e.target.textContent = paused ? "▶" : "❚❚"; };
+const v = new THREE.Vector3(), tip = document.getElementById("tip");
+function nearest(e, px = 14) { let best = -1, bd = px * px;
+  for (let i = 0; i < N; i++) { v.set(pos[i*3], pos[i*3+1], pos[i*3+2]).project(camera); if (v.z > 1 || v.z < -1) continue;
+    const dx = (v.x * .5 + .5) * innerWidth - e.clientX, dy = (-v.y * .5 + .5) * innerHeight - e.clientY, d = dx*dx + dy*dy; if (d < bd) { bd = d; best = i; } } return best; }
+let hoverT = 0; function hover(e) { const now = performance.now(); if (now - hoverT < 60) return; hoverT = now;
+  let text = ""; const kids = kidsOf(cur);
+  if (kids) { const k = nearestCluster(e, kids, 70); if (k >= 0) text = `${cName(k)} · ${C[k].notes.length.toLocaleString()} notes${C[k].kids ? " · " + C[k].kids.length + " clusters" : ""}`; }
+  if (!text) { const i = nearest(e, 10); if (i >= 0 && (cur < 0 || inCur[i])) text = nodes[i].title; }
+  tip.hidden = !text; if (text) { tip.textContent = text; tip.style.left = e.clientX + "px"; tip.style.top = e.clientY + "px"; } }
+// any number of levels: the top clusters, the clusters inside each, and so on down to single notes. Empty space steps back up one.
+let focusHood = -1, focusSub = -1, subs = [], cur = -1;
+const inCur = new Uint8Array(N).fill(1), kidOfNote = new Int32Array(N).fill(-1);
+const kidsOf = c => c < 0 ? roots : C[c].kids;
+function nearestHood(e, px = 90) { return nearestCluster(e, roots, px); }
+function nearestCluster(e, list, px) { let best = -1, bd = px * px;
+  for (const k of list) { v.copy(cCent[k]).project(camera); if (v.z > 1 || v.z < -1) continue;
+    const dx = (v.x * .5 + .5) * innerWidth - e.clientX, dy = (-v.y * .5 + .5) * innerHeight - e.clientY, d = dx*dx + dy*dy; if (d < bd) { bd = d; best = k; } } return best; }
+const centreOf = (list, out) => { out.set(0, 0, 0); for (const i of list) out.x += pos[i*3], out.y += pos[i*3+1], out.z += pos[i*3+2]; return out.multiplyScalar(1 / list.length); };
+function showInfo(title, kind, list) { const el = document.getElementById("rbody");
+  el.innerHTML = `<h2>${esc(title)}</h2><div class="meta">${esc(kind)}</div><h4>Inside</h4><div class="links">${list.map(t => `<button disabled>${esc(t)}</button>`).join("")}</div>`;
+  document.getElementById("right").classList.add("open"); }
+function enter(c) { cur = c; focusHood = c >= 0 && C[c].level === 0 ? c : -1; select(-1, true);
+  inCur.fill(c < 0 ? 1 : 0); kidOfNote.fill(-1);
+  if (c >= 0) { C[c].notes.forEach(i => inCur[i] = 1); (C[c].kids || []).forEach((k, n) => C[k].notes.forEach(i => kidOfNote[i] = n)); }
+  goalDist = c < 0 ? HOME_DIST : Math.max(8, cR[c] * 4); paint();
+  if (c < 0) { document.getElementById("right").classList.remove("open"); return; }
+  const kids = C[c].kids;
+  showInfo(cName(c), kids ? `level ${C[c].level + 1} · ${C[c].notes.length.toLocaleString()} notes in ${kids.length} clusters · click one` : `cluster · ${C[c].notes.length} notes · click a note`,
+    kids ? [...kids].sort((a, b) => C[b].notes.length - C[a].notes.length).slice(0, 14).map(k => `${cName(k)} (${C[k].notes.length.toLocaleString()})`)
+         : [...C[c].notes].sort((a, b) => deg[b] - deg[a]).slice(0, 14).map(i => nodes[i].title)); }
+function focus(h) { enter(h); }
+function ancestorBelow(c, top) { while (c >= 0 && C[c].parent !== top) c = C[c].parent; return c; }   // the child of top that contains c
+function holeAt(e) { let best = -1, bz = Infinity;
+  holes.forEach(hg => { const c = hg.userData.centre; v.copy(c).project(camera); if (v.z > 1) return; const sx = (v.x * .5 + .5) * innerWidth, sy = (-v.y * .5 + .5) * innerHeight, z = v.z;
+    v.copy(c).add(new THREE.Vector3(hg.userData.rMax, 0, 0).applyQuaternion(camera.quaternion)).project(camera); const rad = Math.hypot((v.x * .5 + .5) * innerWidth - sx, (-v.y * .5 + .5) * innerHeight - sy);
+    if (Math.hypot(e.clientX - sx, e.clientY - sy) < rad && z < bz) { bz = z; best = hg.userData.h; } }); return best; }
+const CLUSTER_LINKS = 8;   // a note with this many links is a cluster in its own right
+function clusterAt(e) { let best = -1, bd = 14 * 14; for (let i = 0; i < N; i++) { if (deg[i] < CLUSTER_LINKS) continue; v.set(pos[i*3], pos[i*3+1], pos[i*3+2]).project(camera); if (v.z > 1) continue;
+  const dx = (v.x * .5 + .5) * innerWidth - e.clientX, dy = (-v.y * .5 + .5) * innerHeight - e.clientY, d = dx*dx + dy*dy; if (d < 14 * 14 && (best < 0 || deg[i] > deg[best])) best = i; } return best; }   // the most linked one under the cursor
+function openCluster(i) { if (hoodOf[i] >= 0) enter(hoodOf[i]); select(i);
+  let spread = 0; nb[i].forEach(j => spread = Math.max(spread, Math.hypot(pos[j*3] - pos[i*3], pos[j*3+1] - pos[i*3+1], pos[j*3+2] - pos[i*3+2]))); goalDist = Math.min(80, Math.max(8, spread * 1.6));
+  document.getElementById("ik").textContent = `cluster · ${deg[i]} linked notes${hoodOf[i] >= 0 ? " · in " + hoodName(hoods[hoodOf[i]]) : ""}`; }
+const ray = new THREE.Raycaster(), m2 = new THREE.Vector2();
+function rayHit(e) { m2.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1); ray.setFromCamera(m2, camera);
+  ray.params.Points.threshold = Math.max(.15, dist * .012); dotGeo.boundingSphere = null;
+  const spheres = holes.map(hg => hg.children[0]), solid = ray.intersectObjects(spheres, false)[0];
+  if (solid) { const hg = holes.find(x => x.children[0] === solid.object); if (hg && cur !== hg.userData.h) return { hole: hg.userData.h }; }   // a black hole's dark centre is solid: it wins over specks in front of it
+  const targets = [dots, ...spheres], hits = ray.intersectObjects(targets, false);
+  for (const hit of hits) { if (hit.object === dots) { const i = hit.index; if (orbiting.has(i) && cur !== hoodOf[i]) return { hole: hoodOf[i] };   // a black hole's own notes: the black hole
+      if (i >= 0 && (cur < 0 || inCur[i] || sel >= 0)) return { i }; continue; }
+    const hg = holes.find(x => x.children[0] === hit.object); if (hg) return { hole: hg.userData.h }; }
+  return null; }
+function childContaining(i, top) { let c = hoodOf[i]; if (c < 0) return -1; const list = kidsOf(top);
+  while (c >= 0 && !list.includes(c)) c = C[c].parent; return c; }
+function pick(e) {
+  { const hit = rayHit(e);
+    if (hit && hit.hole !== undefined) { if (cur !== hit.hole) enter(hit.hole); return; }
+    if (hit && hit.i !== undefined) { const i = hit.i, kids = kidsOf(cur);
+      if (sel >= 0 || !kids || deg[i] >= CLUSTER_LINKS) { openNote(i); return; }   // a single note, or a heavily linked one: open it
+      const k = childContaining(i, cur); if (k >= 0) { enter(k); return; } openNote(i); return; } }
+  { const kids = kidsOf(cur); if (kids && sel < 0) { const k = nearestCluster(e, kids, 26); if (k >= 0) { enter(k); return; } } }   // right on a cluster's centre: that cluster
+  { const c = clusterAt(e); if (c >= 0 && c !== sel) { openCluster(c); return; } }
+  { const hh = holeAt(e); if (hh >= 0 && cur !== hh) { enter(hh); return; } }
+  const kids = kidsOf(cur);
+  if (sel >= 0) { const i = nearest(e, 18); if (i >= 0 && i !== sel && (cur < 0 || inCur[i])) select(i); else { select(-1, true); enter(cur); } return; }
+  if (kids) { const k = nearestCluster(e, kids, 80); if (k >= 0) { enter(k); return; } }
+  const i = nearest(e, 18); if (i >= 0 && (cur < 0 || inCur[i]) && !kids) { select(i); return; }
+  if (cur >= 0) enter(C[cur].parent);                                // step back up one level
+}
+function select(i, quiet) { sel = i; if (i >= 0) goalDist = 6; paint(); if (i < 0) { if (!quiet) document.getElementById("right").classList.remove("open"); return; } showNote(i); }
+function openNote(i) { const h = hoodOf[i]; if (h >= 0 && cur !== h) enter(h); select(i); }
+function crumbsOf(i) { const out = []; let c = hoodOf[i]; while (c >= 0) { out.unshift(c); c = C[c].parent; } return out; }
+function showNote(i) { const n = nodes[i], el = document.getElementById("rbody"), words = Math.round((n.size || 300) / 6);
+  const crumbs = crumbsOf(i).map(c => `<button data-c="${c}">${esc(cName(c))}</button>`).join("");
+  const links = [...nb[i]].sort((a, b) => deg[b] - deg[a]).slice(0, 80).map(j => `<button data-i="${j}">${esc(nodes[j].title)}</button>`).join("");
+  el.innerHTML = `<h2>${esc(n.title)}</h2>
+    <div class="meta">${esc(n.type || "note")} · ${esc(n.folder || "")} · ${deg[i]} links · about ${words.toLocaleString()} words</div>
+    ${crumbs ? `<h4>Where it sits</h4><div class="crumbs">${crumbs}</div>` : ""}
+    <h4>Contents</h4><div class="body" id="note-text">Loading…</div>
+    <h4>Linked notes (${deg[i]})</h4><div class="links">${links}${deg[i] > 80 ? `<div class="meta">…and ${deg[i] - 80} more</div>` : ""}</div>`;
+  const want = i; fetch("/api/v1/admin/brain/note?path=" + encodeURIComponent(n.name || n.title)).then(r => r.ok ? r.json() : null).then(j => {
+    if (sel !== want) return; const t = document.getElementById("note-text"); if (!t) return;
+    t.textContent = j ? (j.content || "").trim() || "(This note has no text.)" : "Couldn't load this note."; if (j?.sensitive) t.insertAdjacentHTML("beforebegin", '<div class="meta">Private note</div>'); });
+  el.querySelectorAll("[data-i]").forEach(b => b.onclick = () => openNote(+b.dataset.i));
+  el.querySelectorAll("[data-c]").forEach(b => b.onclick = () => enter(+b.dataset.c));
+  document.getElementById("right").classList.add("open"); }
+const near = new Uint8Array(N);
+function paint() { near.fill(0); if (sel >= 0) { near[sel] = 1; nb[sel].forEach(j => near[j] = 1); }
+  for (let i = 0; i < N; i++) { const lit = .45 + .55 * Math.min(1, Math.log2(1 + crowd[i]) / 5.5), k = lit * (sel >= 0 ? (near[i] ? 1 : .1) : inCur[i] ? 1 : .15); colArr[i*3] = baseCol[i].r * k; colArr[i*3+1] = baseCol[i].g * k; colArr[i*3+2] = baseCol[i].b * k; }
+  dotGeo.attributes.color.needsUpdate = true; }
+paint();
+const place = (el, x, y, z) => { v.set(x, y, z).project(camera); el.hidden = v.z > 1; el.style.left = (v.x * .5 + .5) * innerWidth + "px"; el.style.top = (-v.y * .5 + .5) * innerHeight + "px"; };
+const c1 = new THREE.Color();
+const cLabels = new Map(), liveT = new THREE.Vector3(), fly = { key: "", goal: 0, t0: 0, dur: 1, from: new THREE.Vector3(), fromDist: 0 };
+const lowerTitle = nodes.map(n => n.title.toLowerCase());
+function search(q) { q = q.trim().toLowerCase(); if (!q) return [];
+  const rank = s => s.startsWith(q) ? 0 : (" " + s).includes(" " + q) ? 1 : s.includes(q) ? 2 : -1, out = [];
+  for (let c = 0; c < CN; c++) { const r = rank(cName(c).toLowerCase()); if (r >= 0) out.push({ r: r - .5 + C[c].level * -.01, c }); }   // a cluster outranks the note it is named after
+  for (let i = 0; i < N; i++) { const r = rank(lowerTitle[i]); if (r >= 0) out.push({ r: r - Math.min(deg[i], 40) / 1000, i }); }
+  return out.sort((a, b) => a.r - b.r).slice(0, 300); }
+const qEl = document.getElementById("q"), resEl = document.getElementById("results"), countEl = document.getElementById("count");
+function goTo(hit) { if (hit.c !== undefined) enter(hit.c); else openNote(hit.i); }
+let searchTimer = 0;
+qEl.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => {
+  const hits = search(qEl.value); resEl.innerHTML = ""; countEl.textContent = qEl.value.trim() ? (hits.length === 300 ? "300+ results" : hits.length + " results") : "";
+  hits.forEach((hit, n) => { const b = document.createElement("button"); if (!n) b.className = "top";
+    const name = hit.c !== undefined ? cName(hit.c) : nodes[hit.i].title, kind = hit.c !== undefined ? `cluster · level ${C[hit.c].level + 1} · ${C[hit.c].notes.length.toLocaleString()} notes` : `note · ${deg[hit.i]} links`;
+    b.innerHTML = `${esc(name)}<small>${kind}</small>`; b.onclick = () => { resEl.querySelectorAll(".top").forEach(x => x.className = ""); b.className = "top"; goTo(hit); }; resEl.appendChild(b); });
+  if (hits.length) goTo(hits[0]);                       // the top result is always flown to
+}, 220); });
+qEl.addEventListener("keydown", e => { if (e.key === "Enter") { const h = search(qEl.value)[0]; if (h) goTo(h); } });
+const leftEl = document.getElementById("left"), ltab = document.getElementById("ltab");
+ltab.onclick = () => { const open = leftEl.classList.toggle("closed"); ltab.classList.toggle("open", !open); ltab.textContent = open ? "›" : "‹"; ltab.title = open ? "Show search" : "Hide search"; };
+document.getElementById("rclose").onclick = () => document.getElementById("right").classList.remove("open");
+// with nothing chosen the camera looks at the middle of the brain, wherever its notes have drifted
+const home = new THREE.Vector3(), homeNow = new THREE.Vector3(); let homeSet = false;
+function centreHome() { if (!homeSet) { homeSet = true; home.set(0, 0, 0); } let x = 0, y = 0, z = 0; for (let i = 0; i < N; i++) { x += pos[i*3]; y += pos[i*3+1]; z += pos[i*3+2]; } homeNow.set(x / N, y / N, z / N); home.lerp(homeNow, .03);
+  // once the layout has settled, frame the whole brain by its real size (unless the viewer has zoomed already)
+  if (crowdTick === 150 && !zoomedByHand) { let r = 0; for (let i = 0; i < N; i += Math.max(1, N >> 12)) r = Math.max(r, Math.hypot(pos[i*3] - homeNow.x, pos[i*3+1] - homeNow.y, pos[i*3+2] - homeNow.z)); HOME_DIST = Math.max(6, Math.min(140, r * 2.6)); if (sel < 0 && cur < 0) goalDist = HOME_DIST; } }
+let zoomedByHand = false;   // eased, so the camera glides instead of twitching
+// how far a cluster's notes actually reach from its middle (measured, so labels hug the cluster at any brain size)
+const spreadOf = new Float32Array(C.length);
+function spread(k) { if (crowdTick % 30 === 1 || !spreadOf[k]) { let m = 0; const c = cCent[k], ns = C[k].notes; for (let j = 0; j < ns.length; j += Math.max(1, ns.length >> 8)) { const i = ns[j], d = Math.hypot(pos[i*3] - c.x, pos[i*3+1] - c.y, pos[i*3+2] - c.z); if (d > m) m = d; } spreadOf[k] = m; } return spreadOf[k]; }
+function frame() {
+  if (!paused) { step(); orbit(); spinHoles(1); if (++crowdTick % 20 === 1) measureCrowd(); }
+  centreHome();
+  const live = sel >= 0 ? liveT.set(pos[sel*3], pos[sel*3+1], pos[sel*3+2]) : cur >= 0 ? liveT.copy(cCent[cur]) : liveT.copy(home), key = sel + "|" + cur, nowT = performance.now();
+  if (key !== fly.key || goalDist !== fly.goal) { fly.dur = key !== fly.key ? 1200 : 350; fly.key = key; fly.goal = goalDist; fly.t0 = nowT; fly.from.copy(target); fly.fromDist = dist; }
+  { const p = Math.min(1, (nowT - fly.t0) / fly.dur), ease = p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;   // ease in and out
+    target.copy(fly.from).lerp(live, ease); dist = fly.fromDist + (goalDist - fly.fromDist) * ease; }
+  camera.position.set(target.x + Math.sin(yaw) * Math.cos(pitch) * dist, target.y + Math.sin(pitch) * dist, target.z + Math.cos(yaw) * Math.cos(pitch) * dist); camera.lookAt(target); sky.position.copy(camera.position);
+  dotGeo.attributes.position.needsUpdate = true;
+  for (let k = 0; k < L; k++) { const a = la[k], b = lb[k]; linePos.set([pos[a*3], pos[a*3+1], pos[a*3+2], pos[b*3], pos[b*3+1], pos[b*3+2]], k * 6);
+    const inside = hoodOf[a] === hoodOf[b], br = bridge.has(a) || bridge.has(b);
+    const on = sel >= 0 ? (a === sel || b === sel ? 3 : 0)
+      : cur >= 0 ? (inCur[a] && inCur[b] ? (C[cur].kids ? (kidOfNote[a] !== kidOfNote[b] ? .5 : 0) : stageOf[cur] === 3 ? 0 : isHub[a] || isHub[b] ? 1.8 : 1) : inCur[a] || inCur[b] ? .12 : 0)
+      : (inside ? 0 : br ? .04 : .18); c1.copy(baseCol[bridge.has(a) ? b : a]).multiplyScalar(on);
+    lineCol[k*6] = lineCol[k*6+3] = c1.r; lineCol[k*6+1] = lineCol[k*6+4] = c1.g; lineCol[k*6+2] = lineCol[k*6+5] = c1.b; }
+  lineGeo.attributes.position.needsUpdate = lineGeo.attributes.color.needsUpdate = true;
+  hubIds.forEach((i, k) => { hubPos[k*3] = pos[i*3]; hubPos[k*3+1] = pos[i*3+1]; hubPos[k*3+2] = pos[i*3+2]; }); hubGeo.attributes.position.needsUpdate = true;
+  bridgeSprites.forEach(s => s.position.set(pos[s.userData.i*3], pos[s.userData.i*3+1], pos[s.userData.i*3+2]));
+  holes.forEach(hg => hg.position.copy(hg.userData.centre));
+  for (let c = 0; c < CN; c++) { if (C[c].level === 0) cCent[c].set(cent[c*3], cent[c*3+1], cent[c*3+2]); else { cCent[c].set(0, 0, 0); for (const k of C[c].kids) cCent[c].addScaledVector(cCent[k], C[k].notes.length); cCent[c].multiplyScalar(1 / C[c].notes.length); } }
+  { const kids = kidsOf(cur) || [], sc = []; for (const k of kids) { v.copy(cCent[k]).project(camera); if (v.z > 1) continue; const sx = (v.x * .5 + .5) * innerWidth, sy = (-v.y * .5 + .5) * innerHeight; sc.push([(sx - mx) ** 2 + (sy - my) ** 2, k, sx, sy]); }
+    sc.sort((a, b) => a[0] - b[0]); const show = new Set(), spots = [];
+    if (sel < 0) for (const [, k, sx, sy] of sc) { if (show.size === 5) break; if (spots.some(([px, py]) => Math.abs(px - sx) < 150 && Math.abs(py - sy) < 34)) continue; show.add(k); spots.push([sx, sy]); }   // the five nearest that don't overlap
+    if (cur >= 0 && sel < 0) show.add(cur);
+    for (const k of show) if (!cLabels.has(k)) cLabels.set(k, mk(`${esc(cName(k))}<small>${C[k].notes.length.toLocaleString()} notes${C[k].kids ? " · " + C[k].kids.length + " clusters" : ""}</small>`));
+    cLabels.forEach((el, k) => { if (show.has(k)) place(el, cCent[k].x, cCent[k].y + spread(k) * .9, cCent[k].z); else el.hidden = true; }); }
+  bodies.forEach(b => { const h = b.userData.h; b.position.set(cent[h*3], cent[h*3+1], cent[h*3+2]);
+    b.userData.rings.forEach((r, k) => r.rotation.z += k ? -.0012 : .0008); });
+  bridgeLabels.forEach(({ i, el }) => place(el, pos[i*3], pos[i*3+1] - 2.5, pos[i*3+2]));
+  renderer.render(scene, camera); requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ── Reshape: queue a rework job for Engram ──
+{
+  const $ = id => document.getElementById(id), msg = $("rw-msg");
+  const auth = () => { const h = { "Content-Type": "application/json" }; try { const t = sessionStorage.getItem("ari_token"); if (t) h.Authorization = "Bearer " + t; } catch {} return h; };
+  fetch("/api/v1/admin/brain/rework", { headers: auth() }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.queued) msg.textContent = "A reshape is queued or running."; }).catch(() => {});
+  $("rw-open").onclick = () => { $("rw-ask").hidden = false; $("rw-open").hidden = true; };
+  $("rw-no").onclick = () => { $("rw-ask").hidden = true; $("rw-open").hidden = false; };
+  $("rw-go").onclick = async () => {
+    $("rw-ask").hidden = true; msg.textContent = "Queuing…";
+    try { const r = await fetch("/api/v1/admin/brain/rework", { method: "POST", headers: auth(), body: "{}" }); const j = await r.json(); msg.textContent = r.ok ? j.message : (j.error || "Couldn't queue it."); }
+    catch { msg.textContent = "Couldn't reach ARI."; }
+    $("rw-open").hidden = false;
+  };
+}
+</script></body></html>

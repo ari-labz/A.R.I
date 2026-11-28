@@ -1105,6 +1105,12 @@ public class LLMModule : ILLMModule, IDisposable
     {
         string real = Path.GetFullPath(config.VaultPath.Length > 0 ? config.VaultPath : Paths.Brain);
         string sandbox = real.TrimEnd(Path.DirectorySeparatorChar) + ".devrun";
+        // ARI_DEVRUN_KEEP=1 carries the last run's throwaway brain over instead of copying the real one again (for long Engram runs).
+        if (Environment.GetEnvironmentVariable("ARI_DEVRUN_KEEP") == "1" && Directory.Exists(sandbox))
+        {
+            _logger.LogWarning("DevMode: keeping last run's throwaway brain at {Sandbox} (ARI_DEVRUN_KEEP=1); your real brain at {Real} is untouched.", sandbox, real);
+            return sandbox;
+        }
         if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: true);   // only ever our own ".devrun" copy
         if (Directory.Exists(real)) CopyDirectory(real, sandbox);
         _logger.LogWarning("DevMode: the brain for this run is a throwaway copy at {Sandbox}. Engram runs in full and its notes are written there; your real brain at {Real} is untouched.", sandbox, real);
@@ -1135,6 +1141,13 @@ public class LLMModule : ILLMModule, IDisposable
 
     // ── Brain backups ───────────────────────────────────────────────────────────
     public bool BrainAvailable => Brain.Ready;
+    /// <summary>Queues a job for Engram to reshape the brain (all of it, or the named notes) the next time ARI is idle.</summary>
+    public string QueueBrainRework(IReadOnlyList<string>? scope, string? instructions) =>
+        Brain.Ready ? $"Queued {Engram.QueueRework(scope, instructions)}; Engram starts on it the next time ARI is idle." : "Brain is not available.";
+
+    /// <summary>Rework jobs waiting or in progress.</summary>
+    public int QueuedBrainReworks => Engram.QueuedReworks().Count;
+
     public string BackupBrain()                   => Brain.Ready ? BrainBackup.Backup()            : "Brain is not available.";
     public List<BackupInfo> ListBrainBackups()    => Brain.Ready ? BrainBackup.ListBackups()       : new List<BackupInfo>();
     public string RestoreBrainBackup(string file) => Brain.Ready ? BrainBackup.RestoreBackup(file) : "Brain is not available.";
@@ -1232,7 +1245,15 @@ public class LLMModule : ILLMModule, IDisposable
             try
             {
                 if (!IdleForMemory() || engram is not { IsEnabled: true } e) continue;
-                if (Engram.QueuedSnapshots().FirstOrDefault() is not { } file) continue;
+                if (Engram.QueuedSnapshots().FirstOrDefault() is not { } file)
+                {
+                    // Nothing from conversations waiting: Engram's other inputs get the idle time.
+                    // Then saved chat logs being read again, then jobs to reshape the brain.
+                    if (Engram.QueuedReplays().FirstOrDefault() is { } replay) { if (!await e.RunReplay(replay, IdleForMemory)) await Task.Delay(TimeSpan.FromMinutes(1)); }
+                    else if (Engram.QueuedReworks().FirstOrDefault() is { } job && !await e.RunRework(job, IdleForMemory))
+                        await Task.Delay(TimeSpan.FromMinutes(1));
+                    continue;
+                }
                 (string key, string trigger) = Engram.SnapshotInfo(file);
                 bool done = true;
                 await SweepOrHandOff(key, trigger, async () => done = await e.SweepSnapshot(file));
