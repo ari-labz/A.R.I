@@ -333,7 +333,9 @@ function nearestCluster(e, list, px) { let best = -1, bd = px * px;
     const dx = (v.x * .5 + .5) * innerWidth - e.clientX, dy = (-v.y * .5 + .5) * innerHeight - e.clientY, d = dx*dx + dy*dy; if (d < bd) { bd = d; best = k; } } return best; }
 const centreOf = (list, out) => { out.set(0, 0, 0); for (const i of list) out.x += pos[i*3], out.y += pos[i*3+1], out.z += pos[i*3+2]; return out.multiplyScalar(1 / list.length); };
 function showInfo(title, kind, list) { const el = document.getElementById("rbody");
-  el.innerHTML = `<h2>${esc(title)}</h2><div class="meta">${esc(kind)}</div><h4>Inside</h4><div class="links">${list.map(t => `<button disabled>${esc(t)}</button>`).join("")}</div>`;
+  // each entry is [label, action]: a note opens it, a sub-cluster flies into it
+  el.innerHTML = `<h2>${esc(title)}</h2><div class="meta">${esc(kind)}</div><h4>Inside</h4><div class="links">${list.map(([t], n) => `<button data-n="${n}">${esc(t)}</button>`).join("")}</div>`;
+  el.querySelectorAll(".links button").forEach(b => b.onclick = () => list[+b.dataset.n][1]());
   document.getElementById("right").classList.add("open"); }
 function enter(c) { cur = c; focusHood = c >= 0 && C[c].level === 0 ? c : -1; select(-1, true);
   inCur.fill(c < 0 ? 1 : 0); kidOfNote.fill(-1);
@@ -342,8 +344,8 @@ function enter(c) { cur = c; focusHood = c >= 0 && C[c].level === 0 ? c : -1; se
   if (c < 0) { document.getElementById("right").classList.remove("open"); return; }
   const kids = C[c].kids;
   showInfo(cName(c), kids ? `level ${C[c].level + 1} · ${C[c].notes.length.toLocaleString()} notes in ${kids.length} clusters · click one` : `cluster · ${C[c].notes.length} notes · click a note`,
-    kids ? [...kids].sort((a, b) => C[b].notes.length - C[a].notes.length).slice(0, 14).map(k => `${cName(k)} (${C[k].notes.length.toLocaleString()})`)
-         : [...C[c].notes].sort((a, b) => deg[b] - deg[a]).slice(0, 14).map(i => nodes[i].title)); }
+    kids ? [...kids].sort((a, b) => C[b].notes.length - C[a].notes.length).slice(0, 14).map(k => [`${cName(k)} (${C[k].notes.length.toLocaleString()})`, () => enter(k)])
+         : [...C[c].notes].sort((a, b) => deg[b] - deg[a]).slice(0, 14).map(i => [nodes[i].title, () => select(i)])); }
 function focus(h) { enter(h); }
 function ancestorBelow(c, top) { while (c >= 0 && C[c].parent !== top) c = C[c].parent; return c; }   // the child of top that contains c
 function holeAt(e) { let best = -1, bz = Infinity;
