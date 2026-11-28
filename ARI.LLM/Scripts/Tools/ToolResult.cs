@@ -65,3 +65,13 @@ internal static class ToolResultTasks
         return ok ? r : "Error: " + r;
     }
 }
+
+/// <summary>How big a tool result was, for <see cref="Tool.TooLarge"/>.</summary>
+internal readonly record struct ToolSize(int Chars, int Lines, int Tokens)
+{
+    internal string Describe()
+    {
+        string bytes = Chars >= 1_000_000 ? $"{Chars / 1_000_000.0:0.#} MB" : $"{Math.Max(1, Chars / 1000):N0} KB";
+        return $"{Lines:N0} lines ({bytes}, about {Tokens:N0} tokens)";
+    }
+}

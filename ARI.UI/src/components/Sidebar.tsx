@@ -90,6 +90,14 @@ const baseName = t.isInternal
                                     {!t.isInternal && t.title ? t.title : baseName}
                                 </span>
                                 <span className="thread-meta">
+                                    {t.desktopBound && (
+                                        <span className={`thread-desktop-icon${t.desktopConnected ? " connected" : ""}`}
+                                              title={t.desktopConnected ? "Desktop app connected: commands run on your computer" : "Desktop app not connected: open it to run commands"}>
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                                <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+                                            </svg>
+                                        </span>
+                                    )}
                                     {t.isCodeMode && (
                                         <svg className="thread-code-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                             <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
@@ -135,6 +143,13 @@ const baseName = t.isInternal
                             <span id="btn-user-name">{userDisplayName}</span>
                         </button>
                     )}
+                    {isAdmin && <a id="btn-brain" href="/brain.html">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="2.2"/><circle cx="5" cy="6" r="1.6"/><circle cx="19" cy="7" r="1.6"/><circle cx="6" cy="18" r="1.6"/><circle cx="18" cy="17" r="1.6"/>
+                            <line x1="6.3" y1="7" x2="10.4" y2="10.8"/><line x1="17.6" y1="7.8" x2="13.8" y2="10.9"/><line x1="7.2" y1="17" x2="10.3" y2="13.3"/><line x1="16.6" y1="16.2" x2="13.7" y2="13.2"/>
+                        </svg>
+                        Brain
+                    </a>}
                     {isAdmin && <a id="btn-control-panel" href="/controlpanel.html">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <circle cx="12" cy="12" r="3"/>

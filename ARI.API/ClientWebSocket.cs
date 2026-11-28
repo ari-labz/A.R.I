@@ -109,11 +109,18 @@ public static class ClientWebSocket
         }
 
         RegisterTools(codeThread, ws, log, fileState, connId);
+        codeThread.DesktopBound = codeThread.DesktopConnected = true;
+        codeThread.RaiseUpdated();   // the sidebar shows the "desktop connected" icon
 
         try
         {
             log.LogInformation("[Client] Entering receive loop");
             await ReceiveLoop(ws, llm, codeThread, threadKey, fileTree, state, fileState, log, connId, ctx.User, ctx.RequestServices);
+        }
+        catch (Exception ex) when (ex is System.Net.WebSockets.WebSocketException or IOException or OperationCanceledException)
+        {
+            // a client going away (closed tab, sleep, dropped network) without the close handshake is normal, not a crash
+            log.LogInformation("[Client] Connection ended without a clean close: {Reason}", ex.Message);
         }
         catch (Exception ex)
         {
@@ -145,6 +152,8 @@ public static class ClientWebSocket
         thread.ClientToolCloner = null;
         foreach (string tool in ClientToolNames)
             thread.UnregisterTool(tool);
+        thread.DesktopConnected = false;
+        thread.RaiseUpdated();   // the sidebar's "desktop connected" icon goes out
     }
 
     /// <summary>Fails every call still awaiting a reply on a connection that just closed, instead of leaving
@@ -182,24 +191,23 @@ public static class ClientWebSocket
         RegisterAgentTools(thread, ws, log, fileState, epochThread: thread, coderScope: false);
     }
 
-    /// <summary>The lean executor toolset for a spawned Coder — file edit tools plus search_files/find_files so it
-    /// can locate a referenced symbol before editing (no list_directory/run — those make a think-off Coder wander),
+    /// <summary>The client toolset for a spawned Coder: the same tools as its parent (run_command included, so commands
+    /// run on the user's machine and not the server),
     /// with its own guardrail scope. Turn epochs come from the PARENT thread (the user turn).</summary>
     private static void RegisterCoderScopeTools(ARI.LLM.Thread child, WebSocket ws, ILogger log, FileToolState childState, ARI.LLM.Thread epochThread)
         => RegisterAgentTools(child, ws, log, childState, epochThread, coderScope: true);
 
     private static void RegisterAgentTools(ARI.LLM.Thread thread, WebSocket ws, ILogger log, FileToolState fileState, ARI.LLM.Thread epochThread, bool coderScope)
     {
-        if (!coderScope)
-            RegisterTool(thread, ws, log,
-                name: "run_command",
-                description: "Run a shell command in the project's root directory and get back its stdout, stderr and exit code. Use this to build, test, or inspect the project after making changes — e.g. 'dotnet build', 'dotnet test', 'git status'. Commands not on the user's allow list require their approval before running, so prefer concrete, non-destructive commands and do not chain commands with ; && or |.",
-                parameters: new { type = "object", properties = new { command = new { type = "string", description = "The exact command line to run, e.g. 'dotnet build'." } }, required = new[] { "command" } },
-                displayVerb: "Running", displayDoneVerb: "Ran",
-                labelField: "command",
-                customDisplay:     argsJson => RunCommandMarker(argsJson, "start"),
-                customDisplayDone: argsJson => RunCommandMarker(argsJson, "end"),
-                preCheck: argsJson => CheckRunCommand(argsJson));
+        RegisterTool(thread, ws, log,
+            name: "run_command",
+            description: "Run a shell command in the project's root directory and get back its stdout, stderr and exit code. Use this to build, test, or inspect the project after making changes — e.g. 'dotnet build', 'dotnet test', 'git status'. Commands not on the user's allow list require their approval before running, so prefer concrete, non-destructive commands and do not chain commands with ; && or |.",
+            parameters: new { type = "object", properties = new { command = new { type = "string", description = "The exact command line to run, e.g. 'dotnet build'." } }, required = new[] { "command" } },
+            displayVerb: "Running", displayDoneVerb: "Ran",
+            labelField: "command",
+            customDisplay:     argsJson => RunCommandMarker(argsJson, "start"),
+            customDisplayDone: argsJson => RunCommandMarker(argsJson, "end"),
+            preCheck: argsJson => CheckRunCommand(argsJson));
 
         RegisterTool(thread, ws, log,
             name: "preview_file",
@@ -243,17 +251,16 @@ public static class ClientWebSocket
             postHook: (argsJson, result) => ReadPostHook(argsJson, result, fileState, epochThread),
             divert:   argsJson => PreviewBeforeRead(argsJson, ws, log, fileState));
 
-        if (!coderScope)
-            RegisterTool(thread, ws, log,
-                name: "list_directory",
-                description: "List files and subdirectories at a path within the project.",
-                parameters: new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root, or an absolute path anywhere on the user's machine. Defaults to root." } }, required = Array.Empty<string>() },
-                displayVerb: "Listing directory", displayDoneVerb: "Listed directory",
-                labelField: "path");
+        RegisterTool(thread, ws, log,
+            name: "list_directory",
+            description: "List files and subdirectories at a path within the project.",
+            parameters: new { type = "object", properties = new { path = new { type = "string", description = "Directory path relative to project root, or an absolute path anywhere on the user's machine. Defaults to root." } }, required = Array.Empty<string>() },
+            displayVerb: "Listing directory", displayDoneVerb: "Listed directory",
+            labelField: "path");
 
         // search_files IS available to a Coder scope: a task often references a symbol living in another file
         // (a type, a call site) that the Coder must locate before it can edit. Without it the Coder guesses
-        // paths, hits ENOENT/EISDIR, and loop-breaks. list_directory stays excluded — it invites aimless browsing.
+        // paths, hits ENOENT/EISDIR, and loop-breaks.
         RegisterTool(thread, ws, log,
             name: "search_files",
             description: "Search file contents with a regular expression. Returns each match as 'path:line: text' — the line numbers let you edit_file directly WITHOUT reading the whole file. Case-sensitive by default; set ignore_case for a case-insensitive search. Use this to find every call site / definition before changing a symbol.",

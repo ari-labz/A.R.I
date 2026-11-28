@@ -538,8 +538,8 @@ internal sealed class Coder : Agent
         return lastMutatingFailed;
     }
 
-    // The forwarded edit tools a remote Coder needs — mirrors RegisterCoderTools' lean set (search/find to locate a
-    // referenced symbol, but no list_directory, which makes a think-off Coder wander). Preferred path: the client
+    // The forwarded client tools a remote Coder needs, run_command included so its commands run on the client.
+    // Preferred path: the client
     // WebSocket layer's cloner, which registers a FRESH
     // guardrail scope for the child (its own read-dedup/preview/dirty state — a sub-agent must never inherit the
     // parent's "already read" ledger, since its context starts empty). Fallback: copy the parent's delegates
@@ -547,7 +547,7 @@ internal sealed class Coder : Agent
     private static void CopyForwardedCoderTools(Thread from, Thread to)
     {
         if (from.ClientToolCloner is not null && from.ClientToolCloner(to)) return;
-        foreach (string name in new[] { "preview_file", "read_file", "search_files", "find_files", "edit_file", "write_file", "delete_file", "move_file", "revert_file" })
+        foreach (string name in new[] { "preview_file", "read_file", "search_files", "find_files", "list_directory", "run_command", "edit_file", "write_file", "delete_file", "move_file", "revert_file" })
             if (from.tools.TryGetValue(name, out (object Schema, Func<string, Task<ToolResult>> Execute, Func<string, string>? Display, Func<string, string>? DisplayAfter, Func<string, string?>? StreamingDisplay, Func<string, string?>? StreamingPreCheck, Func<string, string?>? PreCheck, Func<string, ToolResult, ToolResult>? PostRun) t)) to.tools[name] = t;
     }
 
@@ -627,10 +627,8 @@ internal sealed class Coder : Agent
 
     private static void RegisterCoderTools(Thread child, string root, FileSnapshots snapshots, CancellationToken ct)
     {
-        // Lean executor toolset: locate → preview → read the assigned range, edit, recover. search_files/find_files
-        // are included so the Coder can resolve a symbol referenced by its task but living in another file (without
-        // them it guesses paths and loop-breaks); list_directory is NOT (with thinking off it invites aimless
-        // browsing). preview_file satisfies the preview-before-read gate and keeps context lean on its assigned file.
+        // The Coder's file tools are loaded up front (locate, preview, read, edit, recover); everything else is
+        // reachable through request_tools, like any thread. preview_file satisfies the preview-before-read gate.
         ServerFileSystem fs = new(root, ct, snapshots);
         new PreviewFile(fs).Register(child);
         new Read(fs).Register(child);
@@ -642,6 +640,11 @@ internal sealed class Coder : Agent
         new RevertFile(root, ct, snapshots).Register(child);   // RevertFile is snapshot-tied — not via FileSystem yet
         new DeleteFile(fs).Register(child);
         new MoveFile(fs).Register(child);
+        new ListDirectory(fs).Register(child);
+        // Every other tool is one request away, as on any thread: no pipeline gets a fixed list.
+        new ListTools(child).Register(child);
+        new RequestTools(child).Register(child);
+        new ToolSearch(child).Register(child);
     }
 
     private static (int Start, int End)? ParseRange(string range, int total)

@@ -63,17 +63,22 @@ internal static class ToolHistory
         return $"{first} … [earlier output, {lines.Length} lines — not kept; re-run the tool if you need it]";
     }
 
-    /// <summary>Args with long string values (a whole file for write_file, a long message) cut to a preview.</summary>
+    /// <summary>Args with long string values (a whole file for write_file, a long message) cut to a preview. A call the model wrote with the
+    /// same key twice ({"path":"a","path":"b"}) keeps the last value, as the tool did; it used to throw here on every later message and leave
+    /// the whole thread unable to answer. Anything unreadable is trimmed as plain text rather than failing.</summary>
     internal static string ShrinkArgs(string argsJson)
     {
         try
         {
-            if (JsonNode.Parse(argsJson) is not JsonObject obj) return argsJson;
-            foreach (string key in obj.Select(kv => kv.Key).ToList())
-                if (obj[key] is JsonValue v && v.TryGetValue(out string? s) && s.Length > ARG_VALUE_CHARS)
-                    obj[key] = $"{s[..ARG_VALUE_CHARS]}… ({s.Length} chars)";
+            using JsonDocument doc = JsonDocument.Parse(argsJson);   // tolerates repeated keys, unlike JsonNode
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return argsJson;
+            JsonObject obj = new();
+            foreach (JsonProperty p in doc.RootElement.EnumerateObject())
+                obj[p.Name] = p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { Length: > ARG_VALUE_CHARS } s
+                    ? $"{s[..ARG_VALUE_CHARS]}… ({s.Length} chars)"
+                    : JsonNode.Parse(p.Value.GetRawText());
             return obj.ToJsonString(Relaxed);
         }
-        catch (JsonException) { return argsJson.Length > ARG_VALUE_CHARS ? argsJson[..ARG_VALUE_CHARS] + "…" : argsJson; }
+        catch (Exception) { return argsJson.Length > ARG_VALUE_CHARS ? argsJson[..ARG_VALUE_CHARS] + "…" : argsJson; }
     }
 }

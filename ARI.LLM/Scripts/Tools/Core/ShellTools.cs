@@ -7,6 +7,13 @@ namespace ARI.LLM;
                "Commit, push, merge or tag only when asked. A refused command means stop and ask; never try it another way.", TimeoutSeconds = 700)]
 public class Shell : Tool
 {
+    // A conversation the desktop app has joined runs its commands on that machine, not on the server.
+    internal override string? PreCheck(Thread thread, string argsJson) =>
+        !thread.DesktopBound ? null
+        : thread.DesktopConnected
+            ? "[System: this conversation is linked to the desktop app, so commands run on the user's machine: use run_command, not shell.]"
+            : "[System: this conversation is linked to the desktop app, which is not connected right now, so the command can't run on the user's machine. Tell the user, and ask them to open the desktop app. Don't run it on the server instead.]";
+
     [Param("The command line, exactly as you'd type it in a terminal.")]
     public string Command;
 

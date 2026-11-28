@@ -383,7 +383,7 @@ public static class ScriptPlugins
             ToolAttribute attr = t.GetCustomAttribute<ToolAttribute>()!;
             object schema = ToolParams.Schema(attr.Name, attr.Description, ToolParams.Describe(t));
             int timeout = Math.Clamp(attr.TimeoutSeconds, 1, 3600);
-            plugin.ProvidedTools.Add(new ProvidedTool(attr.Name, attr.Description, thread => new PluginToolHost(attr.Name, t, schema, attr.Access, timeout, thread, attr.Card), attr.Card));
+            plugin.ProvidedTools.Add(new ProvidedTool(attr.Name, attr.Description, thread => new PluginToolHost(attr.Name, t, schema, attr.Access, timeout, thread, attr.Card), attr.Card, Pinned: attr.Pinned));
         }
         return (new Loaded { Plugin = plugin, Alc = alc, Hash = hash }, diags);
     }

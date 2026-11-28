@@ -97,7 +97,8 @@ public static class ToolRegistry
 
     internal static bool IsPinned(string name)
     {
-        lock (Lock) return Load().TryGetValue(name, out ToolSetting? s) && s.Pinned is { } p ? p : DefaultPinned.Contains(name) || WebRoles.IsSearch(name);
+        lock (Lock) return Load().TryGetValue(name, out ToolSetting? s) && s.Pinned is { } p ? p
+            : DefaultPinned.Contains(name) || WebRoles.IsSearch(name) || PluginTools.Find(name) is { Tool.Pinned: true };
     }
 
     /// <summary>Pinned tools, in a fixed order so the prompt Ari starts with is the same every time and stays cached.</summary>

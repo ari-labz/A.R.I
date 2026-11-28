@@ -61,6 +61,21 @@ public abstract partial class Tool
     /// up in size. A whole tool family (e.g. every read) can share one override. Default passes through.</summary>
     internal virtual ToolResult PostRun(Thread thread, string argsJson, ToolResult result) => result;
 
+    /// <summary>What the model is told when one result from this tool is too big to fit its context. The host decides
+    /// when (a share of the slot's context, for every tool); a tool only overrides the wording, so it can say what
+    /// to narrow ("this search matched 4,812 lines (3.1 MB). Search a smaller folder or a more specific pattern").</summary>
+    internal virtual string TooLarge(string argsJson, ToolSize size) => DefaultTooLarge(Name, size);
+
+    internal static string DefaultTooLarge(string name, ToolSize size) => name switch
+    {
+        _ when name.Contains("search") || name.Contains("grep") || name.Contains("find") =>
+            $"This search matched {size.Describe()}, too much to show. Search again with a more specific pattern or a smaller folder.",
+        _ when name.Contains("read") || name.Contains("fetch") =>
+            $"This was {size.Describe()}, too much to show at once. Read it in parts (a line range or a section).",
+        "run_command" => $"This command printed {size.Describe()}, too much to show. Run it again with its output filtered (head, tail, grep) or sent to a file.",
+        _ => $"This {name} result was {size.Describe()}, too big to show in full. Ask for less: a narrower scope, a more specific query, or a range.",
+    };
+
     /// <summary>Applies the control panel's settings at call time: a tool switched off since it was loaded refuses,
     /// and an async one starts in the background and returns at once (its result arrives later; see
     /// <see cref="AsyncToolJobs"/>). Internal threads (subagents) have no one to report to, so they run it inline.</summary>
@@ -75,6 +90,7 @@ public abstract partial class Tool
     internal void Register(Thread thread)
     {
         thread.toolAccess[Name] = Access;
+        thread.toolTooLarge[Name] = TooLarge;
         thread.RegisterTool(Name, Schema, argsJson => Dispatch(thread, argsJson), Display, DisplayAfter, StreamingDisplay,
             partialArgs => StreamingPreCheck(thread, partialArgs),
             argsJson    => PreCheck(thread, argsJson),

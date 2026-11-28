@@ -345,11 +345,26 @@ internal partial class Engram
     }
 
     // A group is named by a note's title (an existing note, or a new hub): plain words, no folder, no brackets.
+    private static readonly HashSet<string> FolderNames = new(StringComparer.OrdinalIgnoreCase)
+        { "People", "Places", "Events", "Relationships", "Topics", "Projects", "Organisations", "Groups", "Themes", "Notes" };
+
+    internal static string GroupCanon(string g) => Regex.Replace(g.ToLowerInvariant(), @"['’\s]", "");
+
     private static string GroupName(string raw)
     {
         string g = Regex.Replace(raw.Replace("[[", "").Replace("]]", ""), @"\s+", " ").Trim().Trim('/');
         if (g.Contains('/')) g = g[(g.LastIndexOf('/') + 1)..];
         if (g.Length < 2 || g.Length > 60 || g.StartsWith("Conversations", StringComparison.OrdinalIgnoreCase)) return "";
+        if (FolderNames.Contains(g)) return "";   // a folder says what kind of note it is; it is never a neighbourhood
+        // a relationship note's title used as a group is that bond's bridge ("A and B Relationship" → "A and B")
+        Match bond = Regex.Match(g, @"^(.+ and .+?) (Relationship|Friendship)$", RegexOptions.IgnoreCase);
+        if (bond.Success) g = bond.Groups[1].Value;
+        int amp = g.IndexOf(" & ", StringComparison.Ordinal);
+        if (amp > 0) g = g[..amp].Trim();   // one theme per group: "Health & Body" is filed under its first theme
+        // the same group under another spelling ("ARIs Persona" / "ARI's Persona") is that group
+        string canon = GroupCanon(g);
+        if (Brain.AllNotes().FirstOrDefault(n => GroupCanon(n.Title) == canon) is { } same) return same.Title;
+        foreach (string known in BrainShape.KnownGroups()) if (GroupCanon(known) == canon) return known;
         return Brain.GetNote(g)?.Title ?? g;
     }
 
@@ -417,14 +432,14 @@ internal partial class Engram
     // ── The model ───────────────────────────────────────────────────────────────────
 
     // A direct completion with thinking on and a large budget: this runs while ARI is idle, so it may take its time to get it right.
-    private async Task<string?> CompleteThinking(string system, string user, int maxTokens)
+    private async Task<string?> CompleteThinking(string system, string user, int maxTokens, bool think = true)
     {
         object body = new
         {
             model = "local",
             messages = new[] { new { role = "system", content = system }, new { role = "user", content = user } },
             stream = false, max_tokens = maxTokens, temperature = 0.4,
-            chat_template_kwargs = new { enable_thinking = true },
+            chat_template_kwargs = new { enable_thinking = think },
         };
         try
         {
@@ -433,7 +448,12 @@ internal partial class Engram
             using HttpResponseMessage response = await httpClient.SendAsync(request);
             response.EnsureSuccessStatusCode();
             using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+            JsonElement choice = doc.RootElement.GetProperty("choices")[0];
+            string finish = choice.TryGetProperty("finish_reason", out JsonElement fr) ? fr.GetString() ?? "" : "";
+            int used = doc.RootElement.TryGetProperty("usage", out JsonElement u) && u.TryGetProperty("completion_tokens", out JsonElement ct) ? ct.GetInt32() : 0;
+            string content = choice.GetProperty("message").GetProperty("content").GetString() ?? "";
+            Shared.Logger.LogInformation("[Engram] rework call: finish={Finish}, {Used}/{Max} tokens, {Chars} answer chars.", finish, used, maxTokens, content.Length);
+            return content;
         }
         catch (Exception ex) { Shared.Logger.LogWarning("[Engram] rework call failed: {Err}", ex.Message); return null; }
     }

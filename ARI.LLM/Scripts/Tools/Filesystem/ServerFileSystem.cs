@@ -257,7 +257,9 @@ internal sealed class ServerFileSystem : FileSystem
                         if (regex.IsMatch(lines[i]))
                         {
                             string rel  = DisplayPath(file);
-                            string line = $"{rel}:{i + 1}: {lines[i].Trim()}";
+                            string text = lines[i].Trim();
+                            if (text.Length > 300) text = text[..300] + " …";   // one minified line can be megabytes
+                            string line = $"{rel}:{i + 1}: {text}";
                             results.Add(line);
                             totalChars += line.Length + 1;
                             if (results.Count >= MAX_RESULTS || totalChars >= SEARCH_MAX_CHARS) { truncated = true; break; }

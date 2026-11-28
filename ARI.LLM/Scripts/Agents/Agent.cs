@@ -33,7 +33,10 @@ public abstract class Agent
     // Resolved to Slot (and id_slot) at bind time. Empty = the agent belongs to its server and each turn takes a free slot there.
     public string? SlotName { get; set; }
     public SamplerSettings? SamplerSettings { get; set; }
-    [JsonIgnore] internal int BudgetContext => Slot?.ContextLimit ?? (Floating ? Server?.FreeLanes().Select(l => l.ContextLimit).DefaultIfEmpty(0).Max() ?? 0 : 0);
+    // A slot may be configured bigger than the server it runs on (a raised slot limit, a smaller -c): never budget past the server's real
+    // context, or the request is refused with exceed_context_size instead of being compacted to fit.
+    [JsonIgnore] internal int BudgetContext => ClampToServer(Slot?.ContextLimit ?? (Floating ? Server?.FreeLanes().Select(l => l.ContextLimit).DefaultIfEmpty(0).Max() ?? 0 : 0));
+    private int ClampToServer(int budget) => Server?.ContextSize is > 0 and var size && budget > size ? size : budget;
 
     /// <summary>Bound to a server rather than a slot: each turn runs on whichever of the server's free slots suits it (see Server.PickLane).</summary>
     [JsonIgnore] internal bool Floating { get; set; }
@@ -91,6 +94,10 @@ public abstract class Agent
     // spiral, remove budgets for good; if some do, re-enable as a large safety net set just above normal max.
     // static readonly rather than const so the disabled branches don't raise unreachable-code warnings.
     private static readonly bool THINKING_LIMITS_ENABLED = false;
+    /// <summary>Thought in one step past which she is stopped, whatever the budgets say (also capped at a third of the slot).</summary>
+    private const int    RUNAWAY_THINK_TOKENS  = 16000;
+    private const string RUNAWAY_STEER_MESSAGE =
+        "[System: You have been thinking for a very long time in this one step. Stop thinking now. Act on what you have: call the tool you need, or answer.]";
 
     // Sent as a user message when the thinking budget runs out, at the end of the sentence in progress.
     // It must leave acting on the table: the old server-side wording demanded a finished reply, so a turn
@@ -318,7 +325,7 @@ public abstract class Agent
 
         SetPhase(turn, ThreadPhase.Thinking);
         string evidence = work ? (toolFacts.Length > 0 ? toolFacts + "\n" : "") + ToolEvidence(turn) : "";
-        List<ReplyEdit> edits = await reflector.Review(work ? ReflectMode.Work : ReflectMode.Chat, AssistantName.Name, userPrompt, reply, evidence, hits, turn.Ct);
+        List<ReplyEdit> edits = await reflector.Review(work ? ReflectMode.Work : ReflectMode.Chat, AssistantName.Name, userPrompt, reply, evidence, hits, turn.Ct, work ? EarlierExchanges(thread) : "");
         if (edits.Count == 0) return;
 
         Reflector.Record(thread.Key, work ? ReflectMode.Work : ReflectMode.Chat, edits);
@@ -352,14 +359,63 @@ public abstract class Agent
         }
         changedFiles = changes > 0;
         if (tools == 0) return "";
-        if (changes == 0) return "FACT: no file was changed this turn.";
-        return lastRun > lastChange
-            ? $"FACT: {changes} file change(s) were made, and a command (build, test or run) was run after the last one."
-            : $"FACT: {changes} file change(s) were made, and NO build, test or command was run after them. Nothing shows the changes compile, pass tests or work.";
+        StringBuilder facts = new();
+        facts.AppendLine(changes == 0 ? "FACT: no file was changed this turn."
+            : lastRun > lastChange
+                ? $"FACT: {changes} file change(s) were made, and a command (build, test or run) was run after the last one."
+                : $"FACT: {changes} file change(s) were made, and NO build, test or command was run after them. Nothing shows the changes compile, pass tests or work.");
+        foreach (string line in RunAndChangeFacts(turn)) facts.AppendLine(line);
+        return facts.ToString().TrimEnd();
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ExitCodeRx =
+        new(@"exit(?:\s*code)?\s*[:=]?\s*(-?\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>One FACT line per file changed and per command run, from the turn's own trace: which files, where each command ran
+    /// (the server or the user's computer), its exit code and its last lines. The reviewer can then check a claim like "the build
+    /// passed" or "i ran it on your mac" against what actually happened, with no judgement needed.</summary>
+    private static List<string> RunAndChangeFacts(Turn turn)
+    {
+        List<string> lines = [];
+        HashSet<string> files = new(StringComparer.OrdinalIgnoreCase);
+        string? pendingName = null, pendingArgs = null;
+        foreach (TraceStep step in turn.Trace.ToList())
+        {
+            if (step.Kind == "tool_call") { pendingName = step.Name; pendingArgs = step.Args; continue; }
+            if (step.Kind != "tool_result" || step.Name != pendingName) continue;
+            string name = step.Name ?? "", result = step.Text ?? "";
+            string Arg(string key)
+            {
+                try { using JsonDocument d = JsonDocument.Parse(pendingArgs ?? "{}"); return d.RootElement.TryGetProperty(key, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : ""; }
+                catch { return ""; }
+            }
+            bool failed = result.StartsWith("Error", StringComparison.OrdinalIgnoreCase) || result.StartsWith("[Error", StringComparison.OrdinalIgnoreCase)
+                       || result.StartsWith("[Blocked", StringComparison.OrdinalIgnoreCase) || result.StartsWith("[System", StringComparison.OrdinalIgnoreCase);
+            if (ChangeTools.Contains(name) && !failed && Arg("path") is { Length: > 0 } path) files.Add(path);
+            if (RunTools.Contains(name))
+            {
+                string where = name == "run_command" ? "on the user's computer (desktop app)" : "on the server";
+                string what  = Arg("command") is { Length: > 0 } cmd ? $"`{(cmd.Length > 120 ? cmd[..120] + "…" : cmd)}`" : name;
+                var code = ExitCodeRx.Matches(result).LastOrDefault();
+                string exit = failed ? "it did not run (refused or failed to start)" : code is not null ? $"exit code {code.Groups[1].Value}" : "exit code not shown";
+                string tail = string.Join(" | ", result.Trim().Split('\n').TakeLast(3).Select(l => l.Trim()).Where(l => l.Length > 0));
+                if (tail.Length > 300) tail = tail[^300..];
+                lines.Add($"FACT: ran {what} {where}: {exit}. Last output: {tail}");
+            }
+            pendingName = null;
+        }
+        if (files.Count > 0) lines.Insert(0, "FACT: files changed this turn: " + string.Join(", ", files.Take(20)) + (files.Count > 20 ? $" (+{files.Count - 20} more)" : "") + ". No other file was changed.");
+        if (lines.Count > 25) lines = [.. lines.Take(5), $"FACT: ({lines.Count - 10} more commands not listed)", .. lines.TakeLast(5)];
+        return lines;
     }
 
     /// <summary>Makes the edits the Reflector has asked for. Called only from the stream loop and the end of the turn, so nothing else is
     /// changing the reply. Each is announced to the app first, so it can strike the old words, delete them and type the new ones.</summary>
+    private static readonly System.Text.RegularExpressions.Regex ModelMarker = new(@"<!--ari-[^>]*-->", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private const int MAX_REFLECT_DELETE = 200;
+    // a reply that is nothing but a call ("list_tools()") is a tool call written as text, whatever tools the turn has
+    private static readonly System.Text.RegularExpressions.Regex BareCall = new(@"^[a-z_][a-z0-9_]*\([^\n]*\)$", System.Text.RegularExpressions.RegexOptions.Compiled);   // characters one edit may delete outright: about a sentence
+
     private async Task ApplyPendingEdits(Turn turn, Thread thread, bool waitForAnimation)
     {
         const string AriPrefix = "ARI: ";
@@ -368,6 +424,15 @@ public abstract class Agent
             string current = turn.ResponseBuilder.ToString();
             int at = current.IndexOf(edit.Old, StringComparison.Ordinal);
             if (at < 0 || current.IndexOf(edit.Old, at + 1, StringComparison.Ordinal) >= 0) continue;   // gone or ambiguous by now
+            // The reflector corrects a claim; it never takes a reply away. A big plain deletion, or an edit that would leave the reply
+            // mostly or wholly gone, is refused: losing the reply is worse than any wording it was fixing.
+            int after = current.Length - edit.Old.Length + edit.New.Length;
+            turn.PeakReplyLength = Math.Max(turn.PeakReplyLength, current.Length);
+            if ((edit.New.Trim().Length == 0 && edit.Old.Length > MAX_REFLECT_DELETE) || after < turn.PeakReplyLength * .6 || after < 20)
+            {
+                Shared.Logger.LogInformation("[{Agent}] ({Thread}) reflector edit refused (would remove too much of the reply): \"{Old}\"", Name, thread.Key, edit.Old.Length > 120 ? edit.Old[..120] + "…" : edit.Old);
+                continue;
+            }
             if (turn.Control is not null) await turn.Control($"[REWRITE]{edit.Old}\u0001{edit.New}\u0001{ReflectSettings.Load().EditStyle}");
             if (waitForAnimation) await Task.Delay(Math.Min(4000, 700 + edit.Old.Length * 12 + edit.New.Length * 25), turn.Ct);
             turn.ResponseBuilder.Remove(at, edit.Old.Length).Insert(at, edit.New);
@@ -440,6 +505,29 @@ public abstract class Agent
     }
 
     /// <summary>What the tools returned this turn, shortened, for the reflector to check claims against.</summary>
+    /// <summary>The last few exchanges before this turn, clipped, so the reviewer knows what the work was for.</summary>
+    private static string EarlierExchanges(Thread thread)
+    {
+        try
+        {
+            var items = thread.History.Where(h => h is ARI.LLM.Prompt or Response).TakeLast(6).ToList();
+            StringBuilder sb = new();
+            foreach (var h in items)
+            {
+                string who = h is ARI.LLM.Prompt ? "User" : "Her";
+                string text = h is ARI.LLM.Prompt p ? p.Text : System.Text.RegularExpressions.Regex.Replace(((Response)h).ContentText, "<!--.*?-->", "");
+                if (text.Length > 400) text = text[..400] + "…";
+                sb.AppendLine($"{who}: {text}");
+            }
+            return sb.ToString().TrimEnd();
+        }
+        catch { return ""; }
+    }
+
+    // How much of each tool result the work reviewer sees. Too little and true claims look unsupported (a caller listed in
+    // the middle of a result was once deleted from a correct answer because the reviewer only saw the ends).
+    private const int EVIDENCE_CHARS = 2400;
+
     private static string ToolEvidence(Turn turn)
     {
         StringBuilder sb = new();
@@ -451,7 +539,7 @@ public abstract class Agent
                 if (!el.TryGetProperty("role", out JsonElement role) || role.GetString() != "tool") continue;
                 string name = el.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "tool" : "tool";
                 string content = el.TryGetProperty("content", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
-                sb.AppendLine($"[{name}] {(content.Length > 500 ? content[..250] + " … " + content[^250..] : content)}");
+                sb.AppendLine($"[{name}] {(content.Length > EVIDENCE_CHARS ? content[..(EVIDENCE_CHARS * 2 / 3)] + " …[cut]… " + content[^(EVIDENCE_CHARS / 3)..] : content)}");
             }
             catch { }
         }
@@ -524,6 +612,8 @@ public abstract class Agent
         internal bool     ThinkingRedirect;
         internal bool     TextToolLeak;
         internal bool     ResponseContentStarted;
+        internal bool     RunawaySteered;         // the runaway-thinking steer was sent this step
+        internal bool     SpeakerPrefixChecked;   // the very start of the reply has been checked for a leading "ARI:"
         internal int      ReasoningStartLen;
         internal bool     LastStepToolOnly;
         internal TraceStep? LiveReasoning;
@@ -559,6 +649,8 @@ public abstract class Agent
         internal int  ReflectedChars;                                       // how much of the reply has been handed to the Reflector
         internal Task ReflectChain = Task.CompletedTask;                    // reviews run one after another
         internal readonly System.Collections.Concurrent.ConcurrentQueue<ReplyEdit> PendingEdits = new();
+        internal int PeakReplyLength;
+        internal bool EmptyRetried;   // the longest the reply has been: the reflector's edits are measured against it, so many small cuts can't empty it
         internal Func<string, Task>? Control;                               // the app's own channel, for [REWRITE] lines
         internal readonly StringBuilder ContentBuilder   = new();
         internal readonly StringBuilder ReasoningBuilder = new();
@@ -1183,6 +1275,7 @@ public abstract class Agent
         turn.ResponseContentStarted = false;
         // The thinking budget is per generation, so its counters reset with each new request.
         turn.StepReasoningChars     = 0;
+        turn.RunawaySteered         = false;
         turn.BudgetSteerQueued      = false;
         turn.BudgetHardCut          = false;
         turn.ReasoningStartLen      = turn.ReasoningBuilder.Length;
@@ -1333,6 +1426,32 @@ public abstract class Agent
                             : "";
                         turn.Messages.Add(new { role = "assistant", content = hardCutThink });
                         turn.Messages.Add(new { role = "user", content = turn.PendingThinkRedirect ?? BUDGET_STEER_MESSAGE });
+                        turn.ReasoningStartLen    = turn.ReasoningBuilder.Length;
+                        turn.PendingThinkRedirect = null;
+                        turn.ThinkingRedirect     = true;
+                        return;
+                    }
+                }
+
+                // Runaway catch, always on (unlike the budget above): one step of thought should never get near this.
+                // First a steer at the next sentence end; if she keeps going a quarter as far again, it is forced.
+                {
+                    int stepTokens = (turn.ReasoningBuilder.Length - turn.ReasoningStartLen) / CHARS_PER_TOKEN;
+                    int ctx        = BudgetContext > 0 ? BudgetContext : 32768;
+                    int runaway    = Math.Min(RUNAWAY_THINK_TOKENS, Math.Max(4000, ctx / 3));
+                    if (!turn.RunawaySteered && stepTokens >= runaway)
+                    {
+                        turn.RunawaySteered       = true;
+                        turn.PendingThinkRedirect = RUNAWAY_STEER_MESSAGE;
+                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) runaway thinking: {N} tokens in one step (limit {L}); steering at the end of this sentence.",
+                            Name, thread.Key, stepTokens, runaway);
+                    }
+                    else if (turn.RunawaySteered && turn.PendingThinkRedirect == RUNAWAY_STEER_MESSAGE && stepTokens >= runaway + runaway / 4)
+                    {
+                        Shared.Logger.LogWarning("[{Agent}] ({Thread}) runaway thinking past {N} tokens with no sentence end; forcing the stop.", Name, thread.Key, stepTokens);
+                        string cut = "<think>\n" + turn.ReasoningBuilder.ToString(turn.ReasoningStartLen, turn.ReasoningBuilder.Length - turn.ReasoningStartLen).TrimEnd() + "\n</think>\n";
+                        turn.Messages.Add(new { role = "assistant", content = cut });
+                        turn.Messages.Add(new { role = "user", content = RUNAWAY_STEER_MESSAGE });
                         turn.ReasoningStartLen    = turn.ReasoningBuilder.Length;
                         turn.PendingThinkRedirect = null;
                         turn.ThinkingRedirect     = true;
@@ -1530,6 +1649,14 @@ public abstract class Agent
         if (string.IsNullOrEmpty(deltaText)) return;
 
         turn.ResponseBuilder.Append(deltaText);
+        // App markers (<!--ari-…-->) are written only by code when a tool really ran. One in the model's own words is an imitation that
+        // would show the user an action that never happened: drop it.
+        if (deltaText.Contains('>') && turn.ResponseBuilder.ToString() is var soFar && soFar.Contains("<!--ari-", StringComparison.Ordinal))
+        {
+            string clean = ModelMarker.Replace(soFar, "");
+            if (clean.Length != soFar.Length) turn.ResponseBuilder.Clear().Append(clean);
+        }
+        if (!turn.SpeakerPrefixChecked) StripLeadingSpeaker(turn);
         await ApplyPendingEdits(turn, thread, waitForAnimation: false);
         StartLiveReflect(turn, thread);
         if (thread.LiveCall is { } lc) lc.EstimatedOutputTokens = turn.ResponseBuilder.Length / CHARS_PER_TOKEN;
@@ -1554,7 +1681,7 @@ public abstract class Agent
         }
         if (!turn.TextToolLeak && turn.PendingCalls.Count == 0 && turn.TextToolLeakRetries < 3
             && turn.ResponseBuilder.Length >= 3
-            && ToolCallParser.IsTextToolCall(turn.ResponseBuilder.ToString(), thread.tools.Keys))
+            && (ToolCallParser.IsTextToolCall(turn.ResponseBuilder.ToString(), thread.tools.Keys) || BareCall.IsMatch(turn.ResponseBuilder.ToString().Trim())))
         {
             turn.TextToolLeak = true;
             return;
@@ -1845,6 +1972,15 @@ public abstract class Agent
             }
         }
 
+        // An empty reply is a slip, not an answer: ask once more before the turn fails (the user otherwise gets nothing and asks again).
+        if (!thread.Internal && string.IsNullOrWhiteSpace(turn.ResponseBuilder.ToString()) && turn.PendingCalls.Count == 0 && !turn.EmptyRetried && !turn.Ct.IsCancellationRequested)
+        {
+            turn.EmptyRetried = true;
+            Shared.Logger.LogWarning("[{Agent}] ({Thread}) empty reply — asking once more.", Name, thread.Key);
+            turn.Messages.Add(new { role = "user", content = "[System] Your last reply was empty. Answer the user's message now." });
+            return;
+        }
+
         turn.IsStreaming = false;
     }
 
@@ -1869,9 +2005,13 @@ public abstract class Agent
         return $"[image: {result.Bytes.Length} bytes, {result.MediaType} — provided to the vision model below]{note}";
     }
 
+    /// <summary>The conversation the running tool belongs to (for a tool that must remember where it was asked, such as a reminder).</summary>
+    internal static readonly AsyncLocal<string?> CurrentThreadKey = new();
+
     private async Task ExecuteTools(Turn turn)
     {
         Thread thread = turn.Thread;
+        CurrentThreadKey.Value = thread.Internal ? null : thread.Key;
 
         OnBatchStart(turn.ToolTurn);
 
@@ -1951,6 +2091,7 @@ public abstract class Agent
                     if (tool.PostRun is not null)
                         toolResult = tool.PostRun(argsJson, toolResult);
                     result = ResolveToolResult(turn, toolResult);
+                    result = CapToolResult(thread, call.Name, argsJson, result);
                 }
                 finally
                 {
@@ -2083,7 +2224,9 @@ public abstract class Agent
                 turn.ContentBuilder.Append("<!--ari-tool-mode:start_build:Building directly-->");
                 if (turn.OnDelta is not null) await turn.OnDelta(turn.ContentBuilder.ToString());
             }
-            else if (result.StartsWith("[System:", StringComparison.Ordinal) || ToolCallParser.IsError(result))
+            // A "[System: …]" result is an instruction to the model (a pipeline switch, a mode change), never an error, and never shown to
+            // the user: only real tool errors get an error card.
+            else if (!result.StartsWith("[System:", StringComparison.Ordinal) && ToolCallParser.IsError(result))
             {
                 string label = "";
                 try
@@ -2262,6 +2405,55 @@ public abstract class Agent
     }
 
     private const string BlockRule = "--------------------------------";
+
+    /// <summary>One tool result may take at most this share of the slot's context; the rest is the prompt, history and reply.</summary>
+    private const double TOOL_RESULT_SHARE    = 0.25;
+    private const int    TOOL_RESULT_MIN_TOK  = 2000;    // even a tiny slot shows this much
+
+    /// <summary>The blanket guard: no single tool result can flood the context. Over the cap, the model gets the start
+    /// of the result plus the tool's own advice on asking for less (<see cref="Tool.TooLarge"/>).</summary>
+    private string CapToolResult(Thread thread, string name, string argsJson, string result)
+    {
+        int ctx = BudgetContext > 0 ? BudgetContext : 32768;
+        int capTokens = Math.Max(TOOL_RESULT_MIN_TOK, (int)(ctx * TOOL_RESULT_SHARE));
+        int capChars  = capTokens * CHARS_PER_TOKEN;
+        if (result.Length <= capChars) return result;
+
+        var size = new ToolSize(result.Length, result.Count(c => c == '\n') + 1, result.Length / CHARS_PER_TOKEN);
+        string advice;
+        try { advice = thread.toolTooLarge.TryGetValue(name, out var f) ? f(argsJson, size) : Tool.DefaultTooLarge(name, size); }
+        catch (Exception ex) { advice = Tool.DefaultTooLarge(name, size); Shared.Logger.LogDebug("[{Agent}] TooLarge for {Tool} threw: {Err}", Name, name, ex.Message); }
+
+        // Show the first part so the model can see what came back, cut at a line end.
+        int keep = capChars / 2;
+        int nl = result.LastIndexOf('\n', keep);
+        if (nl > keep / 2) keep = nl;
+        Shared.Logger.LogWarning("[{Agent}] ({Thread}) {Tool} result was {Size}; capped to {Cap} tokens", Name, thread.Key, name, size.Describe(), capTokens);
+        return $"[System: {advice} Only the start is shown below.]\n{result[..keep]}\n[… {result.Length - keep:N0} more characters not shown]";
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex LeadingSpeaker =
+        new(@"^\s*(?:\*\*)?ARI:(?:\*\*)?[ \t]*", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>The model sometimes opens with the history's "ARI:" speaker label. Removed only at the very start of
+    /// her reply (before any visible text this turn), never anywhere else. Decided once per turn.</summary>
+    private static void StripLeadingSpeaker(Turn turn)
+    {
+        if (turn.VisibleChars > 0) { turn.SpeakerPrefixChecked = true; return; }
+        string head = turn.ResponseBuilder.ToString();
+        var m = LeadingSpeaker.Match(head);
+        if (m.Success && m.Index + m.Length < head.Length)        // keep waiting while the label could still be "ARI:**"
+        {
+            turn.ResponseBuilder.Remove(0, m.Length);
+            turn.SpeakerPrefixChecked = true;
+            return;
+        }
+        if (m.Success) return;                                   // the whole text so far is the label: wait for more
+        string t = head.TrimStart();
+        bool couldStillBe = t.Length == 0 || "**ARI:**".StartsWith(t, StringComparison.OrdinalIgnoreCase)
+                                          || "ARI:**".StartsWith(t, StringComparison.OrdinalIgnoreCase);
+        if (!couldStillBe) turn.SpeakerPrefixChecked = true;
+    }
 
     internal const string NothingNew = "Nothing new.";
     internal static bool IsNothingNew(string? notes) =>

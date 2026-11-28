@@ -84,7 +84,7 @@ internal sealed class DreamPipeline : Pipeline
         WakeHistory.Record(topic, title);
     }
 
-    // Excluded from dreams, along with every plugin's tools: no external side-effects.
+    // Excluded from dreams. Dreams are read-only, so only tools that declare Read access (plugin ones included) are given.
     private static readonly HashSet<string> DreamExcluded =
         ["edit_memory",
          // Reading how tools are written only leads to the owner-only authoring tools, which a dream can't use.
@@ -98,7 +98,7 @@ internal sealed class DreamPipeline : Pipeline
     internal static void RegisterDreamTools(Thread thread)
     {
         foreach (string name in ToolFactories.AllNames())
-            if (!DreamExcluded.Contains(name) && !PluginTools.IsProvided(name) &&
+            if (!DreamExcluded.Contains(name) &&
                 ToolFactories.TryBuild(name, thread, out Tool tool) && tool.Access == ToolAccess.Read)
                 tool.Register(thread);
 

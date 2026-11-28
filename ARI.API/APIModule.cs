@@ -139,7 +139,7 @@ public class APIModule : IAsyncDisposable
             string file = ctx.File.Name;
             // The logo images, colours and theme script are changed from the control panel (BrandingStore, ThemeStore),
             // so they revalidate instead of being cached for a year.
-            if (file is "index.html" or "sw.js" or "controlpanel.html" or "logo-black.png" or "logo-white.png" or "BlackCode.png"
+            if (file is "index.html" or "sw.js" or "controlpanel.html" or "brain.html" or "logo-black.png" or "logo-white.png" or "BlackCode.png"
                 or "theme.js" or "colours.css" or "colours.json")
             {
                 ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";

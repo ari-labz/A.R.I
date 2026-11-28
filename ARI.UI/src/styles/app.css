@@ -206,6 +206,10 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
 #conn-error-retry:hover { background: var(--col-conn-error-retry-hover-colour); }
 .thread-code-icon { color: var(--sidebar-dim); opacity: 0.55; flex-shrink: 0; }
 :is(#thread-list, .thread-list) li.active .thread-code-icon { opacity: 0.8; }
+.thread-desktop-icon { position: relative; display: inline-flex; color: var(--sidebar-dim); opacity: 0.4; flex-shrink: 0; }
+.thread-desktop-icon.connected { color: #CADDE2; opacity: 0.9; }
+.thread-desktop-icon.connected::after { content: ""; position: absolute; right: -2px; top: -2px; width: 5px; height: 5px; border-radius: 50%; background: #6fcf97; animation: desktop-live 2s ease-in-out infinite; }
+@keyframes desktop-live { 50% { opacity: 0.35; } }
 
 #sidebar-footer {
     padding: 10px 10px 14px;
@@ -229,15 +233,15 @@ html[data-brand-sidebar-derived] #sidebar-wordmark { filter: brightness(0) inver
     font-size: 13px; color: var(--sidebar-dim);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-#btn-control-panel {
+#btn-brain, #btn-control-panel {
     display: flex; align-items: center; gap: 9px;
     padding: 8px 12px; border-radius: 7px;
     font-size: 14px; color: var(--sidebar-dim);
     cursor: pointer; text-decoration: none;
     transition: background .1s, color .1s; width: 100%;
 }
-#btn-control-panel:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
-#btn-control-panel svg { flex-shrink: 0; }
+#btn-brain:hover, #btn-control-panel:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
+#btn-brain svg, #btn-control-panel svg { flex-shrink: 0; }
 
 #sidebar-header-left {
     display: flex; align-items: flex-end; gap: 6px;

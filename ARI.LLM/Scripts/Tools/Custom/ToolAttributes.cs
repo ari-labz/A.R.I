@@ -26,6 +26,10 @@ public sealed class ToolAttribute(string name, string description) : Attribute
     /// counts against the search budget and its results become sources (start a result with "No relevant results for" when nothing matched).</summary>
     public string? Card { get; set; }
 
+    /// <summary>In hand from the start of every conversation instead of found through request_tools. For a tool Ari should reach
+    /// for unprompted (otherwise she uses what she already has). The owner can still unpin it.</summary>
+    public bool Pinned { get; set; }
+
     /// <summary>Stop a call that takes longer than this. Ignored for async tools.</summary>
     public int TimeoutSeconds { get; set; } = 120;
 }

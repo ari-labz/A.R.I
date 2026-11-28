@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -1869,6 +1870,7 @@ public class LLMModule : ILLMModule, IDisposable
         if (graphPipeline is null)
             throw new ModelNotFoundException("Dialogue model is not loaded or is not enabled.");
 
+        (context, string? fromThread) = UntagReminderThread(context);
         string scratchKey = $"reminder-scratch-{Guid.NewGuid():N}";
         Thread scratch = new Thread(ThreadPipeline.Dialogue, scratchKey, context) { Internal = true };
         threads[scratchKey] = scratch;
@@ -1884,7 +1886,26 @@ public class LLMModule : ILLMModule, IDisposable
             threads.TryRemove(scratchKey, out _);
         }
 
+        // A reminder set in a conversation answers in that conversation while it is still open; otherwise it opens its own thread.
+        if (fromThread is not null && threads.TryGetValue(fromThread, out Thread? origin) && origin.State is not (ThreadState.Deleted or ThreadState.Dormant))
+        {
+            origin.AddItem(new Response { Content = ContentBlock.Parse(reply), Timestamp = DateTime.Now, State = State.Complete, IsVisible = true });
+            origin.StartUnread();
+            Broadcast(new AppEvent("threadUpdated", fromThread));        // an open window shows it at once
+            Broadcast(new AppEvent("streamingFinished", fromThread));    // and marks it unread / chimes like any finished reply
+            PushIfUnwatched(origin, fromThread);
+            _logger.LogInformation("[Reminder] '{Title}' answered in the conversation it was set in ({Key}).", title, fromThread);
+            return;
+        }
         CreateProactiveDialogueThread(reply, title, context);
+    }
+
+    private static readonly Regex ReminderThreadTag = new(@"\n?\[from thread: (?<key>[^\]\s]+)\]", RegexOptions.Compiled);
+    internal static string TagReminderThread(string? context, string threadKey) => (context ?? "").TrimEnd() + $"\n[from thread: {threadKey}]";
+    private static (string Context, string? ThreadKey) UntagReminderThread(string context)
+    {
+        Match m = ReminderThreadTag.Match(context);
+        return m.Success ? (ReminderThreadTag.Replace(context, "").Trim(), m.Groups["key"].Value) : (context, null);
     }
 
     private async Task SendProactivePush(string body, string threadKey, string? ownerId)

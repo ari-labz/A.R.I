@@ -58,7 +58,7 @@ internal static class ToolFactories
         ["write_file"]     = t => Fs(t) is { } fs ? new WriteFile(fs)     : null,
 
         ["build_project"] = t => t is { FilesystemRoot: { } r, IsRemoteProject: false } ? new BuildProjectTool(t, r) : null,
-        ["code_rule"]     = t => t.Pipeline == ThreadPipeline.Code ? new CodeRuleTool() : null,
+        ["code_rule"]     = _ => new CodeRuleTool(),
 
         // No index, no database, nothing shared with ARI.Brain — see SearchVault.cs.
         ["search_vault"] = t => Fs(t) is { } fs ? new SearchVault(fs) : null,
@@ -165,7 +165,7 @@ internal static class ToolFactories
     /// it only adds what's missing, so it runs when the conversation is made and again on each message, when we know who is talking.</summary>
     internal static void SyncPinned(Thread t)
     {
-        if (t.Internal || t.Pipeline != ThreadPipeline.Dialogue) return;
+        if (t.Internal) return;
         foreach (string name in ToolRegistry.PinnedNames())
         {
             // Tools that act on this machine are only ever given to the owner chatting in the app, never a Discord or guest thread.

@@ -52,8 +52,17 @@ public class Server : IDisposable
     [JsonPropertyName("port")]
     public int Port { get; set; } = 8081;
 
-    [JsonPropertyName("kvCache")]
-    public int ContextSize { get; set; } = 32768;
+    /// <summary>The server's whole context (llama-server -c), shared by its slots. Saved as "contextSize", the name the control panel
+    /// and the API use.</summary>
+    [JsonPropertyName("contextSize")]
+    public int ContextSize { get => contextSize; set { contextSize = value; contextSizeRead = true; } }
+    private int  contextSize = 32768;
+    private bool contextSizeRead;
+
+    /// <summary>Configs written before the rename call it "kvCache". Read so they keep their size (never written back; "contextSize" wins
+    /// when a file has both). Without this an old Servers.json silently fell back to 32768.</summary>
+    [JsonPropertyName("kvCache"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int LegacyKvCache { get => 0; set { if (value > 0 && !contextSizeRead) contextSize = value; } }
 
     [JsonPropertyName("kvCacheQuantK")]
     public int KvCacheQuantK { get; set; } = 4;

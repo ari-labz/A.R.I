@@ -131,6 +131,8 @@ internal sealed class CreateReminder : Tool
         string? context = root.TryGetProperty("context", out JsonElement c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
         string? notes = root.TryGetProperty("notes", out JsonElement n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
 
+        // Remember the conversation it was asked in, so the reminder answers there rather than in a new thread nobody is looking at.
+        if (Agent.CurrentThreadKey.Value is { Length: > 0 } from) context = LLMModule.TagReminderThread(context, from);
         long id = calendar.CreateReminder(title, triggerTime, prompt, context, notes, CalendarRecurrence.FromArgs(root));
         return Task.FromResult<ToolResult>($"Created reminder '{title}' [{id}] for {triggerTime:g}.");
     }

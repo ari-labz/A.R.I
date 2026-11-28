@@ -17,6 +17,10 @@ export interface ThreadEntry {
     title?:       string | null
     /** Set only for admins, on threads that belong to another user. */
     ownerName?:   string | null
+    /** A desktop app has joined this conversation; its commands run on that machine. */
+    desktopBound?:     boolean
+    /** That desktop app is connected right now. */
+    desktopConnected?: boolean
 }
 
 export type StorageBackend = "ServerFs" | "RemoteFs"

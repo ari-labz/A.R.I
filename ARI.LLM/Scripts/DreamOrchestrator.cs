@@ -31,6 +31,8 @@ internal sealed class DreamOrchestrator : IDisposable
     // Set when a dream ends with nothing left to look at: the next waits until someone has talked to her again. After a wake, another
     // dream can follow straight on, and it is told which subjects this quiet stretch has already covered.
     private bool                      dreamedSinceActivity;
+    private DateTime                  restUntil;
+    private static readonly TimeSpan  REST_AFTER_QUIET_DREAM = TimeSpan.FromHours(3);
     // She asked to sleep: no dream until then, and the next one starts with her note.
     private DateTime?                 sleepUntil;
     private string                    sleepNote = "";
@@ -94,7 +96,8 @@ internal sealed class DreamOrchestrator : IDisposable
             }
 
             if (dreamTask is { IsCompleted: false }) continue;
-            if (dreamedSinceActivity) continue;
+            if (dreamedSinceActivity && DateTime.Now < restUntil) continue;   // resting after a quiet dream, but only for a while
+            if (dreamedSinceActivity) { dreamedSinceActivity = false; Shared.Logger.LogInformation("[Dream] Rest over — dreaming again."); }
             if (sleepUntil is { } until)
             {
                 if (DateTime.Now < until) continue;
@@ -205,7 +208,14 @@ internal sealed class DreamOrchestrator : IDisposable
     /// <summary>Closes a finished dream. With rest, no new one starts until someone talks to her again.</summary>
     private void FinishDream(bool rest)
     {
-        if (rest) dreamedSinceActivity = true;
+        if (rest)
+        {
+            // A dream that found nothing worth a message rests for a few hours, not until someone speaks: one quiet dream must not end
+            // the whole night, or she never gets the chance to wake anyone.
+            dreamedSinceActivity = true;
+            restUntil            = DateTime.Now.Add(REST_AFTER_QUIET_DREAM);
+            Shared.Logger.LogInformation("[Dream] Ended without waking anyone; resting until {At:HH:mm}.", restUntil);
+        }
         dreamTask            = null;
         dreamCts             = null;   // the pipeline has already disposed it: cancelling it now would throw
         CloseDream();

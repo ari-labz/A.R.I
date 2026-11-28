@@ -195,6 +195,11 @@ public static class BrainShape
     /// group is a note whose "**Members:**" line lists its members, written here so it is always exact. A group named after a note that
     /// exists (a person, a project) is that note; any other gets a hub in Groups/. Groups can belong to groups. Returns groups written.
     /// </summary>
+    /// <summary>Every group name any note uses now.</summary>
+    public static List<string> KnownGroups() =>
+        Database.AllNotes().Where(n => !IsLog(n.Name)).SelectMany(n => GroupsOf(n.Content)).Select(g => g.Contains('/') ? g[(g.LastIndexOf('/') + 1)..] : g)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
     public static int SyncGroups()
     {
         Brain.Index();
@@ -212,7 +217,9 @@ public static class BrainShape
         int written = 0;
         foreach ((string group, SortedSet<string> ms) in members)
         {
-            Note? note = Brain.GetNote(group);
+            // the real note of that name is the group; a Groups/ hub only when there is none
+            Note? note = Database.AllNotes().FirstOrDefault(n => n.Title.Equals(group, StringComparison.OrdinalIgnoreCase) && !n.Name.StartsWith("Groups/", StringComparison.OrdinalIgnoreCase))
+                ?? Brain.GetNote(group);
             string line = "**Members:** " + string.Join(", ", ms.Select(m => $"[[{m}]]"));
             if (note is null)
             {

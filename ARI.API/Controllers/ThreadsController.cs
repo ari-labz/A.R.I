@@ -182,7 +182,8 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
                     ProjectName: projectName, ProjectId: projectId,
                     Pipeline: kvp.Value.Pipeline.ToString().ToLowerInvariant(),
                     Title: kvp.Value.CustomTitle ?? kvp.Value.Title, OwnerName: OwnerNameFor(kvp.Value.OwnerId),
-                    Status: ThreadStatusFor(kvp.Key), PersonaId: kvp.Value.PersonaId ?? PersonaStore.DefaultId);
+                    Status: ThreadStatusFor(kvp.Key), PersonaId: kvp.Value.PersonaId ?? PersonaStore.DefaultId,
+                    DesktopBound: kvp.Value.DesktopBound, DesktopConnected: kvp.Value.DesktopConnected);
             })
             .ToList();
 
@@ -1526,4 +1527,4 @@ public record CommandRequest(string? ThreadKey, string Input);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null, string? Context = null);
 public record ApiContextRequest(string? Context);
 public record InjectContextRequest(string Name, string Content);
-public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null, string Status = "idle", string? PersonaId = null);
+public record ThreadEntry(string Key, string? AgentName, bool IsInternal, DateTime LastMessageAt, int MessageCount, string State = "active", bool IsCodeMode = false, string? ProjectName = null, string? ProjectId = null, string Pipeline = "dialogue", string? Title = null, string? OwnerName = null, string? ParentKey = null, string? Label = null, string Status = "idle", string? PersonaId = null, bool DesktopBound = false, bool DesktopConnected = false);

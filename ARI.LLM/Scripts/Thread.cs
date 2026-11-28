@@ -212,6 +212,11 @@ public class Thread
     internal FileSnapshots? Snapshots     { get => snapshots ??= new FileSnapshots(); set => snapshots = value; }
     internal bool     IsBrainVault { get; set; }
     internal bool     IsRemoteProject { get; set; }
+    /// <summary>A desktop app has joined this conversation at some point. From then on its commands belong on that machine,
+    /// even while the conversation is open on the web or a phone.</summary>
+    internal bool     DesktopBound { get; set; }
+    /// <summary>The desktop app is connected to this conversation right now (its run_command and file tools are registered).</summary>
+    internal bool     DesktopConnected { get; set; }
     internal CancellationToken Ct  { get; set; }
 
     /// <summary>Monotonic user-turn counter, incremented by the pipeline at the start of each user request.
@@ -253,6 +258,8 @@ public class Thread
 
     /// <summary>Declared access of each registered tool, so a read-only agent can be limited to tools that only read.</summary>
     internal readonly Dictionary<string, ToolAccess> toolAccess = new();
+    /// <summary>Per tool: what to tell the model when one result is too big for the context (see Tool.TooLarge).</summary>
+    internal readonly Dictionary<string, Func<string, ToolSize, string>> toolTooLarge = new();
 
     /// <summary>True for a thread no user is attached to (a pipeline's background step): nobody could approve a tool that
     /// changes things, so only tools that read are offered.</summary>

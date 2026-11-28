@@ -1,3 +1,26 @@
+Changes in v0.11.9:
+
+- Replies: the check that corrects what Ari says can no longer take a reply away. An edit that deletes more than a sentence, or that would leave the reply mostly or wholly gone, is refused.
+- Replies: Ari can no longer show a made-up action. Markers for things like opening a page appear only when the tool really ran, and the check on her claims now covers "checked", "looked up", "created", "switched" and the like, not just "built" and "tested".
+- Pipelines: switching a conversation to Code no longer shows an internal instruction as an error card.
+- Replies: a reply that is only a tool call written as text (such as list_tools()) is caught and redone, and an empty reply is asked for once more instead of failing.
+- Reminders: a reminder set in a conversation now answers in that conversation, and shows up there at once, instead of opening a new thread that was easy to miss.
+- Servers: an agent never plans for more context than its server actually has, so long Code conversations are trimmed to fit instead of being refused.
+- Dreams: a dream that finds nothing worth a message rests for three hours instead of until you next speak, so a quiet first dream no longer ends the whole night.
+- Brain: Engram now curates the brain into groups so the Brain page tells your story. People are galaxies, big subjects are their own galaxies, and what links two people is a bridge between them. It sees the brain as numbers the way the page draws it, plans the groups, and keeps only passes that make the shape better. It can also replay saved chat logs and rework long notes.
+- Brain page: groups are the neighbourhoods, big groups become black holes and mid-size ones slow spiral galaxies, and the space scales with the size of the brain.
+- Connections: a client that drops without a clean close is logged as a normal disconnect, not a crash.
+- Servers: a server's context size set under its old name (kvCache) is read again, so a server no longer falls back to 32K and fills up mid-task.
+- Conversations: a tool call the model wrote with the same setting twice no longer leaves the conversation stuck, failing on every later message.
+- Tools: no single tool result can flood Ari's context any more. A result bigger than a quarter of her context shows its start plus advice from the tool on asking for less (a narrower search, a line range, filtered command output). Search results also cut very long lines.
+- Thinking: if Ari thinks for an unreasonably long time in one step, she is told to stop and act at the end of her sentence, and stopped outright if she carries on.
+- Replies: a stray "ARI:" label at the very start of a reply is removed.
+- Tools: every pipeline can reach every tool; read-only ones (dreams, internal helpers) get every tool that only reads. The Coder can now run commands and list folders, on the desktop app when it is connected, and pinned tools work in Code and voice threads too.
+- Desktop app: once the desktop app joins a conversation, its commands run on your computer, even when you carry on from the web or your phone. If the app isn't connected, Ari says so instead of running the command on the server. The sidebar shows a computer icon on those conversations, lit with a live dot while the app is connected.
+- Work reports: the check on what Ari says she did now knows which files were changed, and every command she ran (where it ran, its exit code, its last lines). It has more room to think and sees the earlier messages, so claims like "the build passed" or "i ran it on your computer" are corrected when the evidence says otherwise.
+- Brain page (admins only): a new Brain button above Control Panel opens a 3D map of Ari's memory. Notes that link to each other gather into clusters, clusters into larger clusters, and the biggest become black holes made of their own notes. Search from the left sidebar flies to the top match; clicking a note opens its text in a sidebar on the right.
+- Memory: while the model server is down, memory sweeps wait longer between tries (30 seconds up to 30 minutes) instead of retrying hundreds of times, and pick up again as soon as it answers.
+
 Changes in v0.11.7:
 
 - Voice and image generation: a "Load when first needed" switch on the servers page. Off means it loads when ARI starts and stays loaded; on means it loads on first use and unloads after the idle time, as before.

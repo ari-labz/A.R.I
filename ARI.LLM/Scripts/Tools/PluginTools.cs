@@ -7,7 +7,7 @@ namespace ARI.LLM;
 /// <paramref name="Card"/> names how the app's chat draws a call ("messaging" or "closing"); <paramref name="Waits"/> says, from the call's
 /// arguments, that Ari is now waiting for someone.
 /// </summary>
-public sealed record ProvidedTool(string Name, string Description, Func<Thread, Tool?> Create, string? Card = null, Func<string, bool>? Waits = null);
+public sealed record ProvidedTool(string Name, string Description, Func<Thread, Tool?> Create, string? Card = null, Func<string, bool>? Waits = null, bool Pinned = false);
 
 /// <summary>
 /// A plugin that adds tools to Ari. The tools belong to the plugin: they exist only while it is switched on and running, and they go from

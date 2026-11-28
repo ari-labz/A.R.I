@@ -65,10 +65,12 @@ internal class Reflector : Agent
     internal override bool SuppressLog => true;
 
     private const int MaxEdits = 3;
+    // Checking a work report against the evidence is real work: room to think it through, not a quick proofread.
+    private const int WORK_REVIEW_TOKENS = 6000;
     private static readonly Regex EditBlock = new(@"EDIT\s*\r?\nold:(?<old>.*?)\r?\nnew:(?<new>.*?)\r?\nEND", RegexOptions.Singleline | RegexOptions.Compiled);
 
     /// <summary>Edits to make, or none when the reply is fine (or the reflector couldn't be reached: a reply is never held up by it failing).</summary>
-    internal async Task<List<ReplyEdit>> Review(ReflectMode mode, string aiName, string userMessage, string reply, string evidence, IEnumerable<string> bannedHits, CancellationToken ct)
+    internal async Task<List<ReplyEdit>> Review(ReflectMode mode, string aiName, string userMessage, string reply, string evidence, IEnumerable<string> bannedHits, CancellationToken ct, string earlier = "")
     {
         StringBuilder prompt = new();
         if (mode == ReflectMode.Chat)
@@ -86,8 +88,12 @@ internal class Reflector : Agent
         {
             prompt.AppendLine($"You check {aiName}'s finished report on her work for claims about the work that the evidence does not support.");
             prompt.AppendLine("Lines starting FACT are certain: treat them as true. If a FACT says nothing was built, tested or run after the changes, then any claim that the change compiles, passes, works or is tested is a problem.");
-            prompt.AppendLine("EVIDENCE below is the tool output from this turn. A claim is a problem only if it says something was done, built, tested, fixed, found or pushed and the evidence does not show it.");
+            prompt.AppendLine("EVIDENCE below is the tool output from this turn. A claim is a problem only if it says something was done, built, tested, fixed, found, pushed, checked, looked up, queried, searched, opened, created, made, set up or switched (or that a fact was confirmed, such as something being available) and the evidence does not show a tool doing it.");
             prompt.AppendLine("Everything else is never a problem: plans, opinions, explanations, feelings, promises, reassurance, and anything she says about the user or the conversation.");
+            prompt.AppendLine("Check these against the FACT lines in particular: where a command ran (the server or the user's computer), whether it succeeded (its exit code), which files were changed, and whether a build or test was run at all. A claim that contradicts a FACT is always a problem.");
+            prompt.AppendLine("Long tool output in EVIDENCE is shortened where it says [cut]. Something not visible in a shortened result is NOT proof it wasn't there: never remove or change a detail just because you can't see it. Correct a claim only when the evidence contradicts it, or when it says work was done that no tool did at all.");
+            prompt.AppendLine("Your edits are her words, not a report: never mention evidence, FACT lines or tools in the new text (not \"the evidence shows\"), and keep her wording wherever it was right.");
+            prompt.AppendLine("Earlier messages are there for context only, so you know what was asked; check only the reply.");
             prompt.AppendLine("Fix a problem by rewording the sentence so it claims only what was done (for example \"i haven't run the tests yet\"), or by deleting it.");
         }
         prompt.AppendLine();
@@ -97,6 +103,7 @@ internal class Reflector : Agent
         prompt.AppendLine($"Otherwise give at most {MaxEdits} edits, each in exactly this form, with old copied exactly from the reply and new empty to delete it:");
         prompt.AppendLine("EDIT\nold: <exact text from the reply>\nnew: <replacement>\nEND");
         prompt.AppendLine();
+        if (mode == ReflectMode.Work && earlier.Length > 0) prompt.AppendLine("Earlier in the conversation:\n" + earlier + "\n");
         prompt.AppendLine("User's message:\n" + Clip(userMessage, 700));
         if (mode == ReflectMode.Work) prompt.AppendLine("\nEVIDENCE:\n" + (evidence.Length == 0 ? "(no tools were used this turn)" : evidence));
         prompt.AppendLine("\nReply:\n" + reply);
@@ -104,7 +111,7 @@ internal class Reflector : Agent
         try
         {
             Thread ephemeral = new(ThreadPipeline.Dialogue, $"__reflect_{Guid.NewGuid():N}") { Internal = true };
-            string answer = await Prompt(ephemeral, prompt.ToString(), new PromptOptions { MaxTokensOverride = 500, Ct = ct });
+            string answer = await Prompt(ephemeral, prompt.ToString(), new PromptOptions { MaxTokensOverride = mode == ReflectMode.Work ? WORK_REVIEW_TOKENS : 500, Ct = ct });
             return Parse(answer, reply, userMessage);
         }
         catch (OperationCanceledException) { throw; }
