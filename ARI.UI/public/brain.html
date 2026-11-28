@@ -299,7 +299,7 @@ function spinHoles(dt) { holes.forEach(hg => { const c = hg.userData.centre, tc 
 spinHoles(0); dotGeo.attributes.size.needsUpdate = true;
 
 // ── view ──
-let HOME_DIST = Math.max(40, Math.min(140, 10 * Math.cbrt(N)));   // a small brain starts close, a huge one far out
+let HOME_DIST = Math.max(12, Math.min(140, 10 * Math.cbrt(N) * SPACE));   // a small brain starts close, a huge one far out (scaled like its universe)
 const target = new THREE.Vector3(); let goalDist = HOME_DIST, dist = HOME_DIST, yaw = .5, pitch = .35, paused = false, drag = false, lx = 0, ly = 0, moved = 0, sel = -1;
 const resize = () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }; addEventListener("resize", resize); resize();
 const cv = renderer.domElement;
@@ -307,7 +307,9 @@ cv.onpointerdown = e => { drag = true; moved = 0; lx = e.clientX; ly = e.clientY
 let mx = innerWidth / 2, my = innerHeight / 2;
 cv.onpointermove = e => { mx = e.clientX; my = e.clientY; if (drag) { yaw -= (e.clientX - lx) * .005; pitch = Math.max(-1.3, Math.min(1.3, pitch + (e.clientY - ly) * .005)); moved += Math.abs(e.clientX - lx) + Math.abs(e.clientY - ly); lx = e.clientX; ly = e.clientY; } else hover(e); };
 cv.onpointerup = e => { drag = false; if (moved < 5) pick(e); };
-cv.addEventListener("wheel", e => { e.preventDefault(); zoomedByHand = true; goalDist = Math.max(2, Math.min(600, goalDist * (1 + Math.sign(e.deltaY) * .1))); }, { passive: false });
+// zoom follows how far the wheel or trackpad actually moved (a trackpad sends many tiny steps), capped per step so one flick can't jump far
+cv.addEventListener("wheel", e => { e.preventDefault(); zoomedByHand = true; const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+  goalDist = Math.max(2, Math.min(600, goalDist * Math.exp(Math.max(-.08, Math.min(.08, px * .0012))))); }, { passive: false });
 document.getElementById("in").onclick = () => goalDist = Math.max(2, goalDist * .75);
 document.getElementById("out").onclick = () => goalDist = Math.min(600, goalDist * 1.33);
 document.getElementById("reset").onclick = () => { yaw = .5; pitch = .35; focus(-1); };
@@ -429,8 +431,8 @@ document.getElementById("rclose").onclick = () => document.getElementById("right
 // with nothing chosen the camera looks at the middle of the brain, wherever its notes have drifted
 const home = new THREE.Vector3(), homeNow = new THREE.Vector3(); let homeSet = false;
 function centreHome() { if (!homeSet) { homeSet = true; home.set(0, 0, 0); } let x = 0, y = 0, z = 0; for (let i = 0; i < N; i++) { x += pos[i*3]; y += pos[i*3+1]; z += pos[i*3+2]; } homeNow.set(x / N, y / N, z / N); home.lerp(homeNow, .03);
-  // once the layout has settled, frame the whole brain by its real size (unless the viewer has zoomed already)
-  if (crowdTick === 150 && !zoomedByHand) { let r = 0; for (let i = 0; i < N; i += Math.max(1, N >> 12)) r = Math.max(r, Math.hypot(pos[i*3] - homeNow.x, pos[i*3+1] - homeNow.y, pos[i*3+2] - homeNow.z)); HOME_DIST = Math.max(6, Math.min(140, r * 2.6)); if (sel < 0 && cur < 0) goalDist = HOME_DIST; } }
+  // once the layout has settled, frame the bulk of the brain (90% of notes, so a few far loose stars don't push the camera out); refit while it spreads unless the viewer has zoomed
+  if ((crowdTick === 150 || crowdTick === 400 || crowdTick === 900) && !zoomedByHand) { const d = []; for (let i = 0; i < N; i += Math.max(1, N >> 12)) d.push(Math.hypot(pos[i*3] - homeNow.x, pos[i*3+1] - homeNow.y, pos[i*3+2] - homeNow.z)); d.sort((x, y) => x - y); const r = d[Math.floor(d.length * .9)] || 1; HOME_DIST = Math.max(6, Math.min(140, r * 2.4)); if (sel < 0 && cur < 0) goalDist = HOME_DIST; } }
 let zoomedByHand = false;   // eased, so the camera glides instead of twitching
 // how far a cluster's notes actually reach from its middle (measured, so labels hug the cluster at any brain size)
 const spreadOf = new Float32Array(C.length);
@@ -439,9 +441,10 @@ function frame() {
   if (!paused) { step(); orbit(); spinHoles(1); if (++crowdTick % 20 === 1) measureCrowd(); }
   centreHome();
   const live = sel >= 0 ? liveT.set(pos[sel*3], pos[sel*3+1], pos[sel*3+2]) : cur >= 0 ? liveT.copy(cCent[cur]) : liveT.copy(home), key = sel + "|" + cur, nowT = performance.now();
-  if (key !== fly.key || goalDist !== fly.goal) { fly.dur = key !== fly.key ? 1200 : 350; fly.key = key; fly.goal = goalDist; fly.t0 = nowT; fly.from.copy(target); fly.fromDist = dist; }
+  if (key !== fly.key) { fly.dur = 1200; fly.key = key; fly.goal = goalDist; fly.t0 = nowT; fly.from.copy(target); fly.fromDist = dist; fly.zoomOnly = false; }
+  else if (goalDist !== fly.goal) { fly.goal = goalDist; fly.zoomOnly = true; }   // a zoom alone glides toward the new distance instead of restarting the flight each wheel step
   { const p = Math.min(1, (nowT - fly.t0) / fly.dur), ease = p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;   // ease in and out
-    target.copy(fly.from).lerp(live, ease); dist = fly.fromDist + (goalDist - fly.fromDist) * ease; }
+    target.copy(fly.from).lerp(live, ease); dist = fly.zoomOnly ? dist + (goalDist - dist) * .1 : fly.fromDist + (goalDist - fly.fromDist) * ease; }
   camera.position.set(target.x + Math.sin(yaw) * Math.cos(pitch) * dist, target.y + Math.sin(pitch) * dist, target.z + Math.cos(yaw) * Math.cos(pitch) * dist); camera.lookAt(target); sky.position.copy(camera.position);
   dotGeo.attributes.position.needsUpdate = true;
   for (let k = 0; k < L; k++) { const a = la[k], b = lb[k]; linePos.set([pos[a*3], pos[a*3+1], pos[a*3+2], pos[b*3], pos[b*3+1], pos[b*3+2]], k * 6);
