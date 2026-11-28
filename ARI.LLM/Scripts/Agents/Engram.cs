@@ -67,7 +67,8 @@ internal partial class Engram : MemoryAgent, IDisposable
     /// <summary>Saving something right now, from a full sweep or from the chat's quick "remember" saves. Drives the "adding to memory" notice.</summary>
     internal bool IsSaving(string threadKey) => IsSweeping(threadKey) || reflexDraining.ContainsKey(threadKey);
 
-    public Engram() { }
+    // Engram never follows the chat's effort dial: at xhigh it wanders for thousands of tokens on a simple save.
+    public Engram() { ReasoningEffortOverride = "medium"; }
 
     internal static Engram? Current { get; private set; }
 

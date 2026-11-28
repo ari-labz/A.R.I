@@ -397,7 +397,10 @@ internal partial class Engram
         "9. Day logs are never in groups. Never invent a fact: you only choose groups, parents and merges.\n" +
         "10. Fix what is wrong, not only what is missing: take a note out of a group that no longer fits, move it when new information shows " +
         "where it belongs, and change a group's parents when the story changes.\n\n" +
-        "Think briefly: decide the main groups and the moves, then write the JSON. Keep thinking short so the answer fits.\n" +
+        "How to think: you have a small budget, so spend it on decisions, not on reading. Do not go through the notes one by one, do not " +
+        "restate them, and do not check your plan more than once. In a few short lines: (1) the 3 to 6 biggest problems in the report, " +
+        "(2) the groups that fix them, (3) any merge that is certain. Then write the JSON straight away. A good plan that fixes the big " +
+        "problems beats a perfect plan that never gets written; anything left over is fixed next pass.\n" +
         "Answer with JSON only:\n" +
         "{\"merge\":[{\"from\":\"Note title\",\"into\":\"Note title\"}],\n" +
         " \"groups\":[{\"name\":\"Group\",\"parents\":[\"Group\", ...],\"members\":[\"Note title\", ...]}]}\n" +

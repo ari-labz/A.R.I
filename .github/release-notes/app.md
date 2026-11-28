@@ -1,4 +1,4 @@
-Changes in v0.11.10:
+Changes in v0.11.11:
 
-- Brain page: opens framed on the whole brain at any size, instead of a speck in the distance or one cluster up close. A few far-off loose notes no longer push the camera out.
-- Brain page: zooming is gentler and glides smoothly, and follows how far you actually scroll, so a trackpad no longer flies in and out.
+- Brain: Engram no longer follows the chat's thinking dial. Its saves always think at medium, and its brain-curation plans at low, so a high setting can't send it wandering for thousands of words before it writes anything.
+- Brain: Engram's curation plans are told how to think: name the few biggest problems, the groups that fix them and any certain merge, then write the plan. Passes finish instead of running out of room.

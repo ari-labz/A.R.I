@@ -439,7 +439,8 @@ internal partial class Engram
             model = "local",
             messages = new[] { new { role = "system", content = system }, new { role = "user", content = user } },
             stream = false, max_tokens = maxTokens, temperature = 0.4,
-            chat_template_kwargs = new { enable_thinking = think },
+            chat_template_kwargs = new { enable_thinking = think, reasoning_effort = think ? "low" : null },   // low: decide, don't deliberate
+            reasoning_effort = think ? "low" : null,
         };
         try
         {
