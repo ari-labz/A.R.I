@@ -107,8 +107,8 @@ const baseName = t.isInternal
                                     {!t.isInternal && (
                                         <button
                                             className="thread-close"
-                                            title={t.state === "expired" ? "Delete this saved conversation forever" : "Close thread (saves to memory, then removes it)"}
-                                            onClick={e => { e.stopPropagation(); onCloseThread(t) }}
+                                            title="Hide this conversation from the list (it isn't deleted)"
+                                            onClick={e => { e.stopPropagation(); onHideThread?.(t) }}
                                         >
                                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                                 <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -179,6 +179,11 @@ const baseName = t.isInternal
                         <ul className="thread-menu" style={{ left: menu.x, top: menu.y }}>
                             <li onClick={() => { close(); onRenameThread?.(t) }}>Rename</li>
                             <li onClick={() => { close(); onHideThread?.(t) }}>Hide</li>
+                            {!t.isInternal && (
+                                <li className="danger" onClick={() => { close(); onCloseThread(t) }}>
+                                    {t.state === "expired" ? "Delete forever" : "Close (save to memory, then remove)"}
+                                </li>
+                            )}
                         </ul>
                     </>
                 )

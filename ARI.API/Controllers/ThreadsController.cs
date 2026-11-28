@@ -1002,6 +1002,28 @@ public class ThreadsController(ProjectStore projectStore, ARI.API.Auth.UserStore
         return Ok(new { projectId = summary.Id, name = summary.Name });
     }
 
+    // ── Rebind to a project ────────────────────────────────────────────────────
+
+    /// <summary>Moves an existing conversation onto another project, or off any project (null id). Every open client
+    /// hears it as threadBound, the same as when Ari calls bind_project herself.</summary>
+    [HttpPut("{id}/project")]
+    public IActionResult SetThreadProject([FromRoute(Name = "id")] string threadKey, [FromBody] SetThreadProjectRequest? req)
+    {
+        if (Llm is null) return StatusCode(503, "ARI is not ready yet.");
+        if (string.IsNullOrWhiteSpace(req?.ProjectId))
+        {
+            projectStore.ThreadProjects.TryRemove(threadKey, out _);
+            Llm.UnbindProjectContext(threadKey);
+            Llm.BroadcastThreadBound(threadKey, "");
+            return Ok(new { projectId = (string?)null });
+        }
+        Project? project = projectStore.Get(req.ProjectId);
+        if (project is null || !CanUseProject(project)) return NotFound(new { error = "Project not found." });
+        if (Modules.Projects is not { } svc) return StatusCode(503, new { error = "Project service not available." });
+        if (!svc.BindThread(threadKey, project.Id)) return NotFound(new { error = "Project not found." });
+        return Ok(new { projectId = project.Id });
+    }
+
     // ── Message Attachments (ephemeral — cleared after send) ────────────────────
 
     [HttpPost("{id}/messageAttachments")]
@@ -1524,6 +1546,7 @@ public record PersonaChoice(string? PersonaId);
 public record ApprovalAnswer(bool Allow, string? Decision = null);
 public record PromoteToProjectRequest(string Name, string? Category = null);
 public record CommandRequest(string? ThreadKey, string Input);
+public record SetThreadProjectRequest(string? ProjectId);
 public record NewThreadRequest(string? ProjectId, bool Desktop = false, string? Pipeline = null, string? Context = null);
 public record ApiContextRequest(string? Context);
 public record InjectContextRequest(string Name, string Content);

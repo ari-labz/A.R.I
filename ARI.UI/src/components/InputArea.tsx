@@ -258,7 +258,7 @@ export default function InputArea({
                             id="input-project-select"
                             value={selectedProject ?? ""}
                             onChange={e => onProjectChange(e.target.value || null)}
-                            disabled={threadLocked}
+                            title={threadLocked ? "Move this conversation to another project" : "Project for the new conversation"}
                         >
                             <option value="">No project</option>
                             {projects.map(p => (

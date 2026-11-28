@@ -388,12 +388,15 @@ export default function App() {
                         void (async () => {
                             await loadProjects()
                             loadThreads()
-                            const projectId = data.text
-                            if (data.threadKey === activeThreadRef.current && projectId) {
-                                activeProjectRef.current = projectId
-                                setSelectedProject(projectId)
+                            const projectId = data.text || null
+                            if (data.threadKey !== activeThreadRef.current) return
+                            activeProjectRef.current = projectId
+                            setSelectedProject(projectId)
+                            if (projectId) {
                                 await injectFileTree(data.threadKey, projectId)
                                 await openToolSocket(data.threadKey, projectId)
+                            } else {
+                                toolSocketRef.current?.close(); toolSocketRef.current = null; toolSocketKeyRef.current = null
                             }
                         })()
                         break
@@ -582,6 +585,21 @@ export default function App() {
 
     // ── open thread ───────────────────────────────────────
     // ── File system bridge (Electron + Code mode + project localPath) ─────────────
+
+    // The project dropdown: before a conversation starts it only picks the project for the new one; in an open
+    // conversation it rebinds that conversation, and the server tells every client (threadBound) to follow.
+    const changeProject = useCallback(async (projectId: string | null) => {
+        const key = activeThreadRef.current
+        if (!key) { setSelectedProject(projectId); return }
+        const previous = activeProjectRef.current
+        setSelectedProject(projectId)
+        const res = await apiFetch(`/api/v1/threads/${encodeURIComponent(key)}/project`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId }),
+        }).catch(() => null)
+        if (!res?.ok) setSelectedProject(previous)
+    }, [])
 
     const injectFileTree = useCallback(async (threadKey: string, projectId: string) => {
         if (!window.electronBridge) return
@@ -1626,7 +1644,7 @@ export default function App() {
                     commands={COMMANDS}
                     projects={projects}
                     selectedProject={selectedProject}
-                    onProjectChange={setSelectedProject}
+                    onProjectChange={changeProject}
                     pipelines={pipelines}
                     selectedPipeline={selectedPipeline}
                     onPipelineChange={setSelectedPipeline}

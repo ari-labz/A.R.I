@@ -1,4 +1,5 @@
-Changes in v0.11.11:
+Changes in v0.11.12:
 
-- Brain: Engram no longer follows the chat's thinking dial. Its saves always think at medium, and its brain-curation plans at low, so a high setting can't send it wandering for thousands of words before it writes anything.
-- Brain: Engram's curation plans are told how to think: name the few biggest problems, the groups that fix them and any certain merge, then write the plan. Passes finish instead of running out of room.
+- Projects: the project picker under the message box now works in an open conversation too. Pick a project to move the conversation onto it, or "No project" to take it off.
+- Projects: when Ari moves a conversation onto a project (or off one), the picker shows the change straight away.
+- Conversations: the × on a conversation in the sidebar now hides it instead of deleting it. Closing a conversation, or deleting a saved one forever, is in its right-click menu.

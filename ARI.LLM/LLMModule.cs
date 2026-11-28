@@ -1191,6 +1191,15 @@ public class LLMModule : ILLMModule, IDisposable
         thread.Ct           = CancellationToken.None;
     }
 
+    /// <summary>Takes a thread off its project: no project folder, no project name. Its filesystem tools find no root and refuse.</summary>
+    public void UnbindProjectContext(string threadKey)
+    {
+        if (!Threads.TryGetValue(threadKey, out Thread? thread)) return;
+        thread.FilesystemRoot = null;
+        thread.ProjectName    = null;
+        thread.IsBrainVault   = false;
+    }
+
     /// <summary>Engram gate on entry to dormant — the ONLY point at which a thread earns the right to be
     /// deleted. Runs a sweep for Dialogue/Speech/Code threads that carry user messages and aren't already
     /// processed; otherwise (an unanswered proactive with nothing to learn) marks the
